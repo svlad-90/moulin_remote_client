@@ -1,0 +1,64 @@
+{
+  "ui": {
+    "title": "Moulin Remote Client"
+  },
+  "remote": {
+    "name": "",
+    "label": "",
+    "user": "",
+    "host": ""
+  },
+  "active_remote": "",
+  "remotes": [],
+  "active_project": "default",
+  "projects": [
+    {
+      "name": "default",
+      "label": "default",
+      "project_dir": "",
+      "local_project_dir": "workspace/project-overlay",
+      "git_url": "",
+      "git_ref": "",
+      "moulin_manifest": "product.yaml",
+      "dockerfile": "doc/Dockerfile",
+      "docker_image": "",
+      "parameters": {},
+      "targets": ""
+    }
+  ],
+  "local": {
+    "project_dir": "workspace/project-overlay"
+  },
+  "moulin": {
+    "manifest": "product.yaml"
+  },
+  "docker": {
+    "image": "",
+    "dockerfile": "doc/Dockerfile"
+  },
+  "state": {
+    "build_settings": "moulin-build-settings.json"
+  },
+  "inventory": {
+    "max_depth": 5,
+    "mapping_depth": 3,
+    "output": "workspace/remote-inventory.txt",
+    "selection": "workspace/selected-paths.txt",
+    "mapping_selection": "workspace/selected-mappings.txt"
+  },
+  "mappings": [],
+  "exclude": [
+    ".git/",
+    ".repo/",
+    "out/",
+    "build/",
+    "tmp/",
+    "downloads/",
+    "sstate-cache/",
+    "*.img",
+    "*.img.gz",
+    "*.wic",
+    "*.wic.gz",
+    "*.iso"
+  ]
+}
