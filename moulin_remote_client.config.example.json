@@ -10,6 +10,14 @@
   },
   "active_remote": "",
   "remotes": [],
+  "board_host": {
+    "name": "",
+    "label": "",
+    "user": "",
+    "host": ""
+  },
+  "active_board_host": "",
+  "board_hosts": [],
   "active_project": "default",
   "projects": [
     {

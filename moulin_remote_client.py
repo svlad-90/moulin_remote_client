@@ -127,9 +127,11 @@ def load_config(path: Path) -> dict[str, Any]:
         config = json.load(handle)
     config["__config_path"] = str(path)
     normalize_remote_profiles(config)
+    normalize_board_host_profiles(config)
     normalize_project_profiles(config)
     apply_env_overrides(config)
     sync_active_remote(config)
+    sync_active_board_host(config)
     sync_active_project(config)
     return config
 
@@ -143,25 +145,33 @@ def save_config(config: dict[str, Any]) -> None:
     else:
         data = {key: value for key, value in config.items() if not key.startswith("__")}
     sync_active_remote(config)
+    sync_active_board_host(config)
     sync_active_project(config)
-    for key in ("remote", "remotes", "active_remote", "project", "projects", "active_project", "local", "moulin", "docker", "state", "inventory", "mappings", "exclude", "ui"):
+    for key in ("remote", "remotes", "active_remote", "board_host", "board_hosts", "active_board_host", "project", "projects", "active_project", "local", "moulin", "docker", "state", "inventory", "mappings", "exclude", "ui"):
         if key in config:
             data[key] = config[key]
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def empty_remote_profile(name: str = "") -> dict[str, str]:
+def empty_host_profile(name: str = "") -> dict[str, str]:
     return {
         "name": name,
         "label": name,
         "user": "",
         "host": "",
+    }
+
+
+def empty_remote_profile(name: str = "") -> dict[str, str]:
+    profile = empty_host_profile(name)
+    profile.update({
         "project_dir": "",
         "git_url": "",
         "moulin_manifest": "",
         "dockerfile": "",
         "docker_image": "",
-    }
+    })
+    return profile
 
 
 def is_blank_default_remote(remote: dict[str, Any]) -> bool:
@@ -224,6 +234,60 @@ def active_remote(config: dict[str, Any]) -> dict[str, Any]:
 
 def sync_active_remote(config: dict[str, Any]) -> None:
     config["remote"] = active_remote(config)
+
+
+def normalize_board_host_profiles(config: dict[str, Any]) -> None:
+    hosts = config.get("board_hosts")
+    if not isinstance(hosts, list):
+        seed = config.get("board_host")
+        if isinstance(seed, dict):
+            host = dict(seed)
+        else:
+            remote = active_remote(config)
+            host = empty_host_profile(str(remote.get("name", "")) or "board-1")
+            host["label"] = str(remote.get("label", "")) or str(host["name"])
+            host["user"] = str(remote.get("user", ""))
+            host["host"] = str(remote.get("host", ""))
+        hosts = [] if is_blank_host_profile(host) else [host]
+        config["board_hosts"] = hosts
+    hosts = [host for host in hosts if isinstance(host, dict) and not is_blank_host_profile(host)]
+    config["board_hosts"] = hosts
+    for index, host in enumerate(hosts):
+        host.setdefault("name", str(host.get("label") or f"board-{index + 1}"))
+        host.setdefault("label", str(host.get("name") or f"board-{index + 1}"))
+        host.setdefault("user", "")
+        host.setdefault("host", "")
+    if not hosts:
+        config["active_board_host"] = ""
+        sync_active_board_host(config)
+        return
+    active = str(config.get("active_board_host") or hosts[0].get("name") or "")
+    if not any(str(host.get("name", "")) == active for host in hosts if isinstance(host, dict)):
+        active = str(hosts[0].get("name") or "")
+    config["active_board_host"] = active
+    sync_active_board_host(config)
+
+
+def is_blank_host_profile(host: dict[str, Any]) -> bool:
+    return (
+        str(host.get("name", "")) in ("", "default")
+        and str(host.get("label", "")) in ("", "default", "remote", "board")
+        and not str(host.get("user", "")).strip()
+        and not str(host.get("host", "")).strip()
+    )
+
+
+def active_board_host(config: dict[str, Any]) -> dict[str, Any]:
+    normalize_board_host_profiles(config) if "board_hosts" not in config else None
+    active = str(config.get("active_board_host", ""))
+    for host in config.get("board_hosts", []):
+        if isinstance(host, dict) and str(host.get("name", "")) == active:
+            return host
+    return empty_host_profile("")
+
+
+def sync_active_board_host(config: dict[str, Any]) -> None:
+    config["board_host"] = active_board_host(config)
 
 
 def _legacy_build_settings(config: dict[str, Any]) -> dict[str, Any]:
@@ -369,9 +433,21 @@ def remote_label(config: dict[str, Any]) -> str:
     return str(active_remote(config).get("label", active_remote(config).get("name", "remote")))
 
 
+def host_spec(host: dict[str, Any]) -> str:
+    return f"{host.get('user', '')}@{host.get('host', '')}"
+
+
 def remote_spec(config: dict[str, Any]) -> str:
-    remote = active_remote(config)
-    return f"{remote.get('user', '')}@{remote.get('host', '')}"
+    return host_spec(active_remote(config))
+
+
+def board_host_label(config: dict[str, Any]) -> str:
+    host = active_board_host(config)
+    return str(host.get("label", host.get("name", "board")))
+
+
+def board_host_spec(config: dict[str, Any]) -> str:
+    return host_spec(active_board_host(config))
 
 
 def remote_project_dir(config: dict[str, Any]) -> str:
@@ -410,6 +486,18 @@ def remote_has_host(config: dict[str, Any]) -> bool:
 
 def remote_has_ssh(config: dict[str, Any]) -> bool:
     return remote_has_user(config) and remote_has_host(config)
+
+
+def board_host_user(config: dict[str, Any]) -> str:
+    return str(active_board_host(config).get("user", "")).strip()
+
+
+def board_host_host(config: dict[str, Any]) -> str:
+    return str(active_board_host(config).get("host", "")).strip()
+
+
+def board_host_has_ssh(config: dict[str, Any]) -> bool:
+    return bool(board_host_user(config)) and bool(board_host_host(config))
 
 
 def remote_has_project_dir(config: dict[str, Any]) -> bool:
@@ -1057,6 +1145,18 @@ def remote_connect_command(config: dict[str, Any]) -> list[str]:
     ]
 
 
+def board_host_connect_command(config: dict[str, Any]) -> list[str]:
+    return [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=5",
+        board_host_spec(config),
+        "printf 'ssh=ok\\n'; uname -a | sed 's/^/target=/'",
+    ]
+
+
 def remote_prepare_project_command(config: dict[str, Any]) -> list[str]:
     project_dir = remote_project_dir(config)
     git_url = project_git_url(config)
@@ -1265,6 +1365,7 @@ class ClientApp:
         self.build_targets = ""
         self.load_active_project_runtime()
         self.connection_state = "disconnected"
+        self.board_connection_state = "disconnected"
         self.auto_connect_done = False
         self.action_running = False
         self.active_job: dict[str, Any] | None = None
@@ -1346,11 +1447,19 @@ class ClientApp:
     def build_items(self) -> list[MenuItem]:
         items = [
             MenuItem(
-                "Remote configurations",
+                "Build host configuration",
                 "setup",
-                "Add, delete, select, and edit remote machine profiles before running builds.",
-                lambda app: "Open remote profile setup.",
+                "Add, delete, select, and edit build-machine SSH profiles used for Moulin and Ninja.",
+                lambda app: "Open build host profile setup.",
                 lambda app: app.remote_configurations_screen(),
+                allow_during_job=True,
+            ),
+            MenuItem(
+                "Board host configuration",
+                "setup",
+                "Add, delete, select, and edit board-access SSH profiles used for runtime checks.",
+                lambda app: "Open board host profile setup.",
+                lambda app: app.board_host_configurations_screen(),
                 allow_during_job=True,
             ),
             MenuItem(
@@ -1362,22 +1471,38 @@ class ClientApp:
                 allow_during_job=True,
             ),
             MenuItem(
-                "Connect / disconnect",
+                "Connect build host",
                 "session",
-                "Check SSH access to the configured remote target or mark it disconnected.",
+                "Check SSH access and project preflight for the configured build host or mark it disconnected.",
                 lambda app: app.connection_preview(),
                 lambda app: app.toggle_connection(),
                 requires_ssh=True,
                 allow_during_job=True,
             ),
             MenuItem(
-                "Open remote shell",
+                "Connect board host",
                 "session",
-                "Open SSH shell in the remote product directory; exit returns to this TUI.",
+                "Check SSH access to the configured board host or mark it disconnected.",
+                lambda app: app.board_connection_preview(),
+                lambda app: app.toggle_board_connection(),
+                allow_during_job=True,
+            ),
+            MenuItem(
+                "Open build host shell",
+                "session",
+                "Open SSH shell in the remote product directory on the build host; exit returns to this TUI.",
                 lambda app: f"ssh -t {remote_spec(app.config)} 'cd {remote_project_dir(app.config)} && exec bash -l'",
                 lambda app: app.open_remote_shell(),
                 requires_remote=True,
                 requires_project=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
+                "Open board host shell",
+                "session",
+                "Open SSH shell on the board host; exit returns to this TUI.",
+                lambda app: f"ssh -t {board_host_spec(app.config)}",
+                lambda app: app.open_board_shell(),
                 allow_during_job=True,
             ),
         ]
@@ -1777,6 +1902,10 @@ class ClientApp:
     def item_enabled(self, item: MenuItem) -> bool:
         if item.label == "Stop running command" and self.active_job is None:
             return False
+        if item.label in {"Connect board host", "Open board host shell"} and not board_host_has_ssh(self.config):
+            return False
+        if item.label == "Open board host shell" and not self.board_connected:
+            return False
         if self.active_job is not None:
             if item.label == self.active_job.get("item_label"):
                 return True
@@ -1796,12 +1925,18 @@ class ClientApp:
     def disabled_reason(self, item: MenuItem) -> str:
         if item.label == "Stop running command" and self.active_job is None:
             return "no command is running"
+        if item.label in {"Connect board host", "Open board host shell"} and not board_host_user(self.config):
+            return "set board SSH user first"
+        if item.label in {"Connect board host", "Open board host shell"} and not board_host_host(self.config):
+            return "set board SSH host first"
+        if item.label == "Open board host shell" and not self.board_connected:
+            return "connect to the board host first"
         if item.requires_ssh and not remote_has_user(self.config):
             return "set SSH user first"
         if item.requires_ssh and not remote_has_host(self.config):
             return "set SSH host first"
         if item.requires_remote and not self.connected:
-            return "connect to the remote target first"
+            return "connect to the build host first"
         if item.requires_project and not remote_has_project_dir(self.config):
             return "select remote project directory first"
         if item.label != "Prepare remote project" and item.requires_project and self.prepare_remote_project_needed():
@@ -1816,23 +1951,42 @@ class ClientApp:
     def connected(self) -> bool:
         return self.connection_state == "connected"
 
-    def connection_label(self) -> str:
+    @property
+    def board_connected(self) -> bool:
+        return self.board_connection_state == "connected"
+
+    def connection_label_for(self, state: str) -> str:
         labels = {
             "connected": "Disconnect",
             "connecting": "Connecting...",
             "disconnecting": "Disconnecting...",
             "disconnected": "Connect",
         }
-        return labels.get(self.connection_state, "Connect")
+        return labels.get(state, "Connect")
+
+    def connection_label(self) -> str:
+        return self.connection_label_for(self.connection_state)
+
+    def board_connection_label(self) -> str:
+        return self.connection_label_for(self.board_connection_state)
 
     def connection_preview(self) -> str:
         if self.connection_state == "connected":
-            return "disconnect from Moulin client remote session"
+            return "disconnect from Moulin client build host session"
         if self.connection_state == "connecting":
-            return "checking SSH access to the remote target"
+            return "checking SSH access to the build host"
         if self.connection_state == "disconnecting":
             return "clearing local connection state"
         return shlex.join(remote_connect_command(self.config))
+
+    def board_connection_preview(self) -> str:
+        if self.board_connection_state == "connected":
+            return "disconnect from Moulin client board host session"
+        if self.board_connection_state == "connecting":
+            return "checking SSH access to the board host"
+        if self.board_connection_state == "disconnecting":
+            return "clearing board connection state"
+        return shlex.join(board_host_connect_command(self.config))
 
     def add(self, y: int, x: int, text: str, attr: int = 0) -> None:
         try:
@@ -1875,19 +2029,23 @@ class ClientApp:
         if title:
             self.add(top, left + 2, f" {title} "[: max(0, width - 4)], attr or self.accent_attr())
 
-    def connection_attr(self) -> int:
-        if self.connection_state == "connected":
+    def connection_attr_for(self, state: str) -> int:
+        if state == "connected":
             return self.group_attr()
-        if self.connection_state in {"connecting", "disconnecting"}:
+        if state in {"connecting", "disconnecting"}:
             return self.warn_attr()
         return self.disabled_attr()
 
+    def connection_attr(self) -> int:
+        return self.connection_attr_for(self.connection_state)
+
     def draw_header(self, width: int) -> None:
-        self.draw_box(0, 0, 9, width, ui_title(self.config))
+        self.draw_box(0, 0, 10, width, ui_title(self.config))
         inner_width = max(1, width - 4)
         label_width = 14
         entries = [
-            ("Remote", f"{remote_label(self.config)}  {remote_spec(self.config)}:{remote_project_dir(self.config)}"),
+            ("Build host", f"{remote_label(self.config)}  {remote_spec(self.config)}:{remote_project_dir(self.config)}"),
+            ("Board host", f"{board_host_label(self.config)}  {board_host_spec(self.config)}"),
             ("Local overlay", str(local_project_dir(self.config))),
             ("Manifest", moulin_manifest_name(self.config)),
         ]
@@ -1895,19 +2053,24 @@ class ClientApp:
             self.add(offset, 2, f"{label}:".ljust(label_width), self.accent_attr())
             self.add(offset, 2 + label_width, self.fit_text(value, inner_width - label_width))
 
-        row = 4
+        row = 5
         x = 2
-        self.add(row, x, "Connection:", self.accent_attr())
-        x += len("Connection: ")
-        state = self.connection_state
-        self.add(row, x, state, self.connection_attr())
-        x += len(state) + 4
+        self.add(row, x, "Connections:", self.accent_attr())
+        x += len("Connections: ")
+        self.add(row, x, "build=", 0)
+        x += len("build=")
+        self.add(row, x, self.connection_state, self.connection_attr_for(self.connection_state))
+        x += len(self.connection_state) + 2
+        self.add(row, x, "board=", 0)
+        x += len("board=")
+        self.add(row, x, self.board_connection_state, self.connection_attr_for(self.board_connection_state))
+        x += len(self.board_connection_state) + 4
         self.add_segments(row, x, width - x - 2, self.build_param_segments() + [("   Docker image: ", 0), (self.docker_image, self.accent_attr())])
-        self.add(5, 2, "Targets:".ljust(label_width), self.accent_attr())
-        self.add(5, 2 + label_width, self.fit_text(self.build_targets, inner_width - label_width))
-        self.add_segments(6, 2, inner_width, [("Preflight: ", self.accent_attr())] + self.preflight_segments())
-        self.add(7, 2, "Mappings:".ljust(label_width), self.accent_attr())
-        self.add(7, 2 + label_width, self.fit_text(self.mapping_status_text(), inner_width - label_width), self.mapping_status_attr())
+        self.add(6, 2, "Targets:".ljust(label_width), self.accent_attr())
+        self.add(6, 2 + label_width, self.fit_text(self.build_targets, inner_width - label_width))
+        self.add_segments(7, 2, inner_width, [("Preflight: ", self.accent_attr())] + self.preflight_segments())
+        self.add(8, 2, "Mappings:".ljust(label_width), self.accent_attr())
+        self.add(8, 2 + label_width, self.fit_text(self.mapping_status_text(), inner_width - label_width), self.mapping_status_attr())
 
     def build_param_segments(self) -> list[tuple[str, int]]:
         segments: list[tuple[str, int]] = [("Params: ", self.accent_attr())]
@@ -2084,8 +2247,8 @@ class ClientApp:
         height, _ = self.screen.getmaxyx()
         if self.logs_expanded:
             return max(1, height - 6)
-        panel_top = 10
-        panel_height = height - 12
+        panel_top = 11
+        panel_height = height - 13
         details_height = max(8, panel_height // 2)
         logs_height = max(5, panel_height - details_height - 1)
         return max(1, logs_height - 6)
@@ -2172,8 +2335,8 @@ class ClientApp:
         left_width = min(46, max(34, width // 3))
         right_left = left_width + 1
         right_width = width - right_left
-        panel_top = 10
-        panel_height = height - 12
+        panel_top = 11
+        panel_height = height - 13
         menu_visible_rows = max(1, panel_height - 2)
         details_height = max(8, panel_height // 2)
         logs_height = max(5, panel_height - details_height - 1)
@@ -2253,9 +2416,12 @@ class ClientApp:
             remote_label(self.config),
             remote_spec(self.config),
             remote_project_dir(self.config),
+            board_host_label(self.config),
+            board_host_spec(self.config),
             str(local_project_dir(self.config)),
             moulin_manifest_name(self.config),
             self.connection_state,
+            self.board_connection_state,
             tuple(sorted(self.build_params.items())),
             self.docker_image,
             self.build_targets,
@@ -2409,8 +2575,10 @@ class ClientApp:
             self.logs_dirty = True
 
     def menu_label(self, item: MenuItem) -> str:
-        if item.label == "Connect / disconnect":
-            return self.connection_label()
+        if item.label == "Connect build host":
+            return f"{self.connection_label()} build host"
+        if item.label == "Connect board host":
+            return f"{self.board_connection_label()} board host"
         return item.label
 
     def toggle_connection(self) -> None:
@@ -2442,6 +2610,35 @@ class ClientApp:
             return
         self.start_connect_job()
 
+    def toggle_board_connection(self) -> None:
+        if self.action_running:
+            self.status = "Another action is already running"
+            return
+        if self.active_job is not None and not self.board_connected:
+            self.status = "Another command is already running"
+            return
+        if not board_host_user(self.config):
+            self.status = "set board SSH user first"
+            return
+        if not board_host_host(self.config):
+            self.status = "set board SSH host first"
+            return
+        if self.board_connected:
+            if not self.confirm_disconnect("Disconnect board host", board_host_label(self.config), board_host_spec(self.config)):
+                self.status = "Cancelled: Disconnect board host"
+                return
+            self.action_running = True
+            try:
+                self.board_connection_state = "disconnecting"
+                self.status = "Disconnecting board host..."
+                self.draw()
+                self.board_connection_state = "disconnected"
+                self.status = "Board host disconnected"
+            finally:
+                self.action_running = False
+            return
+        self.start_board_connect_job()
+
     def auto_connect(self) -> None:
         if self.auto_connect_done:
             return
@@ -2455,18 +2652,46 @@ class ClientApp:
         if self.action_running or self.active_job is not None:
             self.status = "Another action is already running"
             return
-        item = next((menu_item for menu_item in self.items if menu_item.label == "Connect / disconnect"), self.items[0])
+        item = next((menu_item for menu_item in self.items if menu_item.label == "Connect build host"), self.items[0])
         self.connection_state = "connecting"
         self.preflight = "checking..."
         self.status = "Connecting..."
         command = remote_preflight_command(self.config, self)
         self.active_job = {
             "kind": "connect",
-            "title": "Connect to remote target",
+            "title": "Connect to build host",
             "item_label": item.label,
             "commands": [command],
             "index": 0,
             "output": deque(["Starting remote preflight..."], maxlen=1000),
+            "output_lock": threading.Lock(),
+            "process": None,
+            "current_command": "",
+            "rc": None,
+            "started_at": time.monotonic(),
+            "timeout": 10.0,
+        }
+        self.start_next_active_job_command()
+        self.focus_panel = "actions"
+        self.menu_dirty = True
+        self.main_full_redraw = True
+        self.logs_dirty = True
+
+    def start_board_connect_job(self) -> None:
+        if self.action_running or self.active_job is not None:
+            self.status = "Another action is already running"
+            return
+        item = next((menu_item for menu_item in self.items if menu_item.label == "Connect board host"), self.items[0])
+        self.board_connection_state = "connecting"
+        self.status = "Connecting board host..."
+        command = board_host_connect_command(self.config)
+        self.active_job = {
+            "kind": "board-connect",
+            "title": "Connect to board host",
+            "item_label": item.label,
+            "commands": [command],
+            "index": 0,
+            "output": deque(["Starting board host SSH check..."], maxlen=1000),
             "output_lock": threading.Lock(),
             "process": None,
             "current_command": "",
@@ -2562,12 +2787,12 @@ class ClientApp:
                 self.screen.timeout(250)
                 return False
 
-    def confirm_disconnect(self) -> bool:
+    def confirm_disconnect(self, title: str = "Disconnect", label: str | None = None, spec: str | None = None) -> bool:
         self.screen.timeout(-1)
         self.draw_confirm(
-            "Disconnect",
-            "Disconnect the active remote profile?",
-            f"{remote_label(self.config)}  {remote_spec(self.config)}",
+            title,
+            "Disconnect the active host profile?",
+            f"{label or remote_label(self.config)}  {spec or remote_spec(self.config)}",
             "Running commands are not stopped by disconnect. Use Stop running command first if needed.",
             "Enter/y: disconnect | n/q/Esc: cancel",
         )
@@ -2816,7 +3041,7 @@ class ClientApp:
             self.append_job_output(job, "stop timeout: SIGKILL")
             self.terminate_process_group(process.pid, signal.SIGKILL)
         if (
-            job.get("kind") == "connect"
+            job.get("kind") in {"connect", "board-connect"}
             and process.poll() is None
             and time.monotonic() - float(job.get("started_at", time.monotonic())) > float(job.get("timeout", 10.0))
         ):
@@ -2825,11 +3050,14 @@ class ClientApp:
             if process.poll() is None:
                 self.terminate_process_group(process.pid, signal.SIGKILL)
             self.append_job_output(job, "timeout")
-            self.preflight = "timeout"
-            self.preflight_values = {}
-            self.connection_state = "disconnected"
+            if job.get("kind") == "board-connect":
+                self.board_connection_state = "disconnected"
+            else:
+                self.preflight = "timeout"
+                self.preflight_values = {}
+                self.connection_state = "disconnected"
             self.last_exit = 124
-            self.status = "Disconnected: connect timeout"
+            self.status = "Board host disconnected: connect timeout" if job.get("kind") == "board-connect" else "Disconnected: connect timeout"
             self.finish_active_job()
             return
         rc = process.poll()
@@ -2851,6 +3079,12 @@ class ClientApp:
             self.last_exit = int(rc)
             self.connection_state = "connected" if rc == 0 else "disconnected"
             self.status = "Connected" if self.connected else "Disconnected: connect failed"
+            self.finish_active_job()
+            return
+        if job.get("kind") == "board-connect":
+            self.last_exit = int(rc)
+            self.board_connection_state = "connected" if rc == 0 else "disconnected"
+            self.status = "Board host connected" if self.board_connected else "Board host disconnected: connect failed"
             self.finish_active_job()
             return
         if rc != 0:
@@ -2965,6 +3199,224 @@ class ClientApp:
             return False
         return True
 
+    def board_host_configurations_screen(self) -> None:
+        host_index = 0
+        host_index_initialized = False
+        field_index = 0
+        focus = "hosts"
+        editing_key = ""
+        editing_value = ""
+        editing_cursor = 0
+        editing_cursor_yx: tuple[int, int] | None = None
+        fields = [
+            ("Profile name", "name"),
+            ("Display label", "label"),
+            ("SSH user", "user"),
+            ("SSH host", "host"),
+        ]
+        self.screen.timeout(-1)
+        while True:
+            editing_cursor_yx = None
+            self.screen.clear()
+            height, width = self.screen.getmaxyx()
+            if height < 20 or width < 90:
+                self.add(0, 0, "Terminal is too small. Need at least 90x20.", self.warn_attr())
+                self.screen.refresh()
+                ch = self.read_key()
+                if self.key_matches(ch, "q") or ch == 27:
+                    self.screen.timeout(250)
+                    return
+                continue
+
+            hosts = [item for item in self.config.get("board_hosts", []) if isinstance(item, dict)]
+            if not host_index_initialized:
+                host_index = self.active_board_host_index(hosts)
+                host_index_initialized = True
+            host_index = min(host_index, max(0, len(hosts) - 1))
+            selected_host = hosts[host_index] if hosts else None
+            field_index = min(field_index, max(0, len(fields) - 1))
+
+            panel_top = 3
+            panel_height = height - 6
+            detail_x = 2
+            detail_w = width - 4
+            table_w = width - 4
+            active_name = str(active_board_host(self.config).get("name", "")) or "<none>"
+            self.add(0, 0, "Board host configuration"[:width], curses.A_BOLD)
+            self.add(1, 0, f"Active: {active_name} | Board connection: {self.board_connection_state}"[:width])
+            self.add(2, 0, f"Focus: {'board host list' if focus == 'hosts' else 'fields'}"[:width], self.accent_attr())
+            self.draw_box(panel_top, 0, panel_height, width, "Board hosts")
+
+            min_detail_rows = 2 + len(fields) + 3
+            visible_hosts = max(1, min(max(1, len(hosts)), panel_height - min_detail_rows))
+            host_scroll = min(max(0, host_index - visible_hosts + 1), max(0, len(hosts) - visible_hosts))
+            table_y = panel_top + 1
+            self.add(table_y, 2, self.fit_text("A Name               User@Host", table_w), self.accent_attr())
+            if not hosts:
+                self.add(table_y + 1, 2, "No board hosts configured. Press 'a' to add one."[:table_w], self.disabled_attr())
+            else:
+                for offset, profile in enumerate(hosts[host_scroll : host_scroll + visible_hosts]):
+                    item_index = host_scroll + offset
+                    is_active = str(profile.get("name", "")) == str(self.config.get("active_board_host", ""))
+                    active_mark = "*" if is_active else " "
+                    user_host = f"{profile.get('user', '')}@{profile.get('host', '')}"
+                    active_suffix = "  ACTIVE" if is_active else ""
+                    text = f"{active_mark} {str(profile.get('name', ''))[:18]:18} {user_host}{active_suffix}"
+                    selected_row = focus == "hosts" and item_index == host_index
+                    if selected_row and is_active:
+                        attr = self.selected_active_attr()
+                    elif selected_row:
+                        attr = self.selected_attr()
+                    elif is_active:
+                        attr = self.active_row_attr()
+                    else:
+                        attr = 0
+                    self.add(table_y + 1 + offset, 2, self.fit_text(text, table_w).ljust(table_w), attr)
+
+            row = table_y + visible_hosts + 2
+            if len(hosts) > visible_hosts:
+                self.add(row, detail_x, f"{host_index + 1}/{len(hosts)} board hosts"[:detail_w], self.disabled_attr())
+                row += 1
+            if selected_host is None:
+                self.add(row, detail_x, "Selected board host: <none>"[:detail_w], self.disabled_attr())
+            else:
+                self.add(row, detail_x, "Fields:", self.accent_attr())
+                row += 1
+                visible_fields = max(0, panel_top + panel_height - row - 5)
+                for offset, (label, key) in enumerate(fields[:visible_fields]):
+                    is_editing = focus == "fields" and key == editing_key
+                    raw_value = editing_value if is_editing else str(selected_host.get(key, ""))
+                    value = raw_value or "<not set>"
+                    enabled = self.board_host_field_enabled(key, selected_host)
+                    selected = focus == "fields" and offset == field_index
+                    if is_editing:
+                        attr = self.editing_attr()
+                    elif selected and enabled:
+                        attr = self.selected_attr()
+                    elif selected:
+                        attr = self.selected_disabled_attr()
+                    elif not enabled:
+                        attr = self.disabled_attr()
+                    else:
+                        attr = 0
+                    text = f"{label}:".ljust(20) + value
+                    self.add(row, detail_x, self.fit_text(text, detail_w).ljust(detail_w), attr)
+                    if is_editing:
+                        cursor_x = min(detail_x + 20 + editing_cursor, detail_x + detail_w - 1)
+                        editing_cursor_yx = (row, cursor_x)
+                    row += 1
+                if row < height - 3 and focus == "fields":
+                    _, selected_key = fields[field_index]
+                    if editing_key:
+                        self.add(row, detail_x, "Enter: save | Esc: cancel | Left/Right/Home/End: move cursor"[:detail_w], self.accent_attr())
+                    else:
+                        self.add(row, detail_x, self.board_host_field_hint(selected_key)[:detail_w], self.accent_attr())
+
+            footer = "Left/Right: hosts/fields | Enter: edit/save | a: add | d: delete | s: set active | Esc: hosts/back | q: back"
+            self.add(height - 2, 0, footer[:width], self.accent_attr())
+            self.add(height - 1, 0, self.status[:width].ljust(width), curses.A_REVERSE)
+            if editing_cursor_yx is not None:
+                self.set_cursor(True)
+                try:
+                    self.screen.move(*editing_cursor_yx)
+                except curses.error:
+                    pass
+            else:
+                self.set_cursor(False)
+            self.screen.timeout(-1)
+            self.screen.refresh()
+            ch = self.read_key()
+            if ch == -1:
+                continue
+            if editing_key:
+                if ch in (10, 13):
+                    self.apply_board_host_inline_value(selected_host, editing_key, editing_value)
+                    editing_key = ""
+                    editing_value = ""
+                    editing_cursor = 0
+                    self.set_cursor(False)
+                elif ch == 27:
+                    editing_key = ""
+                    editing_value = ""
+                    editing_cursor = 0
+                    self.status = "Edit cancelled"
+                    self.set_cursor(False)
+                elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                    if editing_cursor > 0:
+                        editing_value = editing_value[: editing_cursor - 1] + editing_value[editing_cursor:]
+                        editing_cursor -= 1
+                elif ch == curses.KEY_DC:
+                    if editing_cursor < len(editing_value):
+                        editing_value = editing_value[:editing_cursor] + editing_value[editing_cursor + 1:]
+                elif ch == curses.KEY_LEFT:
+                    editing_cursor = max(0, editing_cursor - 1)
+                elif ch == curses.KEY_RIGHT:
+                    editing_cursor = min(len(editing_value), editing_cursor + 1)
+                elif ch == curses.KEY_HOME:
+                    editing_cursor = 0
+                elif ch == curses.KEY_END:
+                    editing_cursor = len(editing_value)
+                elif text := self.read_queued_text(ch):
+                    editing_value = editing_value[:editing_cursor] + text + editing_value[editing_cursor:]
+                    editing_cursor += len(text)
+                continue
+            self.set_cursor(False)
+            if ch == curses.KEY_LEFT or self.key_matches(ch, "h"):
+                focus = "hosts"
+            elif ch == curses.KEY_RIGHT or self.key_matches(ch, "l"):
+                focus = "fields" if selected_host is not None else focus
+                if selected_host is None:
+                    self.status = "Add a board host first"
+            elif ch == curses.KEY_UP or self.key_matches(ch, "k"):
+                if focus == "fields":
+                    field_index = (field_index - 1) % len(fields)
+                elif hosts:
+                    host_index = (host_index - 1) % len(hosts)
+            elif ch == curses.KEY_DOWN or self.key_matches(ch, "j") or ch == ord("\t"):
+                if focus == "fields":
+                    field_index = (field_index + 1) % len(fields)
+                elif hosts:
+                    host_index = (host_index + 1) % len(hosts)
+            elif ch in (10, 13):
+                if selected_host is None:
+                    self.status = "Add a board host first"
+                elif focus == "hosts":
+                    focus = "fields"
+                else:
+                    label, key = fields[field_index]
+                    if not self.board_host_field_enabled(key, selected_host):
+                        self.status = self.board_host_field_disabled_reason(key, selected_host)
+                    else:
+                        editing_key = key
+                        editing_value = str(selected_host.get(key, ""))
+                        editing_cursor = len(editing_value)
+                        self.status = f"Editing {label}"
+            elif self.key_matches(ch, "a"):
+                self.add_empty_board_host()
+                hosts = [item for item in self.config.get("board_hosts", []) if isinstance(item, dict)]
+                host_index = max(0, len(hosts) - 1)
+                focus = "fields" if hosts else "hosts"
+            elif self.key_matches(ch, "d"):
+                if selected_host is None:
+                    self.status = "No board host selected"
+                else:
+                    self.delete_board_host(selected_host)
+                    hosts = [item for item in self.config.get("board_hosts", []) if isinstance(item, dict)]
+                    host_index = min(host_index, max(0, len(hosts) - 1))
+                    focus = "hosts"
+            elif self.key_matches(ch, "s"):
+                if selected_host is None:
+                    self.status = "No board host selected"
+                else:
+                    self.set_active_board_host(selected_host)
+            elif ch == 27 and focus == "fields":
+                focus = "hosts"
+                self.status = "Board host list focused"
+            elif self.key_matches(ch, "q") or ch == 27:
+                save_config(self.config)
+                self.screen.timeout(250)
+                return
+
     def remote_configurations_screen(self) -> None:
         remote_index = 0
         remote_index_initialized = False
@@ -2998,11 +3450,11 @@ class ClientApp:
             selected_remote = remotes[remote_index] if remotes else None
             panel_top = 3
             panel_height = height - 6
-            self.add(0, 0, "Remote configurations"[:width], curses.A_BOLD)
+            self.add(0, 0, "Build host configuration"[:width], curses.A_BOLD)
             active_name = str(remote.get("name", "")) or "<none>"
-            self.add(1, 0, f"Active: {active_name} | Connection: {self.connection_state}"[:width])
-            self.add(2, 0, f"Focus: {'remote list' if focus == 'remotes' else 'fields'}"[:width], self.accent_attr())
-            self.draw_box(panel_top, 0, panel_height, width, "Remotes")
+            self.add(1, 0, f"Active: {active_name} | Build connection: {self.connection_state}"[:width])
+            self.add(2, 0, f"Focus: {'build host list' if focus == 'remotes' else 'fields'}"[:width], self.accent_attr())
+            self.draw_box(panel_top, 0, panel_height, width, "Build hosts")
 
             detail_x = 2
             detail_w = width - 4
@@ -3024,7 +3476,7 @@ class ClientApp:
             table_y = panel_top + 1
             self.add(table_y, 2, self.fit_text("A Name               User@Host", table_w), self.accent_attr())
             if not remotes:
-                self.add(table_y + 1, 2, "No remotes configured. Press 'a' to add one."[:table_w], self.disabled_attr())
+                self.add(table_y + 1, 2, "No build hosts configured. Press 'a' to add one."[:table_w], self.disabled_attr())
             else:
                 for offset, profile in enumerate(remotes[remote_scroll : remote_scroll + visible_remotes]):
                     item_index = remote_scroll + offset
@@ -3046,10 +3498,10 @@ class ClientApp:
 
             row = table_y + visible_remotes + 2
             if len(remotes) > visible_remotes:
-                self.add(row, detail_x, f"{remote_index + 1}/{len(remotes)} remotes"[:detail_w], self.disabled_attr())
+                self.add(row, detail_x, f"{remote_index + 1}/{len(remotes)} build hosts"[:detail_w], self.disabled_attr())
                 row += 1
             if selected_remote is None:
-                self.add(row, detail_x, "Selected remote: <none>"[:detail_w], self.disabled_attr())
+                self.add(row, detail_x, "Selected build host: <none>"[:detail_w], self.disabled_attr())
             else:
                 self.add(row, detail_x, "Fields:", self.accent_attr())
                 row += 1
@@ -3085,7 +3537,7 @@ class ClientApp:
                         message = self.remote_field_hint(selected_key, selected_remote) if enabled else self.remote_field_disabled_reason(selected_key, selected_remote)
                         self.add(row, detail_x, message[:detail_w], self.accent_attr() if enabled else self.disabled_attr())
 
-            footer = "Left/Right: remotes/fields | Enter: edit/save | a: add | d: delete | s: set active | Esc: remotes/back | q: back"
+            footer = "Left/Right: hosts/fields | Enter: edit/save | a: add | d: delete | s: set active | Esc: hosts/back | q: back"
             self.add(height - 2, 0, footer[:width], self.accent_attr())
             self.add(height - 1, 0, self.status[:width].ljust(width), curses.A_REVERSE)
             if editing_cursor_yx is not None:
@@ -3138,7 +3590,7 @@ class ClientApp:
                 focus = "remotes"
             elif ch == curses.KEY_RIGHT or self.key_matches(ch, "l"):
                 if selected_remote is None:
-                    self.status = "Add a remote first"
+                    self.status = "Add a build host first"
                 else:
                     focus = "fields"
             elif ch == curses.KEY_UP or self.key_matches(ch, "k"):
@@ -3153,7 +3605,7 @@ class ClientApp:
                     remote_index = (remote_index + 1) % len(remotes)
             elif ch in (10, 13):
                 if selected_remote is None:
-                    self.status = "Add a remote first"
+                    self.status = "Add a build host first"
                 elif focus == "remotes":
                     focus = "fields"
                 else:
@@ -3175,19 +3627,19 @@ class ClientApp:
                 focus = "fields" if self.config.get("remotes") else "remotes"
             elif self.key_matches(ch, "d"):
                 if selected_remote is None:
-                    self.status = "No remote selected"
+                    self.status = "No build host selected"
                 else:
                     self.delete_remote(selected_remote)
                     remote_index = min(remote_index, max(0, len(self.config.get("remotes", [])) - 1))
                     focus = "remotes"
             elif self.key_matches(ch, "s"):
                 if selected_remote is None:
-                    self.status = "No remote selected"
+                    self.status = "No build host selected"
                 else:
                     self.set_active_remote(selected_remote)
             elif ch == 27 and focus == "fields":
                 focus = "remotes"
-                self.status = "Remote list focused"
+                self.status = "Build host list focused"
             elif (self.key_matches(ch, "q") or ch == 27):
                 save_config(self.config)
                 self.screen.timeout(250)
@@ -3200,22 +3652,118 @@ class ClientApp:
                 return index
         return 0
 
-    def add_empty_remote(self) -> None:
-        name = self.prompt("Remote profile name", self.next_remote_name()).strip()
+    def active_board_host_index(self, hosts: list[dict[str, Any]]) -> int:
+        active = str(self.config.get("active_board_host", ""))
+        for index, host in enumerate(hosts):
+            if str(host.get("name", "")) == active:
+                return index
+        return 0
+
+    def board_host_field_enabled(self, key: str, host: dict[str, Any]) -> bool:
+        if key in ("name", "label", "user"):
+            return True
+        if key == "host":
+            return bool(str(host.get("user", "")).strip())
+        return True
+
+    def board_host_field_disabled_reason(self, key: str, host: dict[str, Any]) -> str:
+        if key == "host":
+            return "set SSH user first"
+        return ""
+
+    def board_host_field_hint(self, key: str) -> str:
+        hints = {
+            "name": "Unique local board host profile id. Renaming an active profile preserves active selection.",
+            "label": "Display label shown in the main client header.",
+            "user": "SSH user for the board access host.",
+            "host": "SSH host name or IP address for board access.",
+        }
+        return hints.get(key, "")
+
+    def add_empty_board_host(self) -> None:
+        name = self.prompt("Board host profile name", self.next_board_host_name()).strip()
         if not name:
-            self.status = "Remote add cancelled"
+            self.status = "Board host add cancelled"
+            return
+        if any(str(item.get("name", "")) == name for item in self.config.get("board_hosts", [])):
+            self.status = f"Board host profile already exists: {name}"
+            return
+        self.config.setdefault("board_hosts", []).append(empty_host_profile(name))
+        save_config(self.config)
+        self.status = f"Board host profile added: {name}"
+
+    def delete_board_host(self, host: dict[str, Any]) -> None:
+        name = str(host.get("name", ""))
+        if not self.confirm_sync_action("Delete board host", f"Delete board host profile {name}."):
+            self.status = "Board host delete cancelled"
+            return
+        self.config["board_hosts"] = [item for item in self.config.get("board_hosts", []) if item is not host]
+        if str(self.config.get("active_board_host", "")) == name:
+            self.config["active_board_host"] = str(self.config["board_hosts"][0].get("name", "")) if self.config["board_hosts"] else ""
+            self.board_connection_state = "disconnected"
+        sync_active_board_host(self.config)
+        save_config(self.config)
+        self.status = f"Board host profile deleted: {name}"
+
+    def set_active_board_host(self, host: dict[str, Any]) -> None:
+        name = str(host.get("name", ""))
+        if str(self.config.get("active_board_host", "")) == name:
+            self.status = "selected board host is already active"
+            return
+        self.config["active_board_host"] = name
+        sync_active_board_host(self.config)
+        self.board_connection_state = "disconnected"
+        save_config(self.config)
+        self.status = f"Active board host: {name}"
+
+    def apply_board_host_inline_value(self, host: dict[str, Any] | None, key: str, value: str) -> None:
+        if host is None:
+            self.status = "No board host selected"
+            return
+        old_name = str(host.get("name", ""))
+        value = value.strip()
+        if key == "name":
+            if not value:
+                self.status = "Board host profile name is required"
+                return
+            if value != old_name and any(str(item.get("name", "")) == value for item in self.config.get("board_hosts", [])):
+                self.status = f"Board host profile already exists: {value}"
+                return
+        host[key] = value
+        if key == "name":
+            if not str(host.get("label", "")).strip() or str(host.get("label", "")) == old_name:
+                host["label"] = value
+            if str(self.config.get("active_board_host", "")) == old_name:
+                self.config["active_board_host"] = value
+        if key in ("user", "host") and str(host.get("name", "")) == str(self.config.get("active_board_host", "")):
+            self.board_connection_state = "disconnected"
+        sync_active_board_host(self.config)
+        save_config(self.config)
+        self.status = f"{key} updated"
+
+    def next_board_host_name(self) -> str:
+        existing = {str(host.get("name", "")) for host in self.config.get("board_hosts", [])}
+        index = len(existing) + 1
+        while f"board-{index}" in existing:
+            index += 1
+        return f"board-{index}"
+
+    def add_empty_remote(self) -> None:
+        name = self.prompt("Build host profile name", self.next_remote_name()).strip()
+        if not name:
+            self.status = "Build host add cancelled"
             return
         if any(str(item.get("name", "")) == name for item in self.config.get("remotes", [])):
-            self.status = f"Remote profile already exists: {name}"
+            self.status = f"Build host profile already exists: {name}"
             return
         self.config.setdefault("remotes", []).append(empty_remote_profile(name))
         save_config(self.config)
-        self.status = f"Remote profile added: {name}"
+        self.status = f"Build host profile added: {name}"
 
     def delete_remote(self, remote: dict[str, Any]) -> None:
         name = str(remote.get("name", ""))
-        if not self.confirm_sync_action("Delete remote", f"Delete remote profile {name}."):
-            self.status = "Remote delete cancelled"
+        if not self.confirm_sync_action("Delete build host", f"Delete build host profile {name}."):
+            self.status = "Build host delete cancelled"
             return
         self.config["remotes"] = [item for item in self.config.get("remotes", []) if item is not remote]
         if str(self.config.get("active_remote", "")) == name:
@@ -3224,19 +3772,19 @@ class ClientApp:
             self.reset_preflight()
         sync_active_remote(self.config)
         save_config(self.config)
-        self.status = f"Remote profile deleted: {name}"
+        self.status = f"Build host profile deleted: {name}"
 
     def set_active_remote(self, remote: dict[str, Any]) -> None:
         name = str(remote.get("name", ""))
         if str(self.config.get("active_remote", "")) == name:
-            self.status = "selected remote is already active"
+            self.status = "selected build host is already active"
             return
         self.config["active_remote"] = name
         sync_active_remote(self.config)
         self.connection_state = "disconnected"
         self.reset_preflight()
         save_config(self.config)
-        self.status = f"Active remote: {name}"
+        self.status = f"Active build host: {name}"
 
     def edit_remote_screen(self, remote: dict[str, Any]) -> None:
         fields = [
@@ -3350,7 +3898,7 @@ class ClientApp:
                 return "set SSH host first"
             if key != "project_dir" and not str(remote.get("project_dir", "")).strip():
                 return "select remote project directory first"
-            return "connect to the remote target first"
+            return "connect to the build host first"
         return ""
 
     def remote_field_hint(self, key: str, remote: dict[str, Any]) -> str:
@@ -3366,16 +3914,16 @@ class ClientApp:
 
     def apply_remote_inline_value(self, remote: dict[str, Any] | None, key: str, value: str) -> None:
         if remote is None:
-            self.status = "No remote selected"
+            self.status = "No build host selected"
             return
         old_name = str(remote.get("name", ""))
         value = value.strip()
         if key == "name":
             if not value:
-                self.status = "Remote profile name is required"
+                self.status = "Build host profile name is required"
                 return
             if value != old_name and any(str(item.get("name", "")) == value for item in self.config.get("remotes", [])):
-                self.status = f"Remote profile already exists: {value}"
+                self.status = f"Build host profile already exists: {value}"
                 return
         remote[key] = value
         if key == "name":
@@ -3395,10 +3943,10 @@ class ClientApp:
         value = self.prompt(label, str(remote.get(key, ""))).strip()
         if key == "name":
             if not value:
-                self.status = "Remote profile name is required"
+                self.status = "Build host profile name is required"
                 return
             if value != old_name and any(str(item.get("name", "")) == value for item in self.config.get("remotes", [])):
-                self.status = f"Remote profile already exists: {value}"
+                self.status = f"Build host profile already exists: {value}"
                 return
         remote[key] = value
         if key == "name":
@@ -3442,7 +3990,7 @@ class ClientApp:
 
     def remote_config_action_disabled_reason(self, label: str, remote: dict[str, Any]) -> str:
         if label == "Set active remote":
-            return "selected remote is already active"
+            return "selected build host is already active"
         if label == "Edit SSH host":
             return "set SSH user first"
         if label == "Browse project dir":
@@ -3452,7 +4000,7 @@ class ClientApp:
                 return "set SSH user first"
             if not str(remote.get("host", "")).strip():
                 return "set SSH host first"
-            return "connect to the remote target first"
+            return "connect to the build host first"
         if label == "Delete selected remote":
             return ""
         return "disabled"
@@ -3462,22 +4010,22 @@ class ClientApp:
             save_config(self.config)
             return True
         if label == "Add remote":
-            name = self.prompt("Remote profile name", self.next_remote_name()).strip()
+            name = self.prompt("Build host profile name", self.next_remote_name()).strip()
             if not name:
-                self.status = "Remote add cancelled"
+                self.status = "Build host add cancelled"
                 return False
             if any(str(item.get("name", "")) == name for item in self.config.get("remotes", [])):
-                self.status = f"Remote profile already exists: {name}"
+                self.status = f"Build host profile already exists: {name}"
                 return False
             new_remote = empty_remote_profile(name)
             self.config.setdefault("remotes", []).append(new_remote)
             save_config(self.config)
-            self.status = f"Remote profile added: {name}"
+            self.status = f"Build host profile added: {name}"
             return False
         if label == "Delete selected remote":
             name = str(remote.get("name", ""))
-            if not self.confirm_sync_action("Delete remote", f"Delete remote profile {name}."):
-                self.status = "Remote delete cancelled"
+            if not self.confirm_sync_action("Delete build host", f"Delete build host profile {name}."):
+                self.status = "Build host delete cancelled"
                 return False
             self.config["remotes"] = [item for item in self.config.get("remotes", []) if item is not remote]
             if str(self.config.get("active_remote", "")) == name:
@@ -3486,7 +4034,7 @@ class ClientApp:
                 self.reset_preflight()
             sync_active_remote(self.config)
             save_config(self.config)
-            self.status = f"Remote profile deleted: {name}"
+            self.status = f"Build host profile deleted: {name}"
             return False
         if label == "Set active remote":
             self.config["active_remote"] = str(remote.get("name", ""))
@@ -3498,7 +4046,7 @@ class ClientApp:
             return False
         if label == "Edit profile name":
             old = str(remote.get("name", ""))
-            new = self.prompt("Remote profile name", old).strip()
+            new = self.prompt("Build host profile name", old).strip()
             if not new:
                 self.status = "Remote rename cancelled"
                 return False
@@ -3653,10 +4201,10 @@ class ClientApp:
                     self.status = f"Remote profile added: {new_remote['name']}"
                     return
                 elif kind == "cancel":
-                    self.status = "Remote add cancelled"
+                    self.status = "Build host add cancelled"
                     return
             elif (self.key_matches(ch, "q") or ch == 27):
-                self.status = "Remote add cancelled"
+                self.status = "Build host add cancelled"
                 return
 
     def next_remote_name(self) -> str:
@@ -3919,7 +4467,7 @@ class ClientApp:
             row = self.draw_wrapped(row, detail_x, detail_w, str(action["description"]), max_lines=4)
             row += 1
             if action["requires_remote"] and not self.connected:
-                self.add(row, detail_x, "Status: disabled until the remote target is connected"[:detail_w], self.disabled_attr())
+                self.add(row, detail_x, "Status: disabled until the build host is connected"[:detail_w], self.disabled_attr())
                 row += 1
             self.add(row, detail_x, "Configured mappings:"[:detail_w], self.accent_attr())
             row += 1
@@ -3943,7 +4491,7 @@ class ClientApp:
                     self.screen.timeout(250)
                     return
                 if action["requires_remote"] and not self.connected:
-                    self.status = "Connect to the remote target first"
+                    self.status = "Connect to the build host first"
                     continue
                 if action["confirm"] and not self.confirm_sync_action(str(action["label"]), str(action["description"])):
                     self.screen.timeout(-1)
@@ -4118,7 +4666,7 @@ class ClientApp:
             current_remote = f"{remote_spec(self.config)}:{remote_project_dir(self.config)}"
             display_dir = "~" if current_dir == "." else current_dir
             self.add(0, 0, "Select mappings from remote project browser"[:width], curses.A_BOLD)
-            self.add(1, 0, f"Remote: {current_remote} | dir={display_dir}"[:width])
+            self.add(1, 0, f"Build host: {current_remote} | dir={display_dir}"[:width])
             self.draw_box(panel_top, 0, panel_height, left_width, "Project")
             self.draw_box(panel_top, right_left, panel_height, right_width, "Mapping")
 
@@ -4365,7 +4913,7 @@ class ClientApp:
                 scroll = index - visible + 1
 
             self.add(0, 0, "Activate mappings"[:width], curses.A_BOLD)
-            self.add(1, 0, f"Remote: {remote_spec(self.config)}:{remote_project_dir(self.config)}"[:width])
+            self.add(1, 0, f"Build host: {remote_spec(self.config)}:{remote_project_dir(self.config)}"[:width])
             self.draw_box(panel_top, 0, panel_height, left_width, "Mappings")
             self.draw_box(panel_top, right_left, panel_height, right_width, "Details")
 
@@ -4494,8 +5042,8 @@ class ClientApp:
         curses.endwin()
         try:
             print()
-            print("Moulin remote shell")
-            print(f"remote: {remote_spec(self.config)}")
+            print("Moulin build host shell")
+            print(f"build host: {remote_spec(self.config)}")
             print(f"cwd: {remote_project_dir(self.config)}")
             print("Return to TUI: type 'exit' or press Ctrl-D.")
             print()
@@ -4504,6 +5052,24 @@ class ClientApp:
             self.last_exit = rc
             input("Shell exited. Press Enter to return to Moulin client...")
             self.status = f"Remote shell closed: exit {rc}"
+        finally:
+            curses.reset_prog_mode()
+            self.screen.keypad(True)
+            self.screen.timeout(250)
+
+    def open_board_shell(self) -> None:
+        curses.def_prog_mode()
+        curses.endwin()
+        try:
+            print()
+            print("Moulin board host shell")
+            print(f"board host: {board_host_spec(self.config)}")
+            print("Return to TUI: type 'exit' or press Ctrl-D.")
+            print()
+            rc = subprocess.call(["ssh", "-t", board_host_spec(self.config)])
+            self.last_exit = rc
+            input("Shell exited. Press Enter to return to Moulin client...")
+            self.status = f"Board host shell closed: exit {rc}"
         finally:
             curses.reset_prog_mode()
             self.screen.keypad(True)
@@ -4525,7 +5091,7 @@ class ClientApp:
         if stopped:
             state = "STOPPING" if running else "STOPPED"
         self.add(0, 0, f"{title} [{state}]"[:width], curses.A_BOLD)
-        self.add(1, 0, f"remote: {remote_spec(self.config)}:{remote_project_dir(self.config)}"[:width])
+        self.add(1, 0, f"build host: {remote_spec(self.config)}:{remote_project_dir(self.config)}"[:width])
         command_box_height = 5
         self.draw_box(3, 0, command_box_height, width, "Command")
         self.draw_wrapped(4, 2, max(1, width - 4), command, max_lines=command_box_height - 2)
@@ -4576,7 +5142,7 @@ class ClientApp:
 
     def remote_project_config_ready(self) -> bool:
         if not self.connected:
-            self.status = "connect to the remote target first"
+            self.status = "connect to the build host first"
             return False
         if not remote_has_project_dir(self.config):
             self.status = "select remote project directory first"
@@ -4665,7 +5231,7 @@ class ClientApp:
                     return None
                 continue
             self.add(0, 0, title[:width], curses.A_BOLD)
-            self.add(1, 0, f"Remote: {remote_spec(self.config)}:{remote_project_dir(self.config)}"[:width])
+            self.add(1, 0, f"Build host: {remote_spec(self.config)}:{remote_project_dir(self.config)}"[:width])
             self.draw_box(3, 0, height - 6, width, "Candidates")
             visible = max(1, height - 8)
             if not candidates:
@@ -4791,7 +5357,7 @@ class ClientApp:
             panel_height = height - 6
             self.add(0, 0, "Project configurations"[:width], curses.A_BOLD)
             active_name = str(project.get("label") or project.get("name") or "<none>")
-            self.add(1, 0, self.fit_text(f"Active: {active_name} | Remote: {remote_spec(self.config)}:{remote_project_dir(self.config)}", width))
+            self.add(1, 0, self.fit_text(f"Active: {active_name} | Build host: {remote_spec(self.config)}:{remote_project_dir(self.config)}", width))
             self.add(2, 0, f"Focus: {'project list' if focus == 'projects' else 'fields'}"[:width], self.accent_attr())
             self.draw_box(panel_top, 0, panel_height, width, "Projects")
 
@@ -5092,10 +5658,10 @@ class ClientApp:
             if not remote_has_host(self.config):
                 return "set SSH host first"
             if kind == "remote_dir":
-                return "connect to the remote target first"
+                return "connect to the build host first"
             if not remote_has_project_dir(self.config):
                 return "select remote project directory first"
-            return "connect to the remote target first"
+            return "connect to the build host first"
         return ""
 
     def project_field_hint(self, field: dict[str, Any], project: dict[str, Any]) -> str:
