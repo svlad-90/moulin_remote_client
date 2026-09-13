@@ -36,6 +36,7 @@ DEFAULT_DOCKERFILE = "doc/Dockerfile"
 DEFAULT_BUILD_TARGETS = ""
 DEFAULT_MOULIN_MANIFEST = "product.yaml"
 UI_PROFILE_SLOW_MS = 20.0
+TEXT_KEY_OFFSET = sys.maxunicode + 1
 MANIFEST_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
 KEY_ALIASES = {
     "a": ("a", "ф"),
@@ -1660,15 +1661,33 @@ class ClientApp:
         except AttributeError:
             return self.screen.getch()
         if isinstance(ch, str):
-            return ord(ch) if ch else -1
+            if not ch:
+                return -1
+            code = ord(ch)
+            if code >= 256 and ch.isprintable():
+                return TEXT_KEY_OFFSET + code
+            return code
         return int(ch)
 
-    def key_matches(self, ch: int, *keys: str) -> bool:
+    def key_text(self, ch: int) -> str:
+        encoded_text_key = ch >= TEXT_KEY_OFFSET
+        if ch >= TEXT_KEY_OFFSET:
+            ch -= TEXT_KEY_OFFSET
         if ch < 0 or ch > sys.maxunicode:
-            return False
+            return ""
+        if not encoded_text_key and curses.KEY_MIN <= ch <= curses.KEY_MAX:
+            return ""
         try:
-            text = chr(ch).casefold()
+            text = chr(ch)
         except (OverflowError, ValueError):
+            return ""
+        if not text.isprintable():
+            return ""
+        return text
+
+    def key_matches(self, ch: int, *keys: str) -> bool:
+        text = self.key_text(ch).casefold()
+        if not text:
             return False
         for key in keys:
             aliases = KEY_ALIASES.get(key.casefold(), (key,))
@@ -3079,8 +3098,7 @@ class ClientApp:
                     editing_cursor = 0
                 elif ch == curses.KEY_END:
                     editing_cursor = len(editing_value)
-                elif 32 <= ch < 127:
-                    char = chr(ch)
+                elif char := self.key_text(ch):
                     editing_value = editing_value[:editing_cursor] + char + editing_value[editing_cursor:]
                     editing_cursor += 1
                 continue
@@ -4889,8 +4907,7 @@ class ClientApp:
                     editing_cursor = 0
                 elif ch == curses.KEY_END:
                     editing_cursor = len(editing_value)
-                elif 32 <= ch < 127:
-                    char = chr(ch)
+                elif char := self.key_text(ch):
                     editing_value = editing_value[:editing_cursor] + char + editing_value[editing_cursor:]
                     editing_cursor += 1
                 continue
