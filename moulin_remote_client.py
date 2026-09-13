@@ -1669,6 +1669,37 @@ class ClientApp:
             return code
         return int(ch)
 
+    def unread_key(self, ch: int) -> None:
+        if ch < 0:
+            return
+        try:
+            if ch >= TEXT_KEY_OFFSET:
+                curses.unget_wch(chr(ch - TEXT_KEY_OFFSET))
+            else:
+                curses.ungetch(ch)
+        except (curses.error, ValueError, OverflowError):
+            pass
+
+    def read_queued_text(self, first_ch: int) -> str:
+        text = self.key_text(first_ch)
+        if not text:
+            return ""
+        previous_timeout = -1
+        self.screen.timeout(0)
+        try:
+            while True:
+                ch = self.read_key()
+                if ch == -1:
+                    break
+                char = self.key_text(ch)
+                if not char:
+                    self.unread_key(ch)
+                    break
+                text += char
+        finally:
+            self.screen.timeout(previous_timeout)
+        return text
+
     def key_text(self, ch: int) -> str:
         encoded_text_key = ch >= TEXT_KEY_OFFSET
         if ch >= TEXT_KEY_OFFSET:
@@ -3098,9 +3129,9 @@ class ClientApp:
                     editing_cursor = 0
                 elif ch == curses.KEY_END:
                     editing_cursor = len(editing_value)
-                elif char := self.key_text(ch):
-                    editing_value = editing_value[:editing_cursor] + char + editing_value[editing_cursor:]
-                    editing_cursor += 1
+                elif text := self.read_queued_text(ch):
+                    editing_value = editing_value[:editing_cursor] + text + editing_value[editing_cursor:]
+                    editing_cursor += len(text)
                 continue
             self.set_cursor(False)
             if ch == curses.KEY_LEFT or self.key_matches(ch, "h"):
@@ -4907,9 +4938,9 @@ class ClientApp:
                     editing_cursor = 0
                 elif ch == curses.KEY_END:
                     editing_cursor = len(editing_value)
-                elif char := self.key_text(ch):
-                    editing_value = editing_value[:editing_cursor] + char + editing_value[editing_cursor:]
-                    editing_cursor += 1
+                elif text := self.read_queued_text(ch):
+                    editing_value = editing_value[:editing_cursor] + text + editing_value[editing_cursor:]
+                    editing_cursor += len(text)
                 continue
             self.set_cursor(False)
             if ch == curses.KEY_LEFT or self.key_matches(ch, "h"):
