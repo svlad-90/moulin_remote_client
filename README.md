@@ -67,9 +67,20 @@ MOULIN_REMOTE_AUTO_CONNECT=no
 ## Source Mappings
 
 `Sync mapped files` manages named mappings between the remote checkout and the
-local overlay. `Add mapping` opens a remote project tree picker, lists files and
-directories, and can save selected paths as mappings. `Pull selected` copies
-from remote to local; `Push selected` copies local edits back to remote.
+local overlay:
+
+1. `Select mappings` opens a remote project browser and saves files or
+   directories as mappings.
+2. `Activate mappings` chooses the active subset used by pull, push, and
+   automatic pre-build sync.
+3. `Pull selected apply` copies the active mapped areas from remote to local.
+4. Build actions automatically push the active mapped areas from local to
+   remote before running Docker, Moulin, or Ninja commands.
+
+Use `Push selected dry-run` to preview the automatic pre-build sync step.
+If active mappings are missing locally or point at empty local directories,
+the build stops before touching the remote tree and asks you to run
+`Pull selected apply` first.
 
 The config is intentionally generic. Do not commit product-specific paths,
 hosts, image names, or credentials unless they are sample placeholders.

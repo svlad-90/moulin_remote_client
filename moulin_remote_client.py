@@ -741,7 +741,12 @@ def read_mapping_selection_if_exists(config: dict[str, Any]) -> list[str]:
     selection = mapping_selection_path(config)
     if not selection.exists():
         return []
-    return [line.strip() for line in selection.read_text(encoding="utf-8").splitlines() if line.strip()]
+    names = []
+    for raw in selection.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            names.append(line)
+    return names
 
 
 def write_mapping_selection(config: dict[str, Any], names: list[str], *, echo: bool = True) -> None:
@@ -871,8 +876,9 @@ def rsync_path_args(paths: list[str], base: str) -> list[str]:
     return [f"{base}/./{path}" for path in paths]
 
 
-def local_log_command(*lines: str) -> list[str]:
+def local_log_command(*lines: str, exit_code: int = 0) -> list[str]:
     script = "".join(f"printf '%s\\n' {shlex.quote(line)}\n" for line in lines)
+    script += f"exit {int(exit_code)}\n"
     return ["bash", "-lc", script]
 
 
@@ -1433,13 +1439,6 @@ class ClientApp:
                 requires_project=True,
             ),
             MenuItem(
-                "Simulate logs",
-                "commands",
-                "Append local fake command output into the Logs panel without SSH or remote machine activity.",
-                lambda app: "local log simulation; no remote command is started",
-                lambda app: app.start_log_simulation(),
-            ),
-            MenuItem(
                 "Stop running command",
                 "commands",
                 "Gracefully stop the currently running command, then force-kill it if it does not exit.",
@@ -1834,7 +1833,7 @@ class ClientApp:
         return self.disabled_attr()
 
     def draw_header(self, width: int) -> None:
-        self.draw_box(0, 0, 8, width, ui_title(self.config))
+        self.draw_box(0, 0, 9, width, ui_title(self.config))
         inner_width = max(1, width - 4)
         label_width = 14
         entries = [
@@ -1857,6 +1856,8 @@ class ClientApp:
         self.add(5, 2, "Targets:".ljust(label_width), self.accent_attr())
         self.add(5, 2 + label_width, self.fit_text(self.build_targets, inner_width - label_width))
         self.add_segments(6, 2, inner_width, [("Preflight: ", self.accent_attr())] + self.preflight_segments())
+        self.add(7, 2, "Mappings:".ljust(label_width), self.accent_attr())
+        self.add(7, 2 + label_width, self.fit_text(self.mapping_status_text(), inner_width - label_width), self.mapping_status_attr())
 
     def build_param_segments(self) -> list[tuple[str, int]]:
         segments: list[tuple[str, int]] = [("Params: ", self.accent_attr())]
@@ -1885,6 +1886,58 @@ class ClientApp:
         if any(token in lowered for token in ("fail", "missing", "timeout", "failed", "mismatch", "?")):
             return False
         return "ok" in lowered or part.startswith("cwd ") or part.startswith("disk ") or part.startswith("git ##") or part.startswith("origin ")
+
+    def active_mappings(self) -> tuple[list[str], list[dict[str, Any]], str | None]:
+        names = read_mapping_selection_if_exists(self.config)
+        if not names:
+            return names, [], None
+        try:
+            return names, select_mappings(self.config, names), None
+        except SystemExit as exc:
+            return names, [], str(exc)
+
+    def local_mapping_issue(self, mapping: dict[str, Any]) -> str | None:
+        local_path = local_project_dir(self.config) / mapping["local"]
+        if not local_path.exists():
+            return f"{mapping['name']}: local path missing: {local_path}"
+        if mapping["kind"] == "directory":
+            if not local_path.is_dir():
+                return f"{mapping['name']}: local path is not a directory: {local_path}"
+            try:
+                if not any(local_path.iterdir()):
+                    return f"{mapping['name']}: local directory is empty: {local_path}"
+            except OSError as exc:
+                return f"{mapping['name']}: cannot inspect local directory: {exc}"
+        elif not local_path.is_file():
+            return f"{mapping['name']}: local path is not a file: {local_path}"
+        return None
+
+    def local_mapping_issues(self, active_mappings: list[dict[str, Any]]) -> list[str]:
+        return [
+            issue
+            for mapping in active_mappings
+            for issue in [self.local_mapping_issue(mapping)]
+            if issue is not None
+        ]
+
+    def mapping_status_text(self) -> str:
+        names, active_mappings, error = self.active_mappings()
+        if not names:
+            return "0 active | pre-build push no"
+        if error is not None:
+            return f"{len(names)} selected | invalid selection"
+        issues = self.local_mapping_issues(active_mappings)
+        if issues:
+            return f"{len(active_mappings)} active | needs pull before build"
+        return f"{len(active_mappings)} active | pre-build push yes"
+
+    def mapping_status_attr(self) -> int:
+        names, active_mappings, error = self.active_mappings()
+        if not names:
+            return self.disabled_attr()
+        if error is not None or self.local_mapping_issues(active_mappings):
+            return self.warn_attr()
+        return self.ok_attr()
 
     def draw_wrapped(self, y: int, x: int, width: int, text: str, attr: int = 0, max_lines: int = 4) -> int:
         words = text.split()
@@ -1928,8 +1981,6 @@ class ClientApp:
     def job_running(self, job: dict[str, Any] | None) -> bool:
         if job is None:
             return False
-        if job.get("kind") == "simulate-log":
-            return job.get("rc") is None
         process = job.get("process")
         return process is not None and process.poll() is None
 
@@ -1983,8 +2034,8 @@ class ClientApp:
         height, _ = self.screen.getmaxyx()
         if self.logs_expanded:
             return max(1, height - 6)
-        panel_top = 9
-        panel_height = height - 11
+        panel_top = 10
+        panel_height = height - 12
         details_height = max(8, panel_height // 2)
         logs_height = max(5, panel_height - details_height - 1)
         return max(1, logs_height - 6)
@@ -2010,6 +2061,9 @@ class ClientApp:
         selection = ", ".join(self.mapping_selection_cache) or "none"
         if row < top + height - 3:
             self.add(row, x, f"Selected mappings: {selection}"[:inner])
+            row += 1
+        if item.label in {"Build Docker image", "Regenerate Moulin/Ninja", "Run product build"} and row < top + height - 2:
+            self.add(row, x, f"Pre-build sync: {self.mapping_status_text()}"[:inner], self.mapping_status_attr())
             row += 1
         if row < top + height - 2:
             last = "none" if self.last_exit is None else str(self.last_exit)
@@ -2068,8 +2122,8 @@ class ClientApp:
         left_width = min(46, max(34, width // 3))
         right_left = left_width + 1
         right_width = width - right_left
-        panel_top = 9
-        panel_height = height - 11
+        panel_top = 10
+        panel_height = height - 12
         menu_visible_rows = max(1, panel_height - 2)
         details_height = max(8, panel_height // 2)
         logs_height = max(5, panel_height - details_height - 1)
@@ -2156,6 +2210,7 @@ class ClientApp:
             self.docker_image,
             self.build_targets,
             self.preflight,
+            self.mapping_status_text(),
         )
         if self.main_full_redraw or self.render_cache.get("header") != header_sig:
             started = time.monotonic()
@@ -2210,6 +2265,7 @@ class ClientApp:
             self.active_job_running(),
             self.last_exit,
             selection,
+            self.mapping_status_text(),
             self.item_enabled(item),
             self.disabled_reason(item) if not self.item_enabled(item) else "",
         )
@@ -2508,7 +2564,59 @@ class ClientApp:
 
     def run_build_command(self, title: str, argv: list[str]) -> int:
         self.save_current_build_settings()
-        return self.run_command(title, argv)
+        return self.run_commands(title, self.pre_build_sync_commands() + [argv])
+
+    def pre_build_sync_commands(self) -> list[list[str]]:
+        names = read_mapping_selection_if_exists(self.config)
+        if not names:
+            return []
+        commands: list[list[str]] = []
+        try:
+            active_mappings = select_mappings(self.config, names)
+        except SystemExit as exc:
+            return [
+                local_log_command(
+                    "Pre-build sync failed",
+                    str(exc),
+                    exit_code=1,
+                )
+            ]
+        issues = self.local_mapping_issues(active_mappings)
+        if issues:
+            return [
+                local_log_command(
+                    "Pre-build sync skipped: local overlay is not ready",
+                    "Run Sync mapped files -> Pull selected apply first.",
+                    *issues[:8],
+                    exit_code=1,
+                )
+            ]
+        commands.append(
+            local_log_command(
+                "Pre-build sync: pushing active mappings to remote",
+                f"mappings: {', '.join(names)}",
+            )
+        )
+        for mapping in active_mappings:
+            try:
+                commands.append(
+                    rsync_mapping_command(
+                        self.config,
+                        mapping,
+                        direction="push",
+                        dry_run=False,
+                    )
+                )
+            except SystemExit as exc:
+                commands.append(
+                    local_log_command(
+                        f"Pre-build sync failed: {mapping['name']}",
+                        str(exc),
+                        exit_code=1,
+                    )
+                )
+                break
+        return commands
 
     def save_current_build_settings(self) -> None:
         save_build_settings(
@@ -2544,32 +2652,6 @@ class ClientApp:
         self.logs_dirty = True
         return 0
 
-    def start_log_simulation(self) -> None:
-        if self.action_running or self.active_job is not None:
-            self.status = "Another action is already running"
-            return
-        item = self.items[self.selected]
-        now = time.monotonic()
-        self.active_job = {
-            "kind": "simulate-log",
-            "title": "Simulate logs",
-            "item_label": item.label,
-            "output": deque(["local log simulation started"], maxlen=1000),
-            "output_lock": threading.Lock(),
-            "process": None,
-            "current_command": "local simulated log generator",
-            "rc": None,
-            "simulate_count": 0,
-            "simulate_max": 600,
-            "simulate_next_at": now,
-            "simulate_interval": 0.1,
-        }
-        self.status = "Simulating local logs"
-        self.focus_panel = "actions"
-        self.menu_dirty = True
-        self.main_full_redraw = True
-        self.logs_dirty = True
-
     def stop_running_preview(self) -> str:
         if self.active_job is None:
             return "No command is running."
@@ -2585,14 +2667,6 @@ class ClientApp:
             self.status = "Command stop is already requested"
             return
         job["stopping"] = True
-        if job.get("kind") == "simulate-log":
-            job["rc"] = 130
-            self.last_exit = 130
-            self.append_job_output(job, "stopped by user")
-            self.append_job_output(job, "exit: 130")
-            self.status = "Simulate logs: stopped"
-            self.finish_active_job()
-            return
         process = job.get("process")
         if isinstance(process, subprocess.Popen) and process.poll() is None:
             self.append_job_output(job, "stop requested: SIGTERM")
@@ -2680,9 +2754,6 @@ class ClientApp:
         job = self.active_job
         if job is None:
             return
-        if job.get("kind") == "simulate-log":
-            self.poll_log_simulation(job)
-            return
         process = job.get("process")
         if process is None:
             self.start_next_active_job_command()
@@ -2740,31 +2811,6 @@ class ClientApp:
         job["index"] = int(job["index"]) + 1
         job["process"] = None
         self.start_next_active_job_command()
-
-    def poll_log_simulation(self, job: dict[str, Any]) -> None:
-        if job.get("rc") is not None:
-            self.finish_active_job()
-            return
-        now = time.monotonic()
-        next_at = float(job.get("simulate_next_at", now))
-        if now < next_at:
-            return
-        interval = float(job.get("simulate_interval", 0.1))
-        emitted = 0
-        while now >= next_at and emitted < 5:
-            count = int(job.get("simulate_count", 0)) + 1
-            job["simulate_count"] = count
-            self.append_job_output(job, f"simulated log line {count:04d}  ts={time.strftime('%H:%M:%S')}  payload={'#' * (count % 40)}")
-            emitted += 1
-            next_at += interval
-            if count >= int(job.get("simulate_max", 600)):
-                job["rc"] = 0
-                self.last_exit = 0
-                self.status = "Simulate logs: exit 0"
-                self.append_job_output(job, "exit: 0")
-                self.finish_active_job()
-                return
-        job["simulate_next_at"] = next_at
 
     def run_one_command(
         self,
@@ -3719,22 +3765,22 @@ class ClientApp:
     def sync_screen(self) -> None:
         actions = [
             {
-                "label": "Activate mappings",
-                "description": "Choose active mappings for pull/push operations, or delete mappings from the client config.",
-                "handler": lambda: self.select_mappings_screen(),
-                "requires_remote": False,
-                "confirm": False,
-            },
-            {
                 "label": "Select mappings",
-                "description": "Browse the remote project and add file or directory mappings to the client config.",
+                "description": "Browse the remote project tree and save file or directory mappings to the client config.",
                 "handler": lambda: self.add_mapping_screen(),
                 "requires_remote": True,
                 "confirm": False,
             },
             {
+                "label": "Activate mappings",
+                "description": "Choose the active subset of saved mappings for pull, push, and automatic pre-build sync.",
+                "handler": lambda: self.select_mappings_screen(),
+                "requires_remote": False,
+                "confirm": False,
+            },
+            {
                 "label": "Pull selected dry-run",
-                "description": "Preview copying selected mapped areas from the remote target to the local overlay.",
+                "description": "Preview copying active mapped areas from the remote project tree to the local overlay.",
                 "handler": lambda: self.run_commands(
                     "Pull selected mappings dry-run",
                     selected_mapping_commands(self.config, direction="pull", dry_run=True),
@@ -3744,7 +3790,7 @@ class ClientApp:
             },
             {
                 "label": "Pull selected apply",
-                "description": "Copy selected mapped areas from the remote target to the local overlay.",
+                "description": "Copy active mapped areas from the remote project tree to the local overlay.",
                 "handler": lambda: self.run_commands(
                     "Pull selected mappings apply",
                     selected_mapping_commands(self.config, direction="pull", dry_run=False),
@@ -3754,7 +3800,7 @@ class ClientApp:
             },
             {
                 "label": "Push selected dry-run",
-                "description": "Preview pushing selected mapped areas from the local overlay to the remote target.",
+                "description": "Preview pushing active mapped areas from the local overlay to the remote project tree.",
                 "handler": lambda: self.run_commands(
                     "Push selected mappings dry-run",
                     selected_mapping_commands(self.config, direction="push", dry_run=True),
@@ -3764,7 +3810,7 @@ class ClientApp:
             },
             {
                 "label": "Push selected apply",
-                "description": "Push selected mapped areas from the local overlay to the remote target.",
+                "description": "Push active mapped areas from the local overlay to the remote project tree.",
                 "handler": lambda: self.run_commands(
                     "Push selected mappings apply",
                     selected_mapping_commands(self.config, direction="push", dry_run=False),
@@ -3861,7 +3907,7 @@ class ClientApp:
                     self.status = f"{action['label']}: failed"
                     self.show_message("Action failed", [str(exc)])
                     continue
-                if action["label"] in {"Activate mappings", "Select mappings"}:
+                if action["label"] in {"Select mappings", "Activate mappings"}:
                     self.screen.timeout(-1)
                     continue
                 self.screen.timeout(250)
