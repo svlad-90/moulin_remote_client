@@ -1367,6 +1367,7 @@ class ClientApp:
         self.connection_state = "disconnected"
         self.board_connection_state = "disconnected"
         self.auto_connect_done = False
+        self.pending_auto_board_connect = False
         self.action_running = False
         self.active_job: dict[str, Any] | None = None
         self.last_job: dict[str, Any] | None = None
@@ -2643,10 +2644,26 @@ class ClientApp:
         if self.auto_connect_done:
             return
         self.auto_connect_done = True
+        self.pending_auto_board_connect = board_host_has_ssh(self.config)
         if not remote_has_ssh(self.config):
-            self.status = "Remote SSH user/host are not configured"
+            if self.pending_auto_board_connect:
+                self.pending_auto_board_connect = False
+                self.start_board_connect_job()
+            else:
+                self.status = "Build and board SSH user/host are not configured"
             return
         self.start_connect_job()
+
+    def start_pending_auto_board_connect(self) -> bool:
+        if not self.pending_auto_board_connect:
+            return False
+        self.pending_auto_board_connect = False
+        if self.action_running or self.active_job is not None:
+            return False
+        if not board_host_has_ssh(self.config) or self.board_connected:
+            return False
+        self.start_board_connect_job()
+        return True
 
     def start_connect_job(self) -> None:
         if self.action_running or self.active_job is not None:
@@ -3059,6 +3076,8 @@ class ClientApp:
             self.last_exit = 124
             self.status = "Board host disconnected: connect timeout" if job.get("kind") == "board-connect" else "Disconnected: connect timeout"
             self.finish_active_job()
+            if job.get("kind") == "connect":
+                self.start_pending_auto_board_connect()
             return
         rc = process.poll()
         if rc is None:
@@ -3080,6 +3099,7 @@ class ClientApp:
             self.connection_state = "connected" if rc == 0 else "disconnected"
             self.status = "Connected" if self.connected else "Disconnected: connect failed"
             self.finish_active_job()
+            self.start_pending_auto_board_connect()
             return
         if job.get("kind") == "board-connect":
             self.last_exit = int(rc)
