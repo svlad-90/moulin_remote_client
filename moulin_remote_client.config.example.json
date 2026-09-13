@@ -6,7 +6,8 @@
     "name": "",
     "label": "",
     "user": "",
-    "host": ""
+    "host": "",
+    "projects_dir": ""
   },
   "active_remote": "",
   "remotes": [],
@@ -14,7 +15,12 @@
     "name": "",
     "label": "",
     "user": "",
-    "host": ""
+    "host": "",
+    "work_dir": "~/moulin-board-work",
+    "console_device": "",
+    "ufs_loadaddr": "",
+    "ufs_buffersize": "",
+    "direct_copy": "no"
   },
   "active_board_host": "",
   "board_hosts": [],
@@ -31,7 +37,8 @@
       "dockerfile": "doc/Dockerfile",
       "docker_image": "",
       "parameters": {},
-      "targets": ""
+      "targets": "",
+      "board_artifacts": ""
     }
   ],
   "local": {

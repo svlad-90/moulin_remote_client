@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import curses
 import json
 import os
@@ -29,6 +30,9 @@ except ImportError:
 os.environ.setdefault("ESCDELAY", "100")
 
 APP_DIR = Path(__file__).resolve().parent
+BOARD_TOOLS_DIR = APP_DIR / "board_tools"
+FLASH_BOOTLOADERS_TOOL = BOARD_TOOLS_DIR / "flash_bootloaders.py"
+XT_IMAGER_TOOL = BOARD_TOOLS_DIR / "xt-imager.py"
 DEFAULT_CONFIG = APP_DIR / "moulin_remote_client.config.json"
 DEFAULT_CONFIG_EXAMPLE = APP_DIR / "moulin_remote_client.config.example.json"
 DEFAULT_DOCKER_IMAGE = ""
@@ -38,6 +42,7 @@ DEFAULT_MOULIN_MANIFEST = "product.yaml"
 UI_PROFILE_SLOW_MS = 20.0
 TEXT_KEY_OFFSET = sys.maxunicode + 1
 MANIFEST_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
+BOARD_COMMAND_LABELS = {"Copy build artifacts", "Flash bootloaders", "Flash UFS image"}
 KEY_ALIASES = {
     "a": ("a", "ф"),
     "b": ("b", "и"),
@@ -159,13 +164,19 @@ def empty_host_profile(name: str = "") -> dict[str, str]:
         "label": name,
         "user": "",
         "host": "",
+        "work_dir": "~/moulin-board-work",
+        "direct_copy": "no",
+        "console_device": "",
+        "ufs_loadaddr": "",
+        "ufs_buffersize": "",
     }
 
 
 def empty_remote_profile(name: str = "") -> dict[str, str]:
     profile = empty_host_profile(name)
     profile.update({
-        "project_dir": "",
+        "projects_dir": "",
+        "work_dir": "",
         "git_url": "",
         "moulin_manifest": "",
         "dockerfile": "",
@@ -181,6 +192,7 @@ def is_blank_default_remote(remote: dict[str, Any]) -> bool:
         and not str(remote.get("user", "")).strip()
         and not str(remote.get("host", "")).strip()
         and not str(remote.get("project_dir", "")).strip()
+        and not str(remote.get("projects_dir", "")).strip()
         and not str(remote.get("git_url", "")).strip()
     )
 
@@ -193,7 +205,8 @@ def normalize_remote_profiles(config: dict[str, Any]) -> None:
         remote.setdefault("label", str(remote.get("name") or "remote"))
         remote.setdefault("user", "")
         remote.setdefault("host", "")
-        remote.setdefault("project_dir", "")
+        projects_dir, _ = split_remote_project_path(str(remote.get("project_dir", "")))
+        remote.setdefault("projects_dir", projects_dir)
         remote.setdefault("git_url", "")
         remote.setdefault("moulin_manifest", "")
         remote.setdefault("dockerfile", "")
@@ -207,7 +220,8 @@ def normalize_remote_profiles(config: dict[str, Any]) -> None:
         remote.setdefault("label", str(remote.get("name") or f"remote-{index + 1}"))
         remote.setdefault("user", "")
         remote.setdefault("host", "")
-        remote.setdefault("project_dir", "")
+        projects_dir, _ = split_remote_project_path(str(remote.get("project_dir", "")))
+        remote.setdefault("projects_dir", projects_dir)
         remote.setdefault("git_url", "")
         remote.setdefault("moulin_manifest", "")
         remote.setdefault("dockerfile", "")
@@ -257,6 +271,11 @@ def normalize_board_host_profiles(config: dict[str, Any]) -> None:
         host.setdefault("label", str(host.get("name") or f"board-{index + 1}"))
         host.setdefault("user", "")
         host.setdefault("host", "")
+        host.setdefault("work_dir", "~/moulin-board-work")
+        host.setdefault("direct_copy", "no")
+        host.setdefault("console_device", "")
+        host.setdefault("ufs_loadaddr", "")
+        host.setdefault("ufs_buffersize", "")
     if not hosts:
         config["active_board_host"] = ""
         sync_active_board_host(config)
@@ -318,7 +337,20 @@ def empty_project_profile(name: str = "") -> dict[str, Any]:
         "docker_image": "",
         "parameters": {},
         "targets": "",
+        "board_artifacts": "",
     }
+
+
+def split_remote_project_path(path: str) -> tuple[str, str]:
+    value = path.strip().rstrip("/")
+    if not value:
+        return "", ""
+    pure = PurePosixPath(value)
+    parent = str(pure.parent)
+    name = pure.name
+    if parent == ".":
+        return "", name
+    return parent, name
 
 
 def normalize_project_profiles(config: dict[str, Any]) -> None:
@@ -326,10 +358,14 @@ def normalize_project_profiles(config: dict[str, Any]) -> None:
     if not isinstance(projects, list):
         settings = _legacy_build_settings(config)
         remote = active_remote(config)
+        legacy_project_dir = str(remote.get("project_dir") or config.get("project", {}).get("project_dir", ""))
+        legacy_projects_dir, legacy_project_name = split_remote_project_path(legacy_project_dir)
+        if legacy_projects_dir and not str(remote.get("projects_dir", "")).strip():
+            remote["projects_dir"] = legacy_projects_dir
         project = {
             "name": str(config.get("active_project") or config.get("project", {}).get("name") or "default"),
             "label": str(config.get("project", {}).get("label") or config.get("active_project") or "default"),
-            "project_dir": str(remote.get("project_dir") or config.get("project", {}).get("project_dir", "")),
+            "project_dir": legacy_project_name or legacy_project_dir,
             "local_project_dir": str(config.get("local", {}).get("project_dir", "workspace/project-overlay")),
             "git_url": str(remote.get("git_url") or config.get("project", {}).get("git_url", "")),
             "git_ref": str(config.get("project", {}).get("git_ref", "")),
@@ -338,6 +374,7 @@ def normalize_project_profiles(config: dict[str, Any]) -> None:
             "docker_image": str(settings.get("docker_image") or remote.get("docker_image") or config.get("docker", {}).get("image", "")),
             "parameters": dict(settings.get("parameters", {})) if isinstance(settings.get("parameters", {}), dict) else {},
             "targets": str(settings.get("targets", build_targets())),
+            "board_artifacts": str(settings.get("targets", build_targets())),
         }
         projects = [project]
         config["projects"] = projects
@@ -349,7 +386,15 @@ def normalize_project_profiles(config: dict[str, Any]) -> None:
     for index, project in enumerate(projects):
         project.setdefault("name", str(project.get("label") or f"project-{index + 1}"))
         project.setdefault("label", str(project.get("name") or f"project-{index + 1}"))
-        project.setdefault("project_dir", str(active_remote(config).get("project_dir") or config.get("project", {}).get("project_dir", "")))
+        if "project_dir" not in project:
+            project["project_dir"] = str(config.get("project", {}).get("project_dir", ""))
+        project_dir = str(project.get("project_dir", "")).strip()
+        if project_dir.startswith("/"):
+            projects_dir, project_name = split_remote_project_path(project_dir)
+            if projects_dir and not str(active_remote(config).get("projects_dir", "")).strip():
+                active_remote(config)["projects_dir"] = projects_dir
+                sync_active_remote(config)
+            project["project_dir"] = project_name or project_dir
         project.setdefault("local_project_dir", str(config.get("local", {}).get("project_dir", "workspace/project-overlay")))
         project.setdefault("git_url", str(config.get("project", {}).get("git_url", "")))
         project.setdefault("git_ref", str(config.get("project", {}).get("git_ref", "")))
@@ -359,6 +404,7 @@ def normalize_project_profiles(config: dict[str, Any]) -> None:
         if not isinstance(project.get("parameters"), dict):
             project["parameters"] = {}
         project.setdefault("targets", build_targets())
+        project.setdefault("board_artifacts", str(project.get("targets", "")))
     active = str(config.get("active_project") or projects[0].get("name") or "")
     if not any(str(project.get("name", "")) == active for project in projects):
         active = str(projects[0].get("name") or "")
@@ -450,11 +496,79 @@ def board_host_spec(config: dict[str, Any]) -> str:
     return host_spec(active_board_host(config))
 
 
+def build_host_projects_dir(config: dict[str, Any]) -> str:
+    remote = active_remote(config)
+    value = str(remote.get("projects_dir", "")).strip()
+    if value:
+        return value.rstrip("/")
+    legacy = str(remote.get("project_dir", "")).strip().rstrip("/")
+    if legacy:
+        parent, _ = split_remote_project_path(legacy)
+        return parent.rstrip("/")
+    return ""
+
+
+def project_dir_name(config: dict[str, Any]) -> str:
+    return str(active_project(config).get("project_dir", "")).strip().strip("/")
+
+
 def remote_project_dir(config: dict[str, Any]) -> str:
     project_value = str(active_project(config).get("project_dir", "")).strip()
+    if project_value.startswith("/"):
+        return project_value.rstrip("/")
+    projects_dir = build_host_projects_dir(config)
+    if projects_dir and project_value:
+        return str(PurePosixPath(projects_dir) / project_value).rstrip("/")
     if project_value:
         return project_value.rstrip("/")
-    return str(active_remote(config).get("project_dir", "")).rstrip("/")
+    legacy = str(active_remote(config).get("project_dir", "")).strip()
+    return legacy.rstrip("/")
+
+
+def board_work_dir(config: dict[str, Any]) -> str:
+    return str(active_board_host(config).get("work_dir", "~/moulin-board-work")).strip().rstrip("/") or "~/moulin-board-work"
+
+
+def board_artifacts_dir(config: dict[str, Any]) -> str:
+    return str(PurePosixPath(board_work_dir(config)) / "artifacts")
+
+
+def board_direct_copy_enabled(config: dict[str, Any]) -> bool:
+    value = str(active_board_host(config).get("direct_copy", "no")).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def board_ufs_loadaddr(config: dict[str, Any]) -> str:
+    return str(active_board_host(config).get("ufs_loadaddr", "")).strip()
+
+
+def board_ufs_buffersize(config: dict[str, Any]) -> str:
+    return str(active_board_host(config).get("ufs_buffersize", "")).strip()
+
+
+def board_console_device(config: dict[str, Any]) -> str:
+    return str(active_board_host(config).get("console_device", "")).strip()
+
+
+def board_tool_remote_path(config: dict[str, Any], tool: Path) -> str:
+    return str(PurePosixPath(board_work_dir(config)) / tool.name)
+
+
+def remote_shell_path(path: str) -> str:
+    if path == "~":
+        return "$HOME"
+    if path.startswith("~/"):
+        return "$HOME/" + path[2:]
+    return path
+
+
+def quote_remote_shell_path(path: str) -> str:
+    shell_path = remote_shell_path(path)
+    if shell_path == "$HOME":
+        return '"$HOME"'
+    if shell_path.startswith("$HOME/"):
+        return '"$HOME"/' + shlex.quote(shell_path[len("$HOME/") :])
+    return shlex.quote(shell_path)
 
 
 def project_git_url(config: dict[str, Any]) -> str:
@@ -696,6 +810,97 @@ def moulin_target_candidates(config: dict[str, Any], build_params: dict[str, str
                 add_image_targets(overrides.get("images"), f"{param_name}={value}")
                 add_component_targets(overrides.get("components"), f"{param_name}={value}")
     return sorted(candidates.values(), key=lambda item: item["target"])
+
+
+def merge_moulin_values(base: Any, override: Any) -> Any:
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = copy.deepcopy(base)
+        for key, value in override.items():
+            merged[key] = merge_moulin_values(merged[key], value) if key in merged else copy.deepcopy(value)
+        return merged
+    if isinstance(base, list) and isinstance(override, list):
+        return copy.deepcopy(base) + copy.deepcopy(override)
+    return copy.deepcopy(override)
+
+
+def effective_moulin_manifest(config: dict[str, Any], build_params: dict[str, str] | None = None) -> dict[str, Any]:
+    data = load_moulin_manifest(config)
+    if not data:
+        return {}
+    effective = copy.deepcopy(data)
+    selected = build_params or default_build_params(config)
+    params = data.get("parameters", {})
+    if not isinstance(params, dict):
+        return effective
+    for param_name, value in selected.items():
+        param = params.get(param_name)
+        if not isinstance(param, dict):
+            continue
+        choice = param.get(value)
+        if not isinstance(choice, dict):
+            continue
+        overrides = choice.get("overrides", {})
+        if isinstance(overrides, dict):
+            effective = merge_moulin_values(effective, overrides)
+    return effective
+
+
+def expand_moulin_value(value: str, variables: dict[str, str]) -> str:
+    result = value
+    for _ in range(20):
+        updated = re.sub(r"%\{([^}]+)\}", lambda match: variables.get(match.group(1), match.group(0)), result)
+        if updated == result:
+            return updated
+        result = updated
+    return result
+
+
+def effective_moulin_variables(data: dict[str, Any]) -> dict[str, str]:
+    raw = data.get("variables", {})
+    if not isinstance(raw, dict):
+        return {}
+    variables = {str(key): str(value) for key, value in raw.items()}
+    return {key: expand_moulin_value(value, variables) for key, value in variables.items()}
+
+
+def board_artifact_copy_specs(
+    config: dict[str, Any],
+    targets: list[str],
+    build_params: dict[str, str] | None = None,
+) -> list[dict[str, str]]:
+    data = effective_moulin_manifest(config, build_params)
+    variables = effective_moulin_variables(data)
+    components = data.get("components", {}) if isinstance(data.get("components", {}), dict) else {}
+    images = data.get("images", {}) if isinstance(data.get("images", {}), dict) else {}
+    specs: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(label: str, path: str, source: str) -> None:
+        clean = expand_moulin_value(path, variables).strip().strip("/")
+        if not clean:
+            return
+        key = (label, clean)
+        if key in seen:
+            return
+        seen.add(key)
+        specs.append({"label": label, "path": clean, "source": source})
+
+    for target in targets:
+        component = components.get(target)
+        builder = component.get("builder", {}) if isinstance(component, dict) else {}
+        target_images = builder.get("target_images", []) if isinstance(builder, dict) else []
+        if isinstance(target_images, list) and target_images:
+            for image in target_images:
+                add(target, str(image), "manifest component target_images")
+            continue
+
+        image_name = target[:-7] if target.endswith(".img.gz") else target
+        if image_name in images:
+            add(target, target, "manifest image output")
+            continue
+
+        add(target, target, "filesystem fallback")
+    return specs
 
 
 def auto_connect_enabled() -> bool:
@@ -969,6 +1174,47 @@ def local_log_command(*lines: str, exit_code: int = 0) -> list[str]:
     script = "".join(f"printf '%s\\n' {shlex.quote(line)}\n" for line in lines)
     script += f"exit {int(exit_code)}\n"
     return ["bash", "-lc", script]
+
+
+def display_command(argv: list[str]) -> str:
+    safe = [arg.replace("\n", "\\n").replace("\r", "\\r") for arg in argv]
+    return shlex.join(safe)
+
+
+def display_command_lines(argv: list[str]) -> list[str]:
+    if not any("\n" in arg or "\r" in arg for arg in argv):
+        return [f"command: {display_command(argv)}"]
+    script_index = next((index for index, arg in enumerate(argv) if "\n" in arg or "\r" in arg), len(argv) - 1)
+    script = argv[script_index].replace("\r\n", "\n").replace("\r", "\n")
+    if script.startswith("printf '%s\\n' ") and "\nexit " in script:
+        return ["command: <log message>"]
+    prefix_argv = argv[:script_index] + ["<script>"]
+    try:
+        nested = shlex.split(script)
+    except ValueError:
+        nested = []
+    if len(nested) == 3 and nested[:2] == ["bash", "-lic"] and "\n" in nested[2]:
+        prefix_argv = argv[:script_index] + ["bash", "-lic", "<script>"]
+        script = nested[2].replace("\r\n", "\n").replace("\r", "\n")
+    prefix = display_command(prefix_argv)
+    lines = [f"command: {prefix}", "script:"]
+    for line in script.split("\n"):
+        if not line:
+            lines.append("")
+            continue
+        remaining = line
+        first = True
+        while len(remaining) > 112:
+            lines.append(f"  {remaining[:112]}" if first else f"    {remaining[:112]}")
+            remaining = remaining[112:]
+            first = False
+        lines.append(f"  {remaining}" if first else f"    {remaining}")
+    return lines
+
+
+def sanitize_log_line(line: str) -> str:
+    line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line)
+    return "".join(char if char == "\t" or ord(char) >= 32 else " " for char in line)
 
 
 def rsync_mapping_command(
@@ -1315,6 +1561,452 @@ def remote_build_command(config: dict[str, Any], app: "ClientApp") -> list[str]:
     return remote_shell_command(config, command)
 
 
+def board_ssh_command(config: dict[str, Any], command: str, *, tty: bool = False) -> list[str]:
+    argv = ["ssh"]
+    if tty:
+        argv.append("-tt")
+        command = f"bash -lic {shlex.quote(command)}"
+    argv.extend([board_host_spec(config), command])
+    return argv
+
+
+def board_deploy_tool_command(config: dict[str, Any], tool: Path) -> list[str]:
+    remote_path = board_tool_remote_path(config, tool)
+    script = (
+        f"mkdir -p {quote_remote_shell_path(board_work_dir(config))} && "
+        f"cat > {quote_remote_shell_path(remote_path)} && chmod +x {quote_remote_shell_path(remote_path)}"
+    )
+    return ["bash", "-lc", f"cat {shlex.quote(str(tool))} | ssh {shlex.quote(board_host_spec(config))} {shlex.quote(script)}"]
+
+
+def board_deploy_tool_log_command(config: dict[str, Any], tool: Path) -> list[str]:
+    return local_log_command(
+        "Deploy board helper",
+        f"from: {tool}",
+        f"to:   {board_host_spec(config)}:{board_tool_remote_path(config, tool)}",
+    )
+
+
+def board_prepare_work_dir_command(config: dict[str, Any]) -> list[str]:
+    script = f"mkdir -p {quote_remote_shell_path(board_artifacts_dir(config))}"
+    return board_ssh_command(config, script)
+
+
+def shell_array_assignment(name: str, values: list[str]) -> str:
+    return f"{name}=(" + " ".join(shlex.quote(value) for value in values) + ")"
+
+
+def board_artifact_resolver_script(source_dir: str, specs: list[dict[str, str]]) -> str:
+    label_array = shell_array_assignment("requested_labels", [spec["label"] for spec in specs])
+    path_array = shell_array_assignment("requested_paths", [spec["path"] for spec in specs])
+    return (
+        "set -euo pipefail\n"
+        f"cd {shlex.quote(source_dir)}\n"
+        "source_root=$PWD\n"
+        f"{label_array}\n"
+        f"{path_array}\n"
+        "resolved_artifacts=()\n"
+        "resolved_tar_args=()\n"
+        "total_bytes=0\n"
+        "echo 'resolved artifacts:' >&2\n"
+        "for index in \"${!requested_paths[@]}\"; do\n"
+        "  label=${requested_labels[$index]}\n"
+        "  artifact=${requested_paths[$index]}\n"
+        "  found=''\n"
+        "  if [ -e \"$artifact\" ]; then\n"
+        "    found=\"$artifact\"\n"
+        "  else\n"
+        "    found=$(find . -path \"*/$artifact\" -print -quit)\n"
+        "    found=${found#./}\n"
+        "  fi\n"
+        "  if [ -z \"$found\" ] || [ ! -e \"$found\" ]; then\n"
+        "    printf 'missing artifact: %s under %s\\n' \"$artifact\" \"$PWD\" >&2\n"
+        "    exit 2\n"
+        "  fi\n"
+        "  size=$(du -sb -- \"$found\" | awk '{print $1}')\n"
+        "  total_bytes=$((total_bytes + size))\n"
+        "  printf '  %s: %s -> %s (%s bytes)\\n' \"$label\" \"$artifact\" \"$found\" \"$size\" >&2\n"
+        "  resolved_artifacts+=(\"$found\")\n"
+        "  found_dir=$(dirname \"$found\")\n"
+        "  case \"$found_dir\" in\n"
+        "    /*) tar_dir=$found_dir ;;\n"
+        "    *) tar_dir=$source_root/$found_dir ;;\n"
+        "  esac\n"
+        "  resolved_tar_args+=(-C \"$tar_dir\" \"$(basename \"$found\")\")\n"
+        "done\n"
+        "printf 'total input size: %s bytes\\n' \"$total_bytes\" >&2\n"
+    )
+
+
+def board_tar_progress_command(destination: str, destination_script: str) -> str:
+    python_script = r"""
+import os
+import signal
+import subprocess
+import sys
+import time
+
+destination = os.environ["BOARD_COPY_DESTINATION"]
+destination_script = os.environ["BOARD_COPY_DESTINATION_SCRIPT"]
+total = max(1, int(os.environ.get("BOARD_COPY_TOTAL_BYTES", "1")))
+tar_args = sys.argv[1:]
+ssh = subprocess.Popen(
+    ["ssh", "-o", "StrictHostKeyChecking=accept-new", destination, destination_script],
+    stdin=subprocess.PIPE,
+    start_new_session=True,
+)
+tar = subprocess.Popen(["tar", "-cf", "-", *tar_args], stdout=subprocess.PIPE, start_new_session=True)
+copied = 0
+last_reported = -1
+last_time = 0.0
+try:
+    assert tar.stdout is not None
+    assert ssh.stdin is not None
+    while True:
+        chunk = tar.stdout.read(1024 * 1024)
+        if not chunk:
+            break
+        ssh.stdin.write(chunk)
+        copied += len(chunk)
+        now = time.monotonic()
+        pct = min(100, int(copied * 100 / total))
+        if pct != last_reported and (pct == 100 or now - last_time >= 1.0):
+            print(f"progress: {pct}% ({copied}/{total} bytes)", flush=True)
+            last_reported = pct
+            last_time = now
+    ssh.stdin.close()
+finally:
+    if tar.stdout is not None:
+        tar.stdout.close()
+tar_rc = tar.wait()
+ssh_rc = ssh.wait()
+if tar_rc != 0:
+    sys.exit(tar_rc)
+sys.exit(ssh_rc)
+"""
+    env_prefix = (
+        f"BOARD_COPY_DESTINATION={shlex.quote(destination)} "
+        f"BOARD_COPY_DESTINATION_SCRIPT={shlex.quote(destination_script)} "
+        'BOARD_COPY_TOTAL_BYTES="$total_bytes" '
+    )
+    return env_prefix + f"python3 -c {shlex.quote(python_script)} " + '"${resolved_tar_args[@]}"'
+
+
+def board_copy_build_artifacts_commands(config: dict[str, Any], app: "ClientApp") -> list[list[str]]:
+    artifacts = getattr(app, "board_artifacts", "") or app.build_targets
+    targets = shlex.split(artifacts)
+    if not targets:
+        return [local_log_command("No board artifacts configured", exit_code=1)]
+    clean_targets = [target.strip().strip("/") for target in targets if target.strip().strip("/")]
+    if not clean_targets:
+        return [local_log_command("No board artifacts configured", exit_code=1)]
+    specs = board_artifact_copy_specs(config, clean_targets, getattr(app, "build_params", {}))
+    source_dir = remote_project_dir(config)
+    destination_dir = board_artifacts_dir(config)
+    route = "direct build-host -> board-host" if board_direct_copy_enabled(config) else "via client machine"
+    describe = local_log_command(
+        "Copy build artifacts",
+        f"route: {route}",
+        f"from: {remote_spec(config)}:{source_dir}",
+        f"to:   {board_host_spec(config)}:{destination_dir}",
+        "artifacts:",
+        *[f"  {spec['label']}: {spec['path']} ({spec['source']})" for spec in specs],
+    )
+    destination_script = (
+        f"mkdir -p {quote_remote_shell_path(destination_dir)} && "
+        f"cd {quote_remote_shell_path(destination_dir)} && tar -xf -"
+    )
+    resolver_script = board_artifact_resolver_script(source_dir, specs)
+    if board_direct_copy_enabled(config):
+        board_destination_command = shlex.quote(destination_script)
+        python_progress_command = board_tar_progress_command(board_host_spec(config), destination_script)
+        direct_script = (
+            resolver_script
+            + "echo 'transfer: tar stream build-host -> board-host' >&2\n"
+            + "if command -v pv >/dev/null 2>&1; then\n"
+            + f"  tar -cf - \"${{resolved_tar_args[@]}}\" | pv -n -s \"$total_bytes\" 2> >(while read -r pct; do printf 'progress: %s%%\\n' \"$pct\" >&2; done) | ssh -o StrictHostKeyChecking=accept-new {shlex.quote(board_host_spec(config))} {board_destination_command}\n"
+            + "else\n"
+            + "  echo 'progress: pv not found on build host; using python byte progress' >&2\n"
+            + f"  {python_progress_command}\n"
+            + "fi\n"
+            + "echo 'transfer: done' >&2\n"
+        )
+        return [
+            describe,
+            [
+                "ssh",
+                remote_spec(config),
+                f"bash -lc {shlex.quote(direct_script)}",
+            ],
+        ]
+    source_script = (
+        resolver_script
+        + "echo 'transfer: tar stream build-host -> client -> board-host' >&2\n"
+        + "if command -v pv >/dev/null 2>&1; then\n"
+        + "  tar -cf - \"${resolved_tar_args[@]}\" | pv -n -s \"$total_bytes\" 2> >(while read -r pct; do printf 'progress: %s%%\\n' \"$pct\" >&2; done)\n"
+        + "else\n"
+        + "  echo 'progress: pv not found on build host; streaming without byte progress' >&2\n"
+        + "  tar -cf - \"${resolved_tar_args[@]}\"\n"
+        + "fi\n"
+    )
+    remote_source_command = f"bash -lc {shlex.quote(source_script)}"
+    copy_script = (
+        "set -o pipefail; "
+        f"ssh {shlex.quote(remote_spec(config))} {shlex.quote(remote_source_command)} | "
+        f"ssh {shlex.quote(board_host_spec(config))} {shlex.quote(destination_script)}"
+    )
+    return [describe, board_prepare_work_dir_command(config), ["bash", "-lc", copy_script]]
+
+
+def board_flash_bootloaders_commands(config: dict[str, Any]) -> list[list[str]]:
+    remote_tool = board_tool_remote_path(config, FLASH_BOOTLOADERS_TOOL)
+    work_dir = board_work_dir(config)
+    artifacts_dir = board_artifacts_dir(config)
+    enter_flash_script = (
+        "set -euo pipefail\n"
+        f"cd {quote_remote_shell_path(work_dir)}\n"
+        "echo 'run: x5h_flash'\n"
+        "x5h_flash\n"
+        "echo 'done: x5h_flash'\n"
+    )
+    unpack_script = (
+        "set -euo pipefail\n"
+        f"cd {quote_remote_shell_path(work_dir)}\n"
+        f"archive=$(find {quote_remote_shell_path(artifacts_dir)} -type f \\( -name '*boot-artifacts*.tar.bz2' -o -name '*boot_artifacts*.tar.bz2' -o -name '*boot-artifacts*.tar.gz' -o -name '*boot_artifacts*.tar.gz' -o -name '*boot-artifacts*.tar' -o -name '*boot_artifacts*.tar' \\) -print -quit)\n"
+        "if [ -z \"$archive\" ]; then echo 'boot artifacts archive not found under artifacts' >&2; exit 2; fi\n"
+        "archive_dir=$(dirname \"$archive\")\n"
+        "archive_base=$(basename \"$archive\")\n"
+        "artifact_name=${archive_base%.tar.bz2}\n"
+        "artifact_name=${artifact_name%.tar.gz}\n"
+        "artifact_name=${artifact_name%.tar}\n"
+        "artifact_dir=\"$archive_dir/$artifact_name\"\n"
+        "rm -rf \"$artifact_dir\"\n"
+        "mkdir -p \"$artifact_dir\"\n"
+        "echo 'unpack boot artifacts: '\"$archive\"\n"
+        "echo 'to: '\"$artifact_dir\"\n"
+        "tar -xf \"$archive\" -C \"$artifact_dir\" --strip-components=1\n"
+        "ipls_dir=\"$artifact_dir/build-domd/ipls\"\n"
+        "if [ ! -d \"$ipls_dir\" ]; then echo 'build-domd/ipls not found in unpacked boot artifacts: '\"$artifact_dir\" >&2; exit 2; fi\n"
+        "config=\"$ipls_dir/x5h_bootloaders.yaml\"\n"
+        "if [ ! -f \"$config\" ]; then echo 'x5h_bootloaders.yaml not found in: '\"$ipls_dir\" >&2; exit 2; fi\n"
+        "echo 'ipls dir: '\"$ipls_dir\"\n"
+        "echo 'config: '\"$config\"\n"
+    )
+    install_helper_script = (
+        "set -euo pipefail\n"
+        f"archive=$(find {quote_remote_shell_path(artifacts_dir)} -type f \\( -name '*boot-artifacts*.tar.bz2' -o -name '*boot_artifacts*.tar.bz2' -o -name '*boot-artifacts*.tar.gz' -o -name '*boot_artifacts*.tar.gz' -o -name '*boot-artifacts*.tar' -o -name '*boot_artifacts*.tar' \\) -print -quit)\n"
+        "if [ -z \"$archive\" ]; then echo 'boot artifacts archive not found under artifacts' >&2; exit 2; fi\n"
+        "archive_dir=$(dirname \"$archive\")\n"
+        "archive_base=$(basename \"$archive\")\n"
+        "artifact_name=${archive_base%.tar.bz2}\n"
+        "artifact_name=${artifact_name%.tar.gz}\n"
+        "artifact_name=${artifact_name%.tar}\n"
+        "ipls_dir=\"$archive_dir/$artifact_name/build-domd/ipls\"\n"
+        "if [ ! -d \"$ipls_dir\" ]; then echo 'build-domd/ipls not found: '\"$ipls_dir\" >&2; exit 2; fi\n"
+        "echo 'install bootloader flasher to: '\"$ipls_dir/flash_bootloaders.py\"\n"
+        f"cp {quote_remote_shell_path(remote_tool)} \"$ipls_dir/flash_bootloaders.py\"\n"
+        "chmod +x \"$ipls_dir/flash_bootloaders.py\"\n"
+    )
+    run_flasher_script = (
+        "set -euo pipefail\n"
+        f"archive=$(find {quote_remote_shell_path(artifacts_dir)} -type f \\( -name '*boot-artifacts*.tar.bz2' -o -name '*boot_artifacts*.tar.bz2' -o -name '*boot-artifacts*.tar.gz' -o -name '*boot_artifacts*.tar.gz' -o -name '*boot-artifacts*.tar' -o -name '*boot_artifacts*.tar' \\) -print -quit)\n"
+        "if [ -z \"$archive\" ]; then echo 'boot artifacts archive not found under artifacts' >&2; exit 2; fi\n"
+        "archive_dir=$(dirname \"$archive\")\n"
+        "archive_base=$(basename \"$archive\")\n"
+        "artifact_name=${archive_base%.tar.bz2}\n"
+        "artifact_name=${artifact_name%.tar.gz}\n"
+        "artifact_name=${artifact_name%.tar}\n"
+        "ipls_dir=\"$archive_dir/$artifact_name/build-domd/ipls\"\n"
+        "if [ ! -d \"$ipls_dir\" ]; then echo 'build-domd/ipls not found: '\"$ipls_dir\" >&2; exit 2; fi\n"
+        "if [ ! -f \"$ipls_dir/x5h_bootloaders.yaml\" ]; then echo 'x5h_bootloaders.yaml not found in: '\"$ipls_dir\" >&2; exit 2; fi\n"
+        "if [ ! -f \"$ipls_dir/flash_bootloaders.py\" ]; then echo 'flash_bootloaders.py not installed in: '\"$ipls_dir\" >&2; exit 2; fi\n"
+        "cd \"$ipls_dir\"\n"
+        "echo 'run bootloader flasher from: '\"$PWD\"\n"
+        "PYTHONUNBUFFERED=1 python3 -u ./flash_bootloaders.py --port /dev/GEN5_CONSOLE --config x5h_bootloaders.yaml --mode all\n"
+        "echo 'bootloader flasher done'\n"
+        "echo 'run: x5h_boot'\n"
+        "x5h_boot\n"
+        "echo 'done: x5h_boot'\n"
+    )
+    return [
+        board_prepare_work_dir_command(config),
+        board_deploy_tool_log_command(config, FLASH_BOOTLOADERS_TOOL),
+        board_deploy_tool_command(config, FLASH_BOOTLOADERS_TOOL),
+        board_ssh_command(config, enter_flash_script, tty=True),
+        board_ssh_command(config, unpack_script, tty=True),
+        board_ssh_command(config, install_helper_script, tty=True),
+        board_ssh_command(config, run_flasher_script, tty=True),
+    ]
+
+
+def board_flash_ufs_commands(config: dict[str, Any]) -> list[list[str]]:
+    remote_tool = board_tool_remote_path(config, XT_IMAGER_TOOL)
+    work_dir = board_work_dir(config)
+    console = board_console_device(config)
+    loadaddr = board_ufs_loadaddr(config)
+    buffersize = board_ufs_buffersize(config)
+    extra_args = []
+    if loadaddr:
+        extra_args.extend(["--loadaddr", loadaddr])
+    if buffersize:
+        extra_args.extend(["--buffersize", buffersize])
+    extra_json = json.dumps(extra_args)
+    confirm_wrapper = r"""
+import json
+import os
+import pty
+import re
+import select
+import shlex
+import subprocess
+import sys
+
+image = os.environ["XT_FLASH_IMAGE"]
+console = os.environ["XT_FLASH_CONSOLE"]
+tool = os.environ["XT_FLASH_TOOL"]
+extra_args = json.loads(os.environ.get("XT_FLASH_EXTRA_ARGS", "[]"))
+launcher = r'''
+import importlib.util
+import os
+import sys
+import time
+
+tool = os.environ["XT_FLASH_TOOL"]
+spec = importlib.util.spec_from_file_location("xt_imager_vendor", tool)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+original_wait = module.conn_wait_for_any
+
+def drain_serial_tail(conn, duration=0.08):
+    old_timeout = conn.timeout
+    conn.timeout = 0.01
+    deadline = time.monotonic() + duration
+    try:
+        while time.monotonic() < deadline:
+            if not conn.read(4096):
+                break
+    finally:
+        conn.timeout = old_timeout
+
+def conn_wait_for_any(conn, expect):
+    result = original_wait(conn, expect)
+    if "=>" in expect:
+        drain_serial_tail(conn)
+    return result
+
+module.conn_wait_for_any = conn_wait_for_any
+sys.argv = [tool] + sys.argv[1:]
+module.main()
+'''
+launcher_args = [
+    "python3",
+    "-c",
+    launcher,
+    "--target",
+    "ufs",
+    "-s",
+    console,
+    "-b",
+    "1843200",
+    *[str(arg) for arg in extra_args],
+]
+command = "zcat " + shlex.quote(image) + " | " + shlex.join(launcher_args)
+master, slave = pty.openpty()
+process = subprocess.Popen(
+    ["bash", "-lc", command],
+    stdin=slave,
+    stdout=slave,
+    stderr=slave,
+    close_fds=True,
+    start_new_session=True,
+)
+os.close(slave)
+buffer = ""
+confirmed = False
+try:
+    while True:
+        ready, _, _ = select.select([master], [], [], 0.2)
+        if ready:
+            try:
+                data = os.read(master, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            text = data.decode(errors="replace")
+            sys.stdout.write(text)
+            sys.stdout.flush()
+            buffer = (buffer + text)[-4096:]
+            if (
+                not confirmed
+                and "To continue, type exactly: FLASH UFS 1" in buffer
+                and re.search(r">\s*$", buffer)
+            ):
+                os.write(master, b"FLASH UFS 1\r")
+                confirmed = True
+        if process.poll() is not None and not ready:
+            break
+finally:
+    try:
+        os.close(master)
+    except OSError:
+        pass
+sys.exit(process.wait())
+"""
+    script = (
+        "set -euo pipefail\n"
+        f"cd {quote_remote_shell_path(work_dir)}\n"
+        f"image=$(find {quote_remote_shell_path(board_artifacts_dir(config))} -name full_ufs.img.gz -print -quit)\n"
+        "if [ -z \"$image\" ]; then echo 'full_ufs.img.gz not found under artifacts' >&2; exit 2; fi\n"
+        f"console={shlex.quote(console)}\n"
+        "if [ -z \"$console\" ]; then console=$(ls -1 /dev/GEN5_CONSOLE* 2>/dev/null | head -n 1 || true); fi\n"
+        "if [ -z \"$console\" ]; then echo 'GEN5 console device not found under /dev/GEN5_CONSOLE*' >&2; exit 2; fi\n"
+        f"echo 'flash UFS image: '\"$image\"\n"
+        "echo 'GEN5 console: '\"$console\"\n"
+        "echo 'board power: x5h_off'\n"
+        "x5h_off\n"
+        "sleep 1\n"
+        "echo 'board power: x5h_on'\n"
+        "x5h_on\n"
+        "sleep 1\n"
+        "echo 'board boot mode: x5h_boot'\n"
+        "x5h_boot\n"
+        "echo 'board power after boot mode: x5h_off'\n"
+        "x5h_off\n"
+        "sleep 1\n"
+        "echo 'board power after boot mode: x5h_on'\n"
+        "x5h_on\n"
+        "sleep 1\n"
+        "echo 'board console: drain stale output before xt-imager'\n"
+        "python3 - \"$console\" <<'PY'\n"
+        "import serial\n"
+        "import sys\n"
+        "import time\n"
+        "\n"
+        "deadline = time.monotonic() + 1.0\n"
+        "conn = serial.Serial(port=sys.argv[1], baudrate=1843200, timeout=0.05)\n"
+        "try:\n"
+        "    while time.monotonic() < deadline:\n"
+        "        conn.read(4096)\n"
+        "finally:\n"
+        "    conn.close()\n"
+        "PY\n"
+        "echo 'board console: start xt-imager'\n"
+        f"export XT_FLASH_TOOL={shlex.quote(remote_shell_path(str(remote_tool)))}\n"
+        "export XT_FLASH_IMAGE=\"$image\"\n"
+        "export XT_FLASH_CONSOLE=\"$console\"\n"
+        f"export XT_FLASH_EXTRA_ARGS={shlex.quote(extra_json)}\n"
+        f"python3 -c {shlex.quote(confirm_wrapper)}\n"
+    )
+    return [
+        board_prepare_work_dir_command(config),
+        board_deploy_tool_log_command(config, XT_IMAGER_TOOL),
+        board_deploy_tool_command(config, XT_IMAGER_TOOL),
+        board_ssh_command(config, script, tty=True),
+    ]
+
+
 def selected_mapping_commands(
     config: dict[str, Any],
     *,
@@ -1363,6 +2055,7 @@ class ClientApp:
         self.docker_image = ""
         self.build_params: dict[str, str] = {}
         self.build_targets = ""
+        self.board_artifacts = ""
         self.load_active_project_runtime()
         self.connection_state = "disconnected"
         self.board_connection_state = "disconnected"
@@ -1371,6 +2064,8 @@ class ClientApp:
         self.action_running = False
         self.active_job: dict[str, Any] | None = None
         self.last_job: dict[str, Any] | None = None
+        self.board_job: dict[str, Any] | None = None
+        self.last_board_job: dict[str, Any] | None = None
         self.preflight_values: dict[str, str] = {}
         self.status = "Disconnected"
         self.reset_preflight()
@@ -1380,6 +2075,7 @@ class ClientApp:
         self.log_scroll = 0
         self.log_follow = True
         self.logs_expanded = False
+        self.focus_before_logs_expanded = "actions"
         self.last_exit: int | None = None
         self.done = False
         self.items = self.build_items()
@@ -1407,6 +2103,7 @@ class ClientApp:
         self.build_targets = str(settings.get("targets", build_targets()))
         if os.environ.get("MOULIN_REMOTE_BUILD_TARGETS"):
             self.build_targets = build_targets()
+        self.board_artifacts = str(active_project(self.config).get("board_artifacts", "")) or self.build_targets
 
     def refresh_mapping_selection_cache(self) -> None:
         self.mapping_selection_cache = read_mapping_selection_if_exists(self.config)
@@ -1490,6 +2187,74 @@ class ClientApp:
                 requires_project=True,
                 allow_during_job=True,
             ),
+        ]
+        if self.prepare_remote_project_needed():
+            items.append(
+                MenuItem(
+                    "Prepare remote project",
+                    "build commands",
+                    "Create or repair the configured target checkout when preflight detects a missing project, non-git directory, or Git origin mismatch.",
+                    lambda app: shlex.join(remote_prepare_project_command(app.config)),
+                    lambda app: app.run_command("Prepare remote project", remote_prepare_project_command(app.config)),
+                    confirm=True,
+                    requires_ssh=True,
+                    requires_project=True,
+                )
+            )
+        if self.checkout_git_ref_needed():
+            items.append(
+                MenuItem(
+                    "Checkout project Git ref",
+                    "build commands",
+                    "Switch the existing remote checkout to the configured project Git branch/ref when the working tree has no tracked local changes.",
+                    lambda app: shlex.join(remote_checkout_git_ref_command(app.config)),
+                    lambda app: app.run_command("Checkout project Git ref", remote_checkout_git_ref_command(app.config)),
+                    confirm=True,
+                    requires_remote=True,
+                    requires_project=True,
+                )
+            )
+        items.extend(
+            [
+            MenuItem(
+                "Build Docker image",
+                "build commands",
+                "Rebuild the configured Docker image on the remote target.",
+                lambda app: shlex.join(remote_docker_command(app.config, app)),
+                lambda app: app.run_build_command("Build Docker image", remote_docker_command(app.config, app)),
+                confirm=True,
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Regenerate Moulin/Ninja",
+                "build commands",
+                "Run Moulin on the remote target and refresh Ninja files.",
+                lambda app: shlex.join(remote_moulin_command(app.config, app)),
+                lambda app: app.run_build_command("Regenerate Moulin/Ninja", remote_moulin_command(app.config, app)),
+                confirm=True,
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Run product build",
+                "build commands",
+                "Run configured Ninja targets on the remote target.",
+                lambda app: shlex.join(remote_build_command(app.config, app)),
+                lambda app: app.run_build_command("Run product build", remote_build_command(app.config, app)),
+                confirm=True,
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Stop running command",
+                "build commands",
+                "Gracefully stop the currently running build or sync command, then force-kill it if it does not exit.",
+                lambda app: app.stop_running_preview("build"),
+                lambda app: app.stop_running_command("build"),
+                confirm=True,
+                allow_during_job=True,
+            ),
             MenuItem(
                 "Connect board host",
                 "board host session",
@@ -1506,71 +2271,41 @@ class ClientApp:
                 lambda app: app.open_board_shell(),
                 allow_during_job=True,
             ),
-        ]
-        if self.prepare_remote_project_needed():
-            items.append(
-                MenuItem(
-                    "Prepare remote project",
-                    "commands",
-                    "Create or repair the configured target checkout when preflight detects a missing project, non-git directory, or Git origin mismatch.",
-                    lambda app: shlex.join(remote_prepare_project_command(app.config)),
-                    lambda app: app.run_command("Prepare remote project", remote_prepare_project_command(app.config)),
-                    confirm=True,
-                    requires_ssh=True,
-                    requires_project=True,
-                )
-            )
-        if self.checkout_git_ref_needed():
-            items.append(
-                MenuItem(
-                    "Checkout project Git ref",
-                    "commands",
-                    "Switch the existing remote checkout to the configured project Git branch/ref when the working tree has no tracked local changes.",
-                    lambda app: shlex.join(remote_checkout_git_ref_command(app.config)),
-                    lambda app: app.run_command("Checkout project Git ref", remote_checkout_git_ref_command(app.config)),
-                    confirm=True,
-                    requires_remote=True,
-                    requires_project=True,
-                )
-            )
-        items.extend(
-            [
             MenuItem(
-                "Build Docker image",
-                "commands",
-                "Rebuild the configured Docker image on the remote target.",
-                lambda app: shlex.join(remote_docker_command(app.config, app)),
-                lambda app: app.run_build_command("Build Docker image", remote_docker_command(app.config, app)),
+                "Copy build artifacts",
+                "board commands",
+                "Copy configured build target artifacts from the build host project checkout to the board host artifacts directory.",
+                lambda app: app.preview_commands(board_copy_build_artifacts_commands(app.config, app)),
+                lambda app: app.run_commands("Copy build artifacts", board_copy_build_artifacts_commands(app.config, app)),
                 confirm=True,
                 requires_remote=True,
                 requires_project=True,
             ),
             MenuItem(
-                "Regenerate Moulin/Ninja",
-                "commands",
-                "Run Moulin on the remote target and refresh Ninja files.",
-                lambda app: shlex.join(remote_moulin_command(app.config, app)),
-                lambda app: app.run_build_command("Regenerate Moulin/Ninja", remote_moulin_command(app.config, app)),
+                "Flash bootloaders",
+                "board commands",
+                "Deploy the bootloader flashing helper to the board host, enter flash mode, flash x5h_bootloaders.yaml, then switch the board to boot mode.",
+                lambda app: app.preview_commands(board_flash_bootloaders_commands(app.config)),
+                lambda app: app.run_commands("Flash bootloaders", board_flash_bootloaders_commands(app.config)),
                 confirm=True,
-                requires_remote=True,
-                requires_project=True,
+                allow_during_job=False,
             ),
             MenuItem(
-                "Run product build",
-                "commands",
-                "Run configured Ninja targets on the remote target.",
-                lambda app: shlex.join(remote_build_command(app.config, app)),
-                lambda app: app.run_build_command("Run product build", remote_build_command(app.config, app)),
+                "Flash UFS image",
+                "board commands",
+                "Deploy the UFS imager to the board host and flash artifacts/full_ufs.img.gz to UFS over /dev/GEN5_CONSOLE.",
+                lambda app: app.preview_commands(board_flash_ufs_commands(app.config)),
+                lambda app: app.run_commands("Flash UFS image", board_flash_ufs_commands(app.config)),
                 confirm=True,
-                requires_remote=True,
-                requires_project=True,
+                allow_during_job=False,
             ),
             MenuItem(
-                "Stop running command",
-                "commands",
-                "Gracefully stop the currently running command, then force-kill it if it does not exit.",
-                lambda app: app.stop_running_preview(),
-                lambda app: app.stop_running_command(),
+                "Stop board command",
+                "board commands",
+                "Gracefully stop the currently running board command, then force-kill it if it does not exit.",
+                lambda app: app.stop_running_preview("board"),
+                lambda app: app.stop_running_command("board"),
+                confirm=True,
                 allow_during_job=True,
             ),
             MenuItem(
@@ -1634,14 +2369,14 @@ class ClientApp:
         try:
             while not self.done:
                 started = time.monotonic()
-                self.poll_active_job()
+                self.poll_active_jobs()
                 self.ui_profile_slow("poll-slow", started)
-                input_timeout = 0.05 if self.active_job is not None else 0.25
+                input_timeout = 0.05 if self.any_active_job() else 0.25
                 self.screen.timeout(max(0, int(input_timeout * 1000)))
                 wait_started = time.monotonic()
                 ch = self.read_key()
                 if ch == -1:
-                    self.ui_profile_slow("input-wait-timeout", wait_started, threshold_ms=300.0, active=bool(self.active_job))
+                    self.ui_profile_slow("input-wait-timeout", wait_started, threshold_ms=300.0, active=self.any_active_job())
                     started = time.monotonic()
                     self.draw()
                     self.ui_profile_slow("draw-idle-slow", started)
@@ -1651,8 +2386,8 @@ class ClientApp:
                 key_count = 1
                 key_started = time.monotonic()
                 self.handle_main_key(ch)
-                self.ui_profile_slow("key-handler-slow", key_started, threshold_ms=5.0, key=ch, selected=self.selected, active=bool(self.active_job))
-                self.ui_profile_slow("input-batch-slow", batch_started, threshold_ms=10.0, keys=key_count, selected=self.selected, active=bool(self.active_job))
+                self.ui_profile_slow("key-handler-slow", key_started, threshold_ms=5.0, key=ch, selected=self.selected, active=self.any_active_job())
+                self.ui_profile_slow("input-batch-slow", batch_started, threshold_ms=10.0, keys=key_count, selected=self.selected, active=self.any_active_job())
                 started = time.monotonic()
                 self.draw()
                 self.ui_profile_slow("draw-after-input-slow", started)
@@ -1664,6 +2399,7 @@ class ClientApp:
         if self.logs_expanded:
             if (self.key_matches(ch, "f") or ch == 27):
                 self.logs_expanded = False
+                self.focus_panel = self.focus_before_logs_expanded
                 self.main_full_redraw = True
                 self.render_cache.clear()
             elif ch == curses.KEY_UP or self.key_matches(ch, "k"):
@@ -1696,7 +2432,7 @@ class ClientApp:
         elif ch in (curses.KEY_ENTER, 10, 13) or self.key_matches(ch, "r"):
             self.run_selected()
         elif self.key_matches(ch, "f"):
-            self.focus_panel = "logs"
+            self.focus_before_logs_expanded = self.focus_panel
             self.logs_expanded = True
             self.main_full_redraw = True
             self.render_cache.clear()
@@ -1707,7 +2443,7 @@ class ClientApp:
         elif self.key_matches(ch, "q"):
             self.quit()
         elif ch == 27:
-            if self.active_job is not None:
+            if self.any_active_job():
                 self.status = "Command is running; use q after it finishes or open the command screen to stop it"
             else:
                 if self.confirm_exit():
@@ -1719,39 +2455,36 @@ class ClientApp:
         if not self.items:
             self.selected = 0
             return
-        if self.active_job is None:
-            self.selected = (self.selected + delta) % len(self.items)
-            return
-        indices = self.active_job_menu_indices()
-        if not indices:
-            return
-        if self.selected not in indices:
-            self.selected = indices[0]
-            return
-        current = indices.index(self.selected)
-        self.selected = indices[(current + delta) % len(indices)]
+        start = self.selected
+        for step in range(1, len(self.items) + 1):
+            candidate = (start + delta * step) % len(self.items)
+            if self.item_enabled(self.items[candidate]):
+                self.selected = candidate
+                return
+        self.selected = (self.selected + delta) % len(self.items)
 
     def active_job_menu_indices(self) -> list[int]:
-        if self.active_job is None:
-            return list(range(len(self.items)))
-        active_label = str(self.active_job.get("item_label", ""))
-        result: list[int] = []
-        for index, item in enumerate(self.items):
-            if item.label == active_label or item.allow_during_job:
-                result.append(index)
-        return result
+        return list(range(len(self.items)))
 
     def normalize_active_job_selection(self) -> None:
-        if self.active_job is None or not self.items:
+        if self.items:
+            self.selected = min(max(0, self.selected), len(self.items) - 1)
+            if not self.item_enabled(self.items[self.selected]):
+                self.select_nearest_enabled_item()
+
+    def select_nearest_enabled_item(self) -> None:
+        if not self.items:
+            self.selected = 0
             return
-        indices = self.active_job_menu_indices()
-        if self.selected in indices:
-            return
-        active_label = str(self.active_job.get("item_label", ""))
-        self.selected = next(
-            (index for index in indices if self.items[index].label == active_label),
-            indices[0] if indices else min(self.selected, len(self.items) - 1),
-        )
+        for offset in range(len(self.items)):
+            down = (self.selected + offset) % len(self.items)
+            if self.item_enabled(self.items[down]):
+                self.selected = down
+                return
+            up = (self.selected - offset) % len(self.items)
+            if self.item_enabled(self.items[up]):
+                self.selected = up
+                return
 
     def setup_colors(self) -> None:
         if not curses.has_colors():
@@ -1900,17 +2633,56 @@ class ClientApp:
             return curses.color_pair(5) | curses.A_BOLD
         return curses.A_BOLD
 
+    def any_active_job(self) -> bool:
+        return self.active_job is not None or self.board_job is not None
+
+    def running_jobs(self) -> list[dict[str, Any]]:
+        return [job for job in (self.active_job, self.board_job) if job is not None]
+
+    def job_for_item(self, item: MenuItem) -> dict[str, Any] | None:
+        for job in self.running_jobs():
+            if item.label == job.get("item_label"):
+                return job
+        return None
+
+    def item_job_slot(self, item: MenuItem) -> str | None:
+        if item.group == "board commands" or item.label == "Connect board host":
+            return "board"
+        if item.group in {"build commands", "sync"} or item.label == "Connect build host":
+            return "build"
+        return None
+
+    def active_job_for_slot(self, slot: str | None) -> dict[str, Any] | None:
+        if slot == "board":
+            return self.board_job
+        if slot == "build":
+            return self.active_job
+        return None
+
     def item_enabled(self, item: MenuItem) -> bool:
         if item.label == "Stop running command" and self.active_job is None:
+            return False
+        if item.label == "Stop running command":
+            return True
+        if item.label == "Stop board command" and self.board_job is None:
+            return False
+        if item.label == "Stop board command":
+            return True
+        running_for_item = self.job_for_item(item)
+        if running_for_item is not None:
+            return True
+        slot = self.item_job_slot(item)
+        if slot is not None and self.active_job_for_slot(slot) is not None:
             return False
         if item.label in {"Connect board host", "Open board host shell"} and not board_host_has_ssh(self.config):
             return False
         if item.label == "Open board host shell" and not self.board_connected:
             return False
-        if self.active_job is not None:
-            if item.label == self.active_job.get("item_label"):
-                return True
-            return item.allow_during_job and (self.connected or not item.requires_remote)
+        if item.label in BOARD_COMMAND_LABELS:
+            if not board_host_has_ssh(self.config) or not self.board_connected:
+                return False
+            if item.label == "Copy build artifacts" and (not self.connected or not remote_has_project_dir(self.config)):
+                return False
         if item.requires_ssh and not remote_has_ssh(self.config):
             return False
         if item.requires_remote and not self.connected:
@@ -1925,11 +2697,26 @@ class ClientApp:
 
     def disabled_reason(self, item: MenuItem) -> str:
         if item.label == "Stop running command" and self.active_job is None:
-            return "no command is running"
-        if item.label in {"Connect board host", "Open board host shell"} and not board_host_user(self.config):
+            return "no build or sync command is running"
+        if item.label == "Stop running command":
+            return ""
+        if item.label == "Stop board command" and self.board_job is None:
+            return "no board command is running"
+        if item.label == "Stop board command":
+            return ""
+        slot = self.item_job_slot(item)
+        if slot is not None and self.active_job_for_slot(slot) is not None and self.job_for_item(item) is None:
+            return f"{slot} command is already running"
+        if item.label in {"Connect board host", "Open board host shell"} | BOARD_COMMAND_LABELS and not board_host_user(self.config):
             return "set board SSH user first"
-        if item.label in {"Connect board host", "Open board host shell"} and not board_host_host(self.config):
+        if item.label in {"Connect board host", "Open board host shell"} | BOARD_COMMAND_LABELS and not board_host_host(self.config):
             return "set board SSH host first"
+        if item.label in BOARD_COMMAND_LABELS and not self.board_connected:
+            return "connect to the board host first"
+        if item.label == "Copy build artifacts" and not self.connected:
+            return "connect to the build host first"
+        if item.label == "Copy build artifacts" and not remote_has_project_dir(self.config):
+            return "select remote project directory first"
         if item.label == "Open board host shell" and not self.board_connected:
             return "connect to the board host first"
         if item.requires_ssh and not remote_has_user(self.config):
@@ -1944,8 +2731,6 @@ class ClientApp:
             return "remote project needs preparation"
         if item.label != "Checkout project Git ref" and item.requires_project and self.checkout_git_ref_needed():
             return "remote project Git ref mismatch"
-        if self.active_job is not None:
-            return "blocked by active command"
         return "disabled"
 
     @property
@@ -2190,7 +2975,7 @@ class ClientApp:
         return self.draw_wrapped(row, value_x, value_width, value or "<not set>", max_lines=max_lines)
 
     def active_job_running(self) -> bool:
-        return self.job_running(self.active_job)
+        return any(self.job_running(job) for job in self.running_jobs())
 
     def job_running(self, job: dict[str, Any] | None) -> bool:
         if job is None:
@@ -2221,8 +3006,11 @@ class ClientApp:
         return list(job.get("output", []))
 
     def display_job_for_item(self, item: MenuItem) -> dict[str, Any] | None:
-        if self.active_job is not None and item.label == self.active_job.get("item_label"):
-            return self.active_job
+        job = self.job_for_item(item)
+        if job is not None:
+            return job
+        if self.last_board_job is not None and item.label == self.last_board_job.get("item_label"):
+            return self.last_board_job
         if self.last_job is not None and item.label == self.last_job.get("item_label"):
             return self.last_job
         return None
@@ -2264,8 +3052,9 @@ class ClientApp:
         row = self.draw_wrapped(row, x, inner, item.description, max_lines=3)
         row += 1
 
-        if self.active_job is not None and item.label == self.active_job.get("item_label"):
-            state = "RUNNING" if self.active_job_running() else "DONE"
+        job = self.display_job_for_item(item)
+        if job is not None and self.job_running(job):
+            state = "RUNNING"
             self.add(row, x, f"Status: {state}", self.running_attr() if state == "RUNNING" else self.group_attr())
             row += 1
         elif not self.item_enabled(item):
@@ -2375,7 +3164,7 @@ class ClientApp:
             self.menu_scroll = selected_row - menu_visible_rows + 1
 
         item = self.items[self.selected] if self.items else MenuItem("", "", "", lambda app: "", lambda app: None)
-        active_label = str(self.active_job.get("item_label", "")) if self.active_job is not None else ""
+        active_labels = tuple(str(job.get("item_label", "")) for job in self.running_jobs())
         item_labels = tuple(item.label for item in self.items)
         item_enabled = tuple(self.item_enabled(item) for item in self.items)
         selection = tuple(self.mapping_selection_cache)
@@ -2409,7 +3198,7 @@ class ClientApp:
             refresh_started = time.monotonic()
             self.screen.refresh()
             self.ui_profile_slow("refresh-slow", refresh_started, threshold_ms=5.0)
-            self.ui_profile_slow("draw-slow", draw_started, rendered="expanded-logs", active=bool(self.active_job), selected=self.selected)
+            self.ui_profile_slow("draw-slow", draw_started, rendered="expanded-logs", active=self.any_active_job(), selected=self.selected)
             return
 
         header_sig = (
@@ -2442,7 +3231,7 @@ class ClientApp:
             self.selected,
             self.menu_scroll,
             self.focus_panel,
-            active_label,
+            active_labels,
             item_labels,
             item_enabled,
         )
@@ -2456,7 +3245,7 @@ class ClientApp:
                     attr = self.group_attr() if label else 0
                 else:
                     menu_item = self.items[item_index]
-                    if self.active_job is not None and menu_item.label == self.active_job.get("item_label"):
+                    if self.job_for_item(menu_item) is not None:
                         attr = self.running_attr()
                         if item_index == self.selected:
                             attr |= curses.A_REVERSE
@@ -2478,7 +3267,7 @@ class ClientApp:
             self.selected,
             item.label,
             item.description,
-            active_label,
+            active_labels,
             self.active_job_running(),
             self.last_exit,
             selection,
@@ -2501,7 +3290,7 @@ class ClientApp:
             logs_height,
             self.focus_panel,
             item.label,
-            active_label,
+            active_labels,
             job.get("title", "") if job is not None else "",
             self.job_running(job),
             len(self.job_output_lines(job)) if job is not None else 0,
@@ -2510,7 +3299,7 @@ class ClientApp:
             self.log_follow,
         )
         should_draw_logs = self.main_full_redraw or self.render_cache.get("logs") != logs_sig
-        if self.active_job is not None and self.logs_dirty and now - self.last_log_render_at < 0.15 and self.render_cache.get("logs") is not None:
+        if self.any_active_job() and self.logs_dirty and now - self.last_log_render_at < 0.15 and self.render_cache.get("logs") is not None:
             should_draw_logs = False
         if should_draw_logs:
             started = time.monotonic()
@@ -2521,9 +3310,9 @@ class ClientApp:
             self.ui_profile_slow("panel-logs-slow", started, threshold_ms=5.0, item=item.label, lines=len(self.job_output_lines(job)) if job is not None else 0)
             rendered.append("logs")
 
-        if self.active_job is not None and self.focus_panel == "logs":
+        if self.any_active_job() and self.focus_panel == "logs":
             footer = "Running | Left actions | Up/Down logs | f full | s settings | q quit"
-        elif self.active_job is not None:
+        elif self.any_active_job():
             footer = "Running | Right logs | f full | Up/Down actions | s settings | q quit"
         else:
             footer = "Left/Right panel | Up/Down select/scroll | f full logs | Enter/r run | s settings | q quit | Esc exit"
@@ -2539,22 +3328,16 @@ class ClientApp:
         refresh_started = time.monotonic()
         self.screen.refresh()
         self.ui_profile_slow("refresh-slow", refresh_started, threshold_ms=5.0)
-        self.ui_profile_slow("draw-slow", draw_started, rendered=",".join(rendered) or "none", active=bool(self.active_job), selected=self.selected)
+        self.ui_profile_slow("draw-slow", draw_started, rendered=",".join(rendered) or "none", active=self.any_active_job(), selected=self.selected)
 
     def run_selected(self) -> None:
         item = self.items[self.selected]
         if self.action_running:
             self.status = "Another action is already running"
             return
-        if self.active_job is not None:
-            if item.label == self.active_job.get("item_label"):
-                self.status = "Command is already running; live log is shown in Logs"
-                return
-            elif item.allow_during_job and self.item_enabled(item):
-                pass
-            else:
-                self.status = "Another command is already running"
-                return
+        if self.job_for_item(item) is not None:
+            self.status = "Command is already running; live log is shown in Logs"
+            return
         if not self.item_enabled(item):
             self.status = self.disabled_reason(item)
             return
@@ -2615,8 +3398,8 @@ class ClientApp:
         if self.action_running:
             self.status = "Another action is already running"
             return
-        if self.active_job is not None and not self.board_connected:
-            self.status = "Another command is already running"
+        if self.board_job is not None and not self.board_connected:
+            self.status = "Another board command is already running"
             return
         if not board_host_user(self.config):
             self.status = "set board SSH user first"
@@ -2658,7 +3441,7 @@ class ClientApp:
         if not self.pending_auto_board_connect:
             return False
         self.pending_auto_board_connect = False
-        if self.action_running or self.active_job is not None:
+        if self.action_running or self.board_job is not None:
             return False
         if not board_host_has_ssh(self.config) or self.board_connected:
             return False
@@ -2695,14 +3478,14 @@ class ClientApp:
         self.logs_dirty = True
 
     def start_board_connect_job(self) -> None:
-        if self.action_running or self.active_job is not None:
-            self.status = "Another action is already running"
+        if self.action_running or self.board_job is not None:
+            self.status = "Another board action is already running"
             return
         item = next((menu_item for menu_item in self.items if menu_item.label == "Connect board host"), self.items[0])
         self.board_connection_state = "connecting"
         self.status = "Connecting board host..."
         command = board_host_connect_command(self.config)
-        self.active_job = {
+        self.board_job = {
             "kind": "board-connect",
             "title": "Connect to board host",
             "item_label": item.label,
@@ -2716,7 +3499,7 @@ class ClientApp:
             "started_at": time.monotonic(),
             "timeout": 10.0,
         }
-        self.start_next_active_job_command()
+        self.start_next_active_job_command(self.board_job)
         self.focus_panel = "actions"
         self.menu_dirty = True
         self.main_full_redraw = True
@@ -2770,20 +3553,28 @@ class ClientApp:
 
     def confirm_action(self, item: MenuItem) -> bool:
         self.screen.timeout(-1)
+        if item.label in {"Stop running command", "Stop board command"}:
+            warning = "Stop the active command?"
+            details = "SIGTERM is sent first; if the process does not exit, SIGKILL is sent after a short timeout."
+            footer = "Enter/y: stop | n/q/Esc: cancel"
+        else:
+            warning = "This action can change local or remote build state."
+            details = item.description
+            footer = "Enter/y: run | n/q/Esc: cancel"
         self.draw_confirm(
             "Confirm",
-            "This action can change local or remote build state.",
+            warning,
             item.label,
-            item.description,
-            "Enter/y: run | n/q/Esc: cancel",
+            details,
+            footer,
         )
         while True:
             ch = self.read_key()
             if (self.key_matches(ch, "y") or ch in (10, 13)):
-                self.screen.timeout(250)
+                self.close_confirm()
                 return True
             if (self.key_matches(ch, "n", "q") or ch in (27, 3)):
-                self.screen.timeout(250)
+                self.close_confirm()
                 return False
 
     def confirm_exit(self) -> bool:
@@ -2798,10 +3589,10 @@ class ClientApp:
         while True:
             ch = self.read_key()
             if (self.key_matches(ch, "y") or ch in (10, 13)):
-                self.screen.timeout(250)
+                self.close_confirm()
                 return True
             if (self.key_matches(ch, "n", "q") or ch in (27, 3)):
-                self.screen.timeout(250)
+                self.close_confirm()
                 return False
 
     def confirm_disconnect(self, title: str = "Disconnect", label: str | None = None, spec: str | None = None) -> bool:
@@ -2816,11 +3607,18 @@ class ClientApp:
         while True:
             ch = self.read_key()
             if (self.key_matches(ch, "y") or ch in (10, 13)):
-                self.screen.timeout(250)
+                self.close_confirm()
                 return True
             if (self.key_matches(ch, "n", "q") or ch in (27, 3)):
-                self.screen.timeout(250)
+                self.close_confirm()
                 return False
+
+    def close_confirm(self) -> None:
+        self.screen.timeout(250)
+        self.main_full_redraw = True
+        self.menu_dirty = True
+        self.logs_dirty = True
+        self.render_cache.clear()
 
     def draw_confirm(
         self,
@@ -2921,13 +3719,18 @@ class ClientApp:
         )
 
     def run_commands(self, title: str, commands: list[list[str]]) -> int:
-        if self.action_running or self.active_job is not None:
+        item = self.items[self.selected]
+        slot = self.item_job_slot(item)
+        if self.action_running:
             self.status = "Another action is already running"
             return 1
-        item = self.items[self.selected]
-        self.active_job = {
+        if self.active_job_for_slot(slot) is not None:
+            self.status = f"Another {slot or 'command'} action is already running"
+            return 1
+        job = {
             "title": title,
             "item_label": item.label,
+            "slot": slot or "build",
             "commands": commands,
             "index": 0,
             "output": deque(maxlen=1000),
@@ -2936,7 +3739,11 @@ class ClientApp:
             "current_command": "",
             "rc": None,
         }
-        self.start_next_active_job_command()
+        if slot == "board":
+            self.board_job = job
+        else:
+            self.active_job = job
+        self.start_next_active_job_command(job)
         self.status = f"Running: {title}"
         self.focus_panel = "actions"
         self.menu_dirty = True
@@ -2944,16 +3751,29 @@ class ClientApp:
         self.logs_dirty = True
         return 0
 
-    def stop_running_preview(self) -> str:
-        if self.active_job is None:
+    def stop_running_preview(self, slot: str | None = None) -> str:
+        job = self.selected_or_first_running_job(slot)
+        if job is None:
+            if slot == "board":
+                return "No board command is running."
+            if slot == "build":
+                return "No build or sync command is running."
             return "No command is running."
-        title = str(self.active_job.get("title", "Command"))
+        title = str(job.get("title", "Command"))
         return f"Stop active command: {title}"
 
-    def stop_running_command(self) -> None:
-        job = self.active_job
+    def stop_running_command(self, slot: str | None = None) -> None:
+        job = self.selected_or_first_running_job(slot)
+        self.stop_job(job, slot)
+
+    def stop_job(self, job: dict[str, Any] | None, slot: str | None = None) -> None:
         if job is None:
-            self.status = "No command is running"
+            if slot == "board":
+                self.status = "No board command is running"
+            elif slot == "build":
+                self.status = "No build or sync command is running"
+            else:
+                self.status = "No command is running"
             return
         if job.get("stopping"):
             self.status = "Command stop is already requested"
@@ -2971,18 +3791,38 @@ class ClientApp:
         job["rc"] = 130
         self.last_exit = 130
         self.status = f"{job.get('title', 'Command')}: stopped"
-        self.finish_active_job()
+        self.finish_active_job(job)
 
-    def finish_active_job(self) -> None:
-        if self.active_job is not None:
+    def selected_or_first_running_job(self, slot: str | None = None) -> dict[str, Any] | None:
+        if slot in {"build", "board"}:
+            return self.active_job_for_slot(slot)
+        if self.items:
+            selected = self.items[self.selected]
+            job = self.job_for_item(selected)
+            if job is not None:
+                return job
+        jobs = self.running_jobs()
+        return jobs[0] if jobs else None
+
+    def finish_active_job(self, job: dict[str, Any] | None = None) -> None:
+        if job is None:
+            job = self.active_job
+        if job is self.board_job:
+            self.last_board_job = self.board_job
+            self.board_job = None
+            self.menu_dirty = True
+            self.main_full_redraw = True
+            self.logs_dirty = True
+        elif job is self.active_job:
             self.last_job = self.active_job
             self.active_job = None
             self.menu_dirty = True
             self.main_full_redraw = True
             self.logs_dirty = True
 
-    def start_next_active_job_command(self) -> None:
-        job = self.active_job
+    def start_next_active_job_command(self, job: dict[str, Any] | None = None) -> None:
+        if job is None:
+            job = self.active_job
         if job is None:
             return
         commands = job["commands"]
@@ -2994,19 +3834,19 @@ class ClientApp:
             if job.get("title") == "Prepare remote project" and rc == 0:
                 self.reset_preflight()
                 self.status = "Prepare remote project: done; reconnect to refresh preflight"
-            self.finish_active_job()
+            self.finish_active_job(job)
             return
         command = commands[index]
-        job["current_command"] = shlex.join(command)
+        job["current_command"] = display_command(command)
         self.append_job_output(job, f"Starting step {index + 1}/{len(commands)}...")
+        for line in display_command_lines(command):
+            self.append_job_output(job, line)
         self.logs_dirty = True
         process = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
             start_new_session=True,
         )
         job["process"] = process
@@ -3015,40 +3855,97 @@ class ClientApp:
         reader.start()
 
     def append_job_output(self, job: dict[str, Any], line: str) -> None:
+        lines = [sanitize_log_line(part) for part in re.split(r"\r\n|\n|\r", line)]
         lock = job.get("output_lock")
         if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
             with lock:
                 output = job.setdefault("output", deque(maxlen=1000))
-                output.append(line)
+                for clean_line in lines:
+                    self.append_log_line_locked(job, output, clean_line)
                 if not isinstance(output, deque) and len(output) > 1000:
                     del output[: len(output) - 1000]
         else:
             output = job.setdefault("output", deque(maxlen=1000))
-            output.append(line)
+            for clean_line in lines:
+                self.append_log_line_locked(job, output, clean_line)
             if not isinstance(output, deque) and len(output) > 1000:
                 del output[: len(output) - 1000]
         self.logs_dirty = True
 
-    def read_process_output(self, process: subprocess.Popen[str], job: dict[str, Any]) -> None:
+    def append_log_line_locked(self, job: dict[str, Any], output: Any, line: str) -> bool:
+        if line == "" and job.get("last_log_line_blank"):
+            return False
+        output.append(line)
+        job["last_log_line_blank"] = line == ""
+        return True
+
+    def append_job_output_stream(self, job: dict[str, Any], text: str) -> None:
+        lock = job.get("output_lock")
+        if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
+            with lock:
+                self._append_job_output_stream_locked(job, text)
+        else:
+            self._append_job_output_stream_locked(job, text)
+        self.logs_dirty = True
+
+    def _append_job_output_stream_locked(self, job: dict[str, Any], text: str) -> None:
+        output = job.setdefault("output", deque(maxlen=1000))
+        partial = str(job.get("partial_output", ""))
+        live = bool(job.get("partial_live", False))
+
+        def set_live(value: str) -> None:
+            nonlocal live
+            if live and output:
+                output[-1] = value
+                job["last_log_line_blank"] = value == ""
+            else:
+                live = self.append_log_line_locked(job, output, value)
+
+        for char in text:
+            if char in "\r\n":
+                if partial:
+                    set_live(sanitize_log_line(partial))
+                    partial = ""
+                live = False
+                continue
+            partial += char
+            if len(partial) >= 120 or live:
+                set_live(sanitize_log_line(partial))
+        if partial:
+            set_live(sanitize_log_line(partial))
+        job["partial_output"] = partial
+        job["partial_live"] = live
+        if not isinstance(output, deque) and len(output) > 1000:
+            del output[: len(output) - 1000]
+
+    def read_process_output(self, process: subprocess.Popen[bytes], job: dict[str, Any]) -> None:
         stdout = process.stdout
         if stdout is None:
             return
         try:
-            for line in stdout:
-                self.append_job_output(job, line.rstrip("\n"))
+            while True:
+                chunk = os.read(stdout.fileno(), 4096)
+                if not chunk:
+                    break
+                self.append_job_output_stream(job, chunk.decode(errors="replace"))
         finally:
             try:
                 stdout.close()
             except Exception:
                 pass
 
-    def poll_active_job(self) -> None:
-        job = self.active_job
+    def poll_active_jobs(self) -> None:
+        for job in list(self.running_jobs()):
+            self.poll_active_job(job)
+
+    def poll_active_job(self, job: dict[str, Any] | None = None) -> None:
+        if job is None:
+            job = self.active_job
         if job is None:
             return
         process = job.get("process")
         if process is None:
-            self.start_next_active_job_command()
+            self.start_next_active_job_command(job)
             return
         if (
             job.get("stopping")
@@ -3075,7 +3972,7 @@ class ClientApp:
                 self.connection_state = "disconnected"
             self.last_exit = 124
             self.status = "Board host disconnected: connect timeout" if job.get("kind") == "board-connect" else "Disconnected: connect timeout"
-            self.finish_active_job()
+            self.finish_active_job(job)
             if job.get("kind") == "connect":
                 self.start_pending_auto_board_connect()
             return
@@ -3090,7 +3987,7 @@ class ClientApp:
         if job.get("stopping"):
             self.last_exit = int(rc)
             self.status = f"{job['title']}: stopped ({rc})"
-            self.finish_active_job()
+            self.finish_active_job(job)
             return
         if job.get("kind") == "connect":
             output = "\n".join(str(line) for line in self.job_output_lines(job))
@@ -3098,23 +3995,23 @@ class ClientApp:
             self.last_exit = int(rc)
             self.connection_state = "connected" if rc == 0 else "disconnected"
             self.status = "Connected" if self.connected else "Disconnected: connect failed"
-            self.finish_active_job()
+            self.finish_active_job(job)
             self.start_pending_auto_board_connect()
             return
         if job.get("kind") == "board-connect":
             self.last_exit = int(rc)
             self.board_connection_state = "connected" if rc == 0 else "disconnected"
             self.status = "Board host connected" if self.board_connected else "Board host disconnected: connect failed"
-            self.finish_active_job()
+            self.finish_active_job(job)
             return
         if rc != 0:
             self.last_exit = int(rc)
             self.status = f"{job['title']}: exit {rc}"
-            self.finish_active_job()
+            self.finish_active_job(job)
             return
         job["index"] = int(job["index"]) + 1
         job["process"] = None
-        self.start_next_active_job_command()
+        self.start_next_active_job_command(job)
 
     def run_one_command(
         self,
@@ -3231,8 +4128,13 @@ class ClientApp:
         fields = [
             ("Profile name", "name"),
             ("Display label", "label"),
-            ("SSH user", "user"),
-            ("SSH host", "host"),
+                    ("SSH user", "user"),
+                    ("SSH host", "host"),
+                    ("Working dir", "work_dir"),
+                    ("Console device", "console_device"),
+                    ("UFS load addr", "ufs_loadaddr"),
+                    ("UFS buffer size", "ufs_buffersize"),
+                    ("Direct copy", "direct_copy"),
         ]
         self.screen.timeout(-1)
         while True:
@@ -3406,11 +4308,15 @@ class ClientApp:
                     label, key = fields[field_index]
                     if not self.board_host_field_enabled(key, selected_host):
                         self.status = self.board_host_field_disabled_reason(key, selected_host)
+                    elif key == "direct_copy":
+                        self.toggle_board_host_direct_copy(selected_host)
                     else:
                         editing_key = key
                         editing_value = str(selected_host.get(key, ""))
                         editing_cursor = len(editing_value)
                         self.status = f"Editing {label}"
+            elif ch == ord(" ") and selected_host is not None and focus == "fields" and fields and fields[field_index][1] == "direct_copy":
+                self.toggle_board_host_direct_copy(selected_host)
             elif self.key_matches(ch, "a"):
                 self.add_empty_board_host()
                 hosts = [item for item in self.config.get("board_hosts", []) if isinstance(item, dict)]
@@ -3486,6 +4392,7 @@ class ClientApp:
                     ("Display label", "label"),
                     ("SSH user", "user"),
                     ("SSH host", "host"),
+                    ("Projects dir", "projects_dir"),
                 ]
                 field_index = min(field_index, max(0, len(fields) - 1))
             else:
@@ -3680,7 +4587,7 @@ class ClientApp:
         return 0
 
     def board_host_field_enabled(self, key: str, host: dict[str, Any]) -> bool:
-        if key in ("name", "label", "user"):
+        if key in ("name", "label", "user", "work_dir", "console_device", "ufs_loadaddr", "ufs_buffersize", "direct_copy"):
             return True
         if key == "host":
             return bool(str(host.get("user", "")).strip())
@@ -3697,6 +4604,11 @@ class ClientApp:
             "label": "Display label shown in the main client header.",
             "user": "SSH user for the board access host.",
             "host": "SSH host name or IP address for board access.",
+            "work_dir": "Working directory on the board host for copied artifacts and deployed helper scripts.",
+            "console_device": "Serial console device. Leave empty to auto-detect the first /dev/GEN5_CONSOLE* on the board host.",
+            "ufs_loadaddr": "Optional xt-imager --loadaddr override. Leave empty to use xt-imager default.",
+            "ufs_buffersize": "Optional xt-imager --buffersize override. Leave empty to use xt-imager default.",
+            "direct_copy": "Enter/Space toggles yes when the build host can SSH to this board host directly.",
         }
         return hints.get(key, "")
 
@@ -3749,17 +4661,26 @@ class ClientApp:
             if value != old_name and any(str(item.get("name", "")) == value for item in self.config.get("board_hosts", [])):
                 self.status = f"Board host profile already exists: {value}"
                 return
+        if key == "direct_copy":
+            value = "yes" if value.strip().lower() in {"1", "true", "yes", "on"} else "no"
         host[key] = value
         if key == "name":
             if not str(host.get("label", "")).strip() or str(host.get("label", "")) == old_name:
                 host["label"] = value
             if str(self.config.get("active_board_host", "")) == old_name:
                 self.config["active_board_host"] = value
-        if key in ("user", "host") and str(host.get("name", "")) == str(self.config.get("active_board_host", "")):
+        if key in ("user", "host", "work_dir") and str(host.get("name", "")) == str(self.config.get("active_board_host", "")):
             self.board_connection_state = "disconnected"
         sync_active_board_host(self.config)
         save_config(self.config)
         self.status = f"{key} updated"
+
+    def toggle_board_host_direct_copy(self, host: dict[str, Any]) -> None:
+        current = str(host.get("direct_copy", "no")).strip().lower()
+        host["direct_copy"] = "no" if current in {"1", "true", "yes", "on"} else "yes"
+        sync_active_board_host(self.config)
+        save_config(self.config)
+        self.status = f"Direct copy: {host['direct_copy']}"
 
     def next_board_host_name(self) -> str:
         existing = {str(host.get("name", "")) for host in self.config.get("board_hosts", [])}
@@ -3812,7 +4733,7 @@ class ClientApp:
             ("Display label", "label"),
             ("SSH user", "user"),
             ("SSH host", "host"),
-            ("Project directory", "project_dir"),
+            ("Projects dir", "projects_dir"),
             ("Back", "back"),
         ]
         index = 0
@@ -3859,7 +4780,7 @@ class ClientApp:
             if reason and detail_row + 1 < height - 3:
                 self.add(detail_row + 1, 2, f"Status: {reason}"[: width - 4], self.disabled_attr())
 
-            footer = "Enter: edit/open | b: browse project dir | s: set active | q/Esc: back"
+            footer = "Enter: edit | b: browse projects dir | s: set active | q/Esc: back"
             self.add(height - 2, 0, footer[:width], self.accent_attr())
             self.add(height - 1, 0, self.status[:width].ljust(width), curses.A_REVERSE)
             self.screen.refresh()
@@ -3872,7 +4793,7 @@ class ClientApp:
                 self.set_active_remote(remote)
                 active = True
             elif self.key_matches(ch, "b"):
-                self.edit_remote_project_dir(remote)
+                self.edit_remote_projects_dir(remote)
             elif ch in (10, 13):
                 label, key = fields[index]
                 if key == "back":
@@ -3882,8 +4803,8 @@ class ClientApp:
                 if not self.remote_field_enabled(key, remote):
                     self.status = self.remote_field_disabled_reason(key, remote)
                     continue
-                if key == "project_dir":
-                    self.edit_remote_project_dir(remote)
+                if key == "projects_dir":
+                    self.edit_remote_projects_dir(remote)
                 else:
                     self.edit_remote_value(remote, key, label)
             elif (self.key_matches(ch, "q") or ch == 27):
@@ -3892,32 +4813,26 @@ class ClientApp:
                 return
 
     def remote_field_enabled(self, key: str, remote: dict[str, Any]) -> bool:
-        if key in ("back", "name", "label", "user"):
+        if key in ("back", "name", "label", "user", "projects_dir"):
             return True
         if key == "host":
             return bool(str(remote.get("user", "")).strip())
-        if key in ("project_dir", "moulin_manifest", "dockerfile"):
-            return (
-                str(remote.get("name", "")) == str(self.config.get("active_remote", ""))
-                and self.connected
-                and bool(str(remote.get("user", "")).strip())
-                and bool(str(remote.get("host", "")).strip())
-                and (key == "project_dir" or bool(str(remote.get("project_dir", "")).strip()))
-            )
+        if key in ("moulin_manifest", "dockerfile"):
+            return str(remote.get("name", "")) == str(self.config.get("active_remote", "")) and self.connected
         return True
 
     def remote_field_disabled_reason(self, key: str, remote: dict[str, Any]) -> str:
         if key == "host":
             return "set SSH user first"
-        if key in ("project_dir", "moulin_manifest", "dockerfile"):
+        if key in ("moulin_manifest", "dockerfile"):
             if str(remote.get("name", "")) != str(self.config.get("active_remote", "")):
                 return "set this remote active first"
             if not str(remote.get("user", "")).strip():
                 return "set SSH user first"
             if not str(remote.get("host", "")).strip():
                 return "set SSH host first"
-            if key != "project_dir" and not str(remote.get("project_dir", "")).strip():
-                return "select remote project directory first"
+            if not remote_has_project_dir(self.config):
+                return "set projects dir and project dir first"
             return "connect to the build host first"
         return ""
 
@@ -3927,7 +4842,8 @@ class ClientApp:
             "label": "Display label shown in the main client header.",
             "user": "SSH user for the remote build machine.",
             "host": "SSH host name or IP address.",
-            "project_dir": "Remote Moulin checkout directory. Use Enter or b to browse after connect.",
+            "projects_dir": "Base directory on the build host that contains project checkouts.",
+            "projects_dir": "Base directory on the build host that contains project checkouts. Use Enter or b to browse after connect.",
             "back": "Return to the remote list.",
         }
         return hints.get(key, "")
@@ -3951,7 +4867,7 @@ class ClientApp:
                 remote["label"] = value
             if str(self.config.get("active_remote", "")) == old_name:
                 self.config["active_remote"] = value
-        if key in ("user", "host", "project_dir") and str(remote.get("name", "")) == str(self.config.get("active_remote", "")):
+        if key in ("user", "host", "projects_dir") and str(remote.get("name", "")) == str(self.config.get("active_remote", "")):
             self.connection_state = "disconnected"
             self.reset_preflight()
         sync_active_remote(self.config)
@@ -3974,30 +4890,30 @@ class ClientApp:
                 remote["label"] = value
             if str(self.config.get("active_remote", "")) == old_name:
                 self.config["active_remote"] = value
-        if key in ("user", "host", "project_dir") and str(remote.get("name", "")) == str(self.config.get("active_remote", "")):
+        if key in ("user", "host", "projects_dir") and str(remote.get("name", "")) == str(self.config.get("active_remote", "")):
             self.connection_state = "disconnected"
             self.reset_preflight()
         sync_active_remote(self.config)
         save_config(self.config)
         self.status = f"{label} updated"
 
-    def edit_remote_project_dir(self, remote: dict[str, Any]) -> None:
-        if not self.remote_field_enabled("project_dir", remote):
-            self.status = self.remote_field_disabled_reason("project_dir", remote)
+    def edit_remote_projects_dir(self, remote: dict[str, Any]) -> None:
+        if not self.remote_field_enabled("projects_dir", remote):
+            self.status = self.remote_field_disabled_reason("projects_dir", remote)
             return
-        selected = self.browse_remote_directory_screen(str(remote.get("project_dir", "")) or "~")
+        selected = self.browse_remote_directory_screen(str(remote.get("projects_dir", "")) or "~")
         if selected:
-            remote["project_dir"] = selected
+            remote["projects_dir"] = selected
             sync_active_remote(self.config)
             save_config(self.config)
-            self.status = f"Remote project dir: {selected}"
+            self.status = f"Projects dir: {selected}"
 
     def remote_config_action_enabled(self, label: str, remote: dict[str, Any]) -> bool:
         if label == "Set active remote":
             return str(remote.get("name", "")) != str(self.config.get("active_remote", ""))
         if label == "Edit SSH host":
             return bool(str(remote.get("user", "")).strip())
-        if label == "Browse project dir":
+        if label == "Browse projects dir":
             return (
                 str(remote.get("name", "")) == str(self.config.get("active_remote", ""))
                 and self.connected
@@ -4013,7 +4929,7 @@ class ClientApp:
             return "selected build host is already active"
         if label == "Edit SSH host":
             return "set SSH user first"
-        if label == "Browse project dir":
+        if label == "Browse projects dir":
             if str(remote.get("name", "")) != str(self.config.get("active_remote", "")):
                 return "set this remote active first"
             if not str(remote.get("user", "")).strip():
@@ -4104,13 +5020,13 @@ class ClientApp:
             save_config(self.config)
             self.status = "SSH host updated"
             return False
-        if label == "Browse project dir":
-            selected = self.browse_remote_directory_screen(str(remote.get("project_dir", "")) or "~")
+        if label == "Browse projects dir":
+            selected = self.browse_remote_directory_screen(str(remote.get("projects_dir", "")) or "~")
             if selected:
-                remote["project_dir"] = selected
+                remote["projects_dir"] = selected
                 sync_active_remote(self.config)
                 save_config(self.config)
-                self.status = f"Remote project dir: {selected}"
+                self.status = f"Projects dir: {selected}"
             return False
         return False
 
@@ -4120,7 +5036,7 @@ class ClientApp:
             "label": "",
             "user": "",
             "host": "",
-            "project_dir": "",
+            "projects_dir": "",
         }
         actions = [
             ("Edit profile name", "name", "Unique local profile id."),
@@ -4211,7 +5127,7 @@ class ClientApp:
                     new_remote = {key: str(value).strip() for key, value in draft.items()}
                     if not new_remote["label"]:
                         new_remote["label"] = new_remote["name"]
-                    new_remote["project_dir"] = ""
+                    new_remote["projects_dir"] = ""
                     self.config.setdefault("remotes", []).append(new_remote)
                     self.config["active_remote"] = new_remote["name"]
                     sync_active_remote(self.config)
@@ -4546,8 +5462,10 @@ class ClientApp:
         while True:
             ch = self.read_key()
             if (self.key_matches(ch, "y") or ch in (10, 13)):
+                self.close_confirm()
                 return True
             if (self.key_matches(ch, "n", "q") or ch in (27, 3)):
+                self.close_confirm()
                 return False
 
     def store_mapping(self, name: str, role: str, remote: str, local: str, kind: str, push: bool) -> bool:
@@ -5389,7 +6307,7 @@ class ClientApp:
                 fields = [
                     {"label": "Profile name", "key": "name", "kind": "text"},
                     {"label": "Display label", "key": "label", "kind": "text"},
-                    {"label": "Remote project dir", "key": "project_dir", "kind": "remote_dir"},
+                    {"label": "Project dir", "key": "project_dir", "kind": "text"},
                     {"label": "Local overlay dir", "key": "local_project_dir", "kind": "text"},
                     {"label": "Project Git URL", "key": "git_url", "kind": "text"},
                     {"label": "Git branch/ref", "key": "git_ref", "kind": "git_ref"},
@@ -5400,6 +6318,7 @@ class ClientApp:
                         {"label": "Moulin manifest", "key": "moulin_manifest", "kind": "manifest"},
                         {"label": "Dockerfile", "key": "dockerfile", "kind": "dockerfile"},
                         {"label": "Build targets", "key": "targets", "kind": "targets"},
+                        {"label": "Board artifacts", "key": "board_artifacts", "kind": "board_artifacts"},
                         {"label": "Docker image name", "key": "docker_image", "kind": "text"},
                     ]
                 )
@@ -5565,6 +6484,8 @@ class ClientApp:
                         self.edit_project_git_ref(selected_project)
                     elif field["kind"] == "targets":
                         self.select_build_targets_screen()
+                    elif field["kind"] == "board_artifacts":
+                        self.select_board_artifacts_screen()
                     elif field["kind"] == "param":
                         self.cycle_parameter(field["param"])
                         self.save_current_build_settings()
@@ -5660,7 +6581,7 @@ class ClientApp:
             return False
         if kind == "param":
             return True
-        if kind == "targets":
+        if kind in ("targets", "board_artifacts"):
             return True
         if kind == "remote_dir":
             return self.connected and remote_has_ssh(self.config)
@@ -5690,13 +6611,14 @@ class ClientApp:
         hints = {
             "name": "Unique local project id. Renaming an active project preserves active selection.",
             "label": "Display label for this project profile.",
-            "project_dir": "Remote Moulin checkout directory for this project. Use Enter to browse after connecting the active remote.",
+            "project_dir": f"Project checkout directory name under Projects dir ({build_host_projects_dir(self.config) or '<not set>'}).",
             "local_project_dir": f"Local overlay for mapped pull/push. Relative paths are resolved from {APP_DIR}.",
             "git_url": "Git URL used by Prepare remote project when checkout origin should be validated.",
             "git_ref": "Enter selects a branch from the remote Git URL when reachable, otherwise manual input. Existing checkouts are checked but not switched automatically.",
             "moulin_manifest": "Search tracked root YAML files on the active remote and save a Moulin manifest.",
             "dockerfile": "Search tracked Dockerfiles on the active remote and save a Dockerfile path.",
-            "targets": "Space toggles build targets, Enter saves, Esc cancels.",
+            "targets": "Space toggles Ninja build targets, Enter saves, Esc cancels.",
+            "board_artifacts": "Space toggles artifacts copied to the board host, Enter saves, Esc cancels.",
             "docker_image": "Docker image name/tag used for remote Docker and product build commands.",
         }
         if kind == "param":
@@ -5716,6 +6638,12 @@ class ClientApp:
             if value != old_name and any(str(item.get("name", "")) == value for item in self.config.get("projects", []) if isinstance(item, dict)):
                 self.status = f"Project already exists: {value}"
                 return
+        if key == "project_dir" and value.startswith("/"):
+            projects_dir, project_name = split_remote_project_path(value)
+            if projects_dir:
+                active_remote(self.config)["projects_dir"] = projects_dir
+                sync_active_remote(self.config)
+            value = project_name or value
         project[key] = value
         if key == "name":
             if not str(project.get("label", "")).strip() or str(project.get("label", "")) == old_name:
@@ -5724,7 +6652,7 @@ class ClientApp:
                 self.config["active_project"] = value
         if self.project_is_active(project):
             sync_active_project(self.config)
-            if key in ("project_dir", "local_project_dir", "docker_image"):
+            if key in ("project_dir", "local_project_dir", "docker_image", "board_artifacts"):
                 self.load_active_project_runtime()
             if key in ("project_dir", "git_url", "git_ref"):
                 self.reset_preflight()
@@ -5734,18 +6662,14 @@ class ClientApp:
         self.status = f"{key} updated"
 
     def edit_project_remote_dir(self, project: dict[str, Any]) -> None:
-        field = {"label": "Remote project dir", "key": "project_dir", "kind": "remote_dir"}
+        field = {"label": "Project dir", "key": "project_dir", "kind": "remote_dir"}
         if not self.project_field_enabled(field, project):
             self.status = self.project_field_disabled_reason(field, project)
             return
         selected = self.browse_remote_directory_screen(str(project.get("project_dir", "")) or "~")
         if selected:
-            project["project_dir"] = selected
-            if self.project_is_active(project):
-                sync_active_project(self.config)
-                self.reset_preflight()
-            save_config(self.config)
-            self.status = f"Remote project dir: {selected}"
+            self.apply_project_inline_value(project, "project_dir", selected)
+            self.status = f"Project dir: {project.get('project_dir', '')}"
 
     def edit_project_git_ref(self, project: dict[str, Any]) -> None:
         git_url = project_git_url(self.config)
@@ -5846,6 +6770,8 @@ class ClientApp:
             return f"Select Dockerfile: {configured_dockerfile(self.config)}"
         if kind == "targets":
             return f"Select build targets: {self.build_targets}"
+        if kind == "board_artifacts":
+            return f"Select board artifacts: {self.board_artifacts or self.build_targets}"
         if kind == "docker":
             return f"Edit Docker image name: {self.docker_image}"
         if kind == "save":
@@ -5876,6 +6802,8 @@ class ClientApp:
             return "Search the remote project checkout for Dockerfiles, validate files that start with FROM, and save the selected path in the active project."
         if kind == "targets":
             return "Choose Ninja targets from the Moulin manifest and selected parameter overrides."
+        if kind == "board_artifacts":
+            return "Choose built artifacts copied from the build host to the board host."
         if kind == "docker":
             return "Edit the Docker image name/tag stored in the active project and used for remote Docker and product build commands."
         if kind == "save":
@@ -5916,6 +6844,9 @@ class ClientApp:
             return False
         if kind == "targets":
             self.select_build_targets_screen()
+            return False
+        if kind == "board_artifacts":
+            self.select_board_artifacts_screen()
             return False
         if kind == "docker":
             self.docker_image = self.prompt("Docker image name", self.docker_image)
@@ -5995,6 +6926,7 @@ class ClientApp:
         current["label"] = name
         current["parameters"] = dict(self.build_params)
         current["targets"] = self.build_targets
+        current["board_artifacts"] = self.board_artifacts
         current["docker_image"] = self.docker_image
         projects.append(current)
         self.config["projects"] = projects
@@ -6024,8 +6956,49 @@ class ClientApp:
         self.status = f"Project deleted: {active}"
 
     def select_build_targets_screen(self) -> None:
+        selected_text = self.select_targets_screen(
+            title="Build Targets",
+            selected_text=self.build_targets,
+            empty_message="No build targets found in Moulin manifest.",
+            saved_status="Build target selection saved",
+            cancelled_status="Build target selection cancelled",
+        )
+        if selected_text is None:
+            return
+        self.build_targets = selected_text
+        active_project(self.config)["targets"] = selected_text
+        self.save_current_build_settings()
+        sync_active_project(self.config)
+        save_config(self.config)
+        self.load_active_project_runtime()
+
+    def select_board_artifacts_screen(self) -> None:
+        project = active_project(self.config)
+        selected_text = self.select_targets_screen(
+            title="Board Artifacts",
+            selected_text=str(project.get("board_artifacts", "")) or self.build_targets,
+            empty_message="No artifacts found in Moulin manifest.",
+            saved_status="Board artifact selection saved",
+            cancelled_status="Board artifact selection cancelled",
+        )
+        if selected_text is None:
+            return
+        project["board_artifacts"] = selected_text
+        sync_active_project(self.config)
+        save_config(self.config)
+        self.load_active_project_runtime()
+
+    def select_targets_screen(
+        self,
+        *,
+        title: str,
+        selected_text: str,
+        empty_message: str,
+        saved_status: str,
+        cancelled_status: str,
+    ) -> str | None:
         candidates = moulin_target_candidates(self.config, self.build_params)
-        selected = set(shlex.split(self.build_targets))
+        selected = set(shlex.split(selected_text))
         index = 0
         self.screen.timeout(-1)
         while True:
@@ -6037,22 +7010,22 @@ class ClientApp:
                 ch = self.read_key()
                 if (self.key_matches(ch, "q") or ch == 27):
                     self.screen.timeout(250)
-                    return
+                    return None
                 continue
 
             actions: list[dict[str, Any]] = [{"kind": "target", "candidate": candidate} for candidate in candidates]
             index = min(index, max(0, len(actions) - 1))
-            self.draw_box(0, 0, height - 2, width, "Build Targets")
+            self.draw_box(0, 0, height - 2, width, title)
             self.add(1, 2, "Manifest:", self.accent_attr())
             self.add(1, 18, self.fit_text(moulin_manifest_name(self.config), width - 20))
             self.add(2, 2, "Selected:", self.accent_attr())
-            selected_text = " ".join(target for target in self.ordered_targets(candidates, selected)) or "none"
-            self.add(2, 18, self.fit_text(selected_text, width - 20))
+            display_selected = " ".join(target for target in self.ordered_targets(candidates, selected, selected_text)) or "none"
+            self.add(2, 18, self.fit_text(display_selected, width - 20))
 
             top = 4
             visible = max(1, height - 10)
             if not candidates:
-                self.add(top, 2, "No build targets found in Moulin manifest.", self.warn_attr())
+                self.add(top, 2, empty_message, self.warn_attr())
                 top += 2
             if actions:
                 for offset, action in enumerate(actions[:visible]):
@@ -6080,19 +7053,17 @@ class ClientApp:
                     selected.add(target)
                 self.status = f"{target}: {'selected' if target in selected else 'removed'}"
             elif ch in (10, 13):
-                ordered = self.ordered_targets(candidates, selected)
-                self.build_targets = " ".join(ordered)
-                self.save_current_build_settings()
-                self.status = "Build target selection saved"
+                ordered = self.ordered_targets(candidates, selected, selected_text)
+                self.status = saved_status
                 self.screen.timeout(250)
-                return
+                return " ".join(ordered)
             elif (self.key_matches(ch, "q") or ch == 27):
-                self.status = "Build target selection cancelled"
+                self.status = cancelled_status
                 self.screen.timeout(250)
-                return
+                return None
 
-    def ordered_targets(self, candidates: list[dict[str, str]], selected: set[str]) -> list[str]:
-        current = [target for target in shlex.split(self.build_targets) if target in selected]
+    def ordered_targets(self, candidates: list[dict[str, str]], selected: set[str], current_text: str | None = None) -> list[str]:
+        current = [target for target in shlex.split(current_text if current_text is not None else self.build_targets) if target in selected]
         extra = [candidate["target"] for candidate in candidates if candidate["target"] in selected and candidate["target"] not in current]
         return current + extra
 
