@@ -338,6 +338,8 @@ def empty_project_profile(name: str = "") -> dict[str, Any]:
         "parameters": {},
         "targets": "",
         "board_artifacts": "",
+        "mappings": [],
+        "active_mappings": [],
     }
 
 
@@ -405,6 +407,11 @@ def normalize_project_profiles(config: dict[str, Any]) -> None:
             project["parameters"] = {}
         project.setdefault("targets", build_targets())
         project.setdefault("board_artifacts", str(project.get("targets", "")))
+        if not isinstance(project.get("mappings"), list):
+            legacy_mappings = config.get("mappings", [])
+            project["mappings"] = copy.deepcopy(legacy_mappings) if isinstance(legacy_mappings, list) else []
+        if not isinstance(project.get("active_mappings"), list):
+            project["active_mappings"] = []
     active = str(config.get("active_project") or projects[0].get("name") or "")
     if not any(str(project.get("name", "")) == active for project in projects):
         active = str(projects[0].get("name") or "")
@@ -952,10 +959,36 @@ def normalize_mapping_path(path: str) -> str:
     return normalize_relpath(clean)
 
 
+def is_descendant_mapping_path(path: str, parent: str) -> bool:
+    clean_path = normalize_mapping_path(path)
+    clean_parent = normalize_mapping_path(parent)
+    if clean_path == clean_parent:
+        return False
+    if clean_parent == ".":
+        return clean_path != "."
+    return clean_path.startswith(clean_parent.rstrip("/") + "/")
+
+
+def mapping_path_mark(path: str, selected_paths: set[str], mapped_paths: set[str]) -> str:
+    clean = normalize_mapping_path(path)
+    if clean in selected_paths:
+        return "S"
+    if any(is_descendant_mapping_path(selected, clean) for selected in selected_paths):
+        return "s"
+    if clean in mapped_paths:
+        return "*"
+    if any(is_descendant_mapping_path(mapped, clean) for mapped in mapped_paths):
+        return "+"
+    return " "
+
+
 def mappings(config: dict[str, Any]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for raw in config.get("mappings", []):
+    raw_project_mappings = active_project(config).get("mappings")
+    raw_config_mappings = config.get("mappings", [])
+    raw_source = raw_project_mappings if isinstance(raw_project_mappings, list) else raw_config_mappings
+    for raw in raw_source:
         name = str(raw["name"]).strip()
         if not name:
             raise SystemExit("mapping with empty name")
@@ -1017,7 +1050,22 @@ def mapping_selection_path(config: dict[str, Any]) -> Path:
     return task_path(config, "mapping_selection")
 
 
+def project_mapping_selection(config: dict[str, Any]) -> list[str]:
+    raw_names = active_project(config).get("active_mappings", [])
+    if not isinstance(raw_names, list):
+        return []
+    names: list[str] = []
+    for raw in raw_names:
+        name = str(raw).strip()
+        if name:
+            names.append(name)
+    return names
+
+
 def read_mapping_selection(config: dict[str, Any]) -> list[str]:
+    project_names = project_mapping_selection(config)
+    if project_names:
+        return project_names
     selection = mapping_selection_path(config)
     if not selection.exists():
         raise SystemExit(f"mapping selection file does not exist: {selection}")
@@ -1032,6 +1080,9 @@ def read_mapping_selection(config: dict[str, Any]) -> list[str]:
 
 
 def read_mapping_selection_if_exists(config: dict[str, Any]) -> list[str]:
+    project_names = project_mapping_selection(config)
+    if project_names:
+        return project_names
     selection = mapping_selection_path(config)
     if not selection.exists():
         return []
@@ -1044,6 +1095,8 @@ def read_mapping_selection_if_exists(config: dict[str, Any]) -> list[str]:
 
 
 def write_mapping_selection(config: dict[str, Any], names: list[str], *, echo: bool = True) -> None:
+    active_project(config)["active_mappings"] = list(names)
+    save_config(config)
     selection = mapping_selection_path(config)
     text = "\n".join(names)
     selection.parent.mkdir(parents=True, exist_ok=True)
@@ -5485,7 +5538,8 @@ class ClientApp:
         if kind not in ("file", "directory"):
             self.status = "Mapping add failed: kind must be file or directory"
             return False
-        raw_mappings = list(self.config.setdefault("mappings", []))
+        project = active_project(self.config)
+        raw_mappings = list(project.setdefault("mappings", []))
         raw_mappings.append(
             {
                 "name": name,
@@ -5496,7 +5550,7 @@ class ClientApp:
                 "push": push,
             }
         )
-        self.config["mappings"] = raw_mappings
+        project["mappings"] = raw_mappings
         save_config(self.config)
         selected = read_mapping_selection_if_exists(self.config)
         if name not in selected:
@@ -5610,15 +5664,16 @@ class ClientApp:
 
             if error:
                 self.add(panel_top + 1, 2, error[: left_width - 4], self.error_attr())
+            raw_project_mappings = active_project(self.config).get("mappings", [])
             mapped_paths = {
                 normalize_mapping_path(str(mapping.get("remote", "")))
-                for mapping in self.config.get("mappings", [])
+                for mapping in raw_project_mappings
                 if isinstance(mapping, dict) and str(mapping.get("remote", "")).strip()
             }
             selected_names = set(read_mapping_selection_if_exists(self.config))
             selected_paths = {
                 normalize_mapping_path(str(mapping.get("remote", "")))
-                for mapping in self.config.get("mappings", [])
+                for mapping in raw_project_mappings
                 if isinstance(mapping, dict)
                 and str(mapping.get("name", "")) in selected_names
                 and str(mapping.get("remote", "")).strip()
@@ -5628,7 +5683,7 @@ class ClientApp:
                 row = panel_top + 1 + offset
                 item_index = scroll + offset
                 name = "../" if entry["kind"] == "parent" else PurePosixPath(entry["path"]).name
-                mark = "S" if entry["path"] in selected_paths else "*" if entry["path"] in mapped_paths else " "
+                mark = mapping_path_mark(entry["path"], selected_paths, mapped_paths)
                 if entry["kind"] in ("directory", "parent"):
                     label = f"{mark} [d] {name}/"
                 else:
@@ -5658,11 +5713,24 @@ class ClientApp:
             row += 1
             mapped = current["path"] in mapped_paths
             selected = current["path"] in selected_paths
-            row = self.draw_label_value_wrapped(row, detail_x, detail_w, "mapped", "selected" if selected else "yes" if mapped else "no", max_lines=1)
+            has_selected_children = any(is_descendant_mapping_path(path, current["path"]) for path in selected_paths)
+            has_mapped_children = any(is_descendant_mapping_path(path, current["path"]) for path in mapped_paths)
+            mapped_state = (
+                "selected"
+                if selected
+                else "selected children"
+                if has_selected_children
+                else "yes"
+                if mapped
+                else "mapped children"
+                if has_mapped_children
+                else "no"
+            )
+            row = self.draw_label_value_wrapped(row, detail_x, detail_w, "mapped", mapped_state, max_lines=1)
             row += 1
             row = self.draw_wrapped(row, detail_x, detail_w, "Enter opens directories. Space toggles the selected path as a mapping. Use n/l/r/p before adding to edit name, local path, role, or push permission.", max_lines=4)
 
-            footer = "S selected mapping | * mapped | Up/Down: select | Enter: open dir | Space: toggle | n/l/r/p: edit fields | q/Esc: back"
+            footer = "S selected | s has selected | * mapped | + has mapped | Enter: open | Space: toggle | q/Esc: back"
             self.add(height - 2, 0, footer[:width], self.accent_attr())
             self.add(height - 1, 0, self.status[:width].ljust(width), curses.A_REVERSE)
             self.screen.refresh()
@@ -5722,7 +5790,8 @@ class ClientApp:
         except ValueError as exc:
             self.status = f"Mapping remove failed: {exc}"
             return False
-        raw_mappings = [mapping for mapping in self.config.get("mappings", []) if isinstance(mapping, dict)]
+        project = active_project(self.config)
+        raw_mappings = [mapping for mapping in project.get("mappings", []) if isinstance(mapping, dict)]
         removed_names = [
             str(mapping.get("name", ""))
             for mapping in raw_mappings
@@ -5732,7 +5801,7 @@ class ClientApp:
             self.status = f"Mapping not found: {target}"
             return False
         removed = set(removed_names)
-        self.config["mappings"] = [
+        project["mappings"] = [
             mapping
             for mapping in raw_mappings
             if normalize_mapping_path(str(mapping.get("remote", ""))) != target
@@ -5810,8 +5879,8 @@ class ClientApp:
                     self.status = "Mapping delete cancelled"
                     continue
                 name = current["name"]
-                self.config["mappings"] = [
-                    raw for raw in self.config.get("mappings", []) if str(raw.get("name", "")).strip() != name
+                active_project(self.config)["mappings"] = [
+                    raw for raw in active_project(self.config).get("mappings", []) if str(raw.get("name", "")).strip() != name
                 ]
                 save_config(self.config)
                 selected = [item for item in read_mapping_selection_if_exists(self.config) if item != name]
@@ -5939,8 +6008,8 @@ class ClientApp:
                     self.status = "Mapping delete cancelled"
                     continue
                 name = current["name"]
-                self.config["mappings"] = [
-                    raw for raw in self.config.get("mappings", []) if str(raw.get("name", "")).strip() != name
+                active_project(self.config)["mappings"] = [
+                    raw for raw in active_project(self.config).get("mappings", []) if str(raw.get("name", "")).strip() != name
                 ]
                 selected.discard(name)
                 save_config(self.config)

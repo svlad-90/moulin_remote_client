@@ -38,7 +38,9 @@
       "docker_image": "",
       "parameters": {},
       "targets": "",
-      "board_artifacts": ""
+      "board_artifacts": "",
+      "mappings": [],
+      "active_mappings": []
     }
   ],
   "local": {
