@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
-
 from components.ui.api import dialog_workflow
 from components.ui.api import dialogs
 
@@ -17,6 +15,7 @@ class FakeScreen:
         self.height = 30
         self.width = 100
         self.getstr_calls: list[tuple[int, int]] = []
+        self.move_calls: list[tuple[int, int]] = []
 
     def timeout(self, value: int) -> None:
         self.timeouts.append(value)
@@ -34,6 +33,9 @@ class FakeScreen:
         self.getstr_calls.append((row, col))
         return self.text
 
+    def move(self, row: int, col: int) -> None:
+        self.move_calls.append((row, col))
+
 
 class FakePort:
     def __init__(self, keys: list[int] | None = None, *, text: bytes = b"") -> None:
@@ -47,11 +49,17 @@ class FakePort:
         self.draw_count = 0
         self.wrapped: list[str] = []
         self.cursor_states: list[bool] = []
+        self.prompt_cancelled = False
 
     def read_key(self) -> int:
         if not self.screen.keys:
             raise AssertionError("fake key queue is empty")
         return self.screen.keys.pop(0)
+
+    def read_queued_text(self, first_ch: int) -> str:
+        if 32 <= first_ch < 127:
+            return chr(first_ch)
+        return ""
 
     def draw(self) -> None:
         self.draw_count += 1
@@ -115,22 +123,31 @@ class DialogWorkflowControllerTests(unittest.TestCase):
         self.assertIn("boom", [row[2] for row in port.rows])
         self.assertEqual(port.screen.timeouts, [-1, 250])
 
-    def test_prompt_returns_typed_value_and_restores_curses_state(self) -> None:
-        port = FakePort(text=b"/tmp/work")
+    def test_prompt_returns_typed_value_and_restores_cursor_state(self) -> None:
+        port = FakePort([ord("/"), ord("t"), ord("m"), ord("p"), 10])
         controller = dialog_workflow.dialog_workflow_controller()
 
-        with (
-            patch("components.ui.src.dialog_workflow.curses.echo") as echo,
-            patch("components.ui.src.dialog_workflow.curses.noecho") as noecho,
-            patch("components.ui.src.dialog_workflow.curses.flushinp") as flushinp,
-        ):
-            result = controller.prompt(port, "Path", "/old")
+        result = controller.prompt(port, "Path", "")
 
-        self.assertEqual(result, "/tmp/work")
-        echo.assert_called_once_with()
-        flushinp.assert_called_once_with()
-        noecho.assert_called_once_with()
+        self.assertEqual(result, "/tmp")
+        self.assertFalse(port.prompt_cancelled)
+        self.assertEqual(port.screen.getstr_calls, [])
         self.assertEqual(port.cursor_states, [True, False])
+
+    def test_prompt_supports_backspace_delete_and_cancel(self) -> None:
+        port = FakePort([ord("a"), ord("b"), 127, ord("c"), 10])
+        controller = dialog_workflow.dialog_workflow_controller()
+
+        result = controller.prompt(port, "Name", "")
+
+        self.assertEqual(result, "ac")
+        self.assertFalse(port.prompt_cancelled)
+
+        cancel_port = FakePort([ord("x"), 27])
+        cancelled = controller.prompt(cancel_port, "Name", "old")
+
+        self.assertEqual(cancelled, "")
+        self.assertTrue(cancel_port.prompt_cancelled)
 
 
 if __name__ == "__main__":

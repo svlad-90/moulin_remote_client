@@ -32,6 +32,7 @@ def create_command_job(
         "process": None,
         "current_command": "",
         "rc": None,
+        "finished": False,
     }
     if kind is not None:
         job["kind"] = kind
@@ -71,7 +72,7 @@ def create_board_connect_job(*, item_label: str, command: list[str], started_at:
 def job_running(job: dict[str, Any] | None) -> bool:
     if job is None:
         return False
-    return process_running(job.get("process"))
+    return not bool(job.get("finished"))
 
 
 def process_returncode(process: Any) -> int | None:
@@ -351,6 +352,8 @@ def finish_job_state(
     active_job: dict[str, Any] | None,
     board_job: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    if job is not None:
+        job["finished"] = True
     if job is board_job:
         return {
             "last_board_job": board_job,

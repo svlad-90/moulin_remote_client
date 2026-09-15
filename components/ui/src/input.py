@@ -109,6 +109,10 @@ def prompt_value_or_current(value: str, current: str) -> str:
     return value or current
 
 
+def prompt_was_cancelled(port: object) -> bool:
+    return bool(getattr(port, "prompt_cancelled", False))
+
+
 def inline_edit_key_action(value: str, cursor: int, ch: int, text: str = "") -> InlineEditResult:
     cursor = min(max(0, cursor), len(value))
     if ch in (10, 13):

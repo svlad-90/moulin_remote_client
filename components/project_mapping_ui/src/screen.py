@@ -445,14 +445,28 @@ class ProjectMappingScreenController:
                 draft = {}
             elif action["action"] == "edit_name":
                 name = port.prompt("Mapping name", str(draft["name"])).strip()
+                if ui_input_api.prompt_was_cancelled(port):
+                    port.status = "Edit cancelled"
+                    continue
                 if name:
                     draft["name"] = name
             elif action["action"] == "edit_local":
-                draft["local"] = port.prompt("Local path", str(draft["local"]))
+                value = port.prompt("Local path", str(draft["local"]))
+                if ui_input_api.prompt_was_cancelled(port):
+                    port.status = "Edit cancelled"
+                    continue
+                draft["local"] = value
             elif action["action"] == "edit_role":
-                draft["role"] = port.prompt("Role", str(draft["role"]))
+                value = port.prompt("Role", str(draft["role"]))
+                if ui_input_api.prompt_was_cancelled(port):
+                    port.status = "Edit cancelled"
+                    continue
+                draft["role"] = value
             elif action["action"] == "edit_push":
                 push_raw = port.prompt("Allow push: yes or no", "yes" if draft["push"] else "no").strip().lower()
+                if ui_input_api.prompt_was_cancelled(port):
+                    port.status = "Edit cancelled"
+                    continue
                 if push_raw not in ("yes", "no", "y", "n", "true", "false", "1", "0"):
                     port.status = "Mapping add failed: push must be yes or no"
                     continue

@@ -170,6 +170,14 @@ def active_job_for_slot(
     return None
 
 
+def stoppable_command_job(job: dict[str, Any] | None) -> dict[str, Any] | None:
+    if job is None:
+        return None
+    if job.get("kind") in {"connect", "board-connect"}:
+        return None
+    return job
+
+
 def item_enabled(
     item: MenuItem,
     *,
@@ -183,11 +191,11 @@ def item_enabled(
     prepare_remote_project_needed: bool,
     checkout_git_ref_needed: bool,
 ) -> bool:
-    if item.label == "Stop running command" and active_job is None:
+    if item.label == "Stop running command" and stoppable_command_job(active_job) is None:
         return False
     if item.label == "Stop running command":
         return True
-    if item.label == "Stop board command" and board_job is None:
+    if item.label == "Stop board command" and stoppable_command_job(board_job) is None:
         return False
     if item.label == "Stop board command":
         return True
@@ -201,10 +209,8 @@ def item_enabled(
         return False
     if item.label == "Open board host shell" and not board_connected:
         return False
-    if item.label in BOARD_COMMAND_LABELS:
+    if item.group == "board commands":
         if not board_host_has_ssh or not board_connected:
-            return False
-        if item.label == "Copy build artifacts" and (not build_connected or not remote_has_project_dir):
             return False
     if item.requires_ssh and not remote_has_ssh:
         return False
@@ -234,11 +240,11 @@ def disabled_reason(
     prepare_remote_project_needed: bool,
     checkout_git_ref_needed: bool,
 ) -> str:
-    if item.label == "Stop running command" and active_job is None:
+    if item.label == "Stop running command" and stoppable_command_job(active_job) is None:
         return "no build or sync command is running"
     if item.label == "Stop running command":
         return ""
-    if item.label == "Stop board command" and board_job is None:
+    if item.label == "Stop board command" and stoppable_command_job(board_job) is None:
         return "no board command is running"
     if item.label == "Stop board command":
         return ""
@@ -247,17 +253,13 @@ def disabled_reason(
     slot_job = active_job_for_slot(slot, active_job=active_job, board_job=board_job)
     if slot is not None and slot_job is not None and job_for_item(item, jobs) is None:
         return f"{slot} command is already running"
-    board_items = {"Connect board host", "Open board host shell"} | BOARD_COMMAND_LABELS
-    if item.label in board_items and not board_host_user:
+    is_board_item = item.label in {"Connect board host", "Open board host shell"} or item.group == "board commands"
+    if is_board_item and not board_host_user:
         return "set board SSH user first"
-    if item.label in board_items and not board_host_host:
+    if is_board_item and not board_host_host:
         return "set board SSH host first"
-    if item.label in BOARD_COMMAND_LABELS and not board_connected:
+    if item.group == "board commands" and not board_connected:
         return "connect to the board host first"
-    if item.label == "Copy build artifacts" and not build_connected:
-        return "connect to the build host first"
-    if item.label == "Copy build artifacts" and not remote_has_project_dir:
-        return "select remote project directory first"
     if item.label == "Open board host shell" and not board_connected:
         return "connect to the board host first"
     if item.requires_ssh and not remote_has_user:

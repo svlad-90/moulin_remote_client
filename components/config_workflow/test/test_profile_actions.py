@@ -20,6 +20,7 @@ class FakeProfilePort:
         self.board_artifacts = ["full_ufs.img.gz"]
         self.docker_image = "builder:latest"
         self.prompt_values: dict[str, str] = {}
+        self.prompt_cancelled = False
 
     def prompt(self, label: str, current: str) -> str:
         return self.prompt_values.get(label, current)
@@ -119,6 +120,20 @@ class ProfileActionControllerTests(unittest.TestCase):
         self.assertEqual(harness.reload_count, 1)
         self.assertEqual(harness.save_count, 1)
 
+    def test_add_project_profile_disconnected_saves_without_runtime_reload(self) -> None:
+        cfg = config()
+        port = FakeProfilePort()
+        port.connection_state = "disconnected"
+        port.prompt_values["Project profile name"] = " copy "
+        harness = Harness(cfg)
+
+        harness.controller.add_project_profile(port)
+
+        self.assertEqual(cfg["active_project"], "copy")
+        self.assertEqual(port.status, "Project added: copy")
+        self.assertEqual(harness.reload_count, 0)
+        self.assertEqual(harness.save_count, 1)
+
     def test_add_project_profile_cancel_preserves_config(self) -> None:
         cfg = config()
         port = FakeProfilePort()
@@ -129,6 +144,21 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         self.assertEqual(len(cfg["projects"]), 2)
         self.assertEqual(port.status, "Project add cancelled: empty name")
+        self.assertEqual(harness.save_count, 0)
+
+    def test_add_profile_prompts_cancel_when_escape_cancelled(self) -> None:
+        cfg = config()
+        port = FakeProfilePort()
+        port.prompt_cancelled = True
+        harness = Harness(cfg)
+
+        harness.controller.add_project_profile(port)
+        harness.controller.add_remote(port)
+        harness.controller.add_board_host(port)
+
+        self.assertEqual([project["name"] for project in cfg["projects"]], ["one", "two"])
+        self.assertEqual([remote["name"] for remote in cfg["remotes"]], ["build", "other"])
+        self.assertEqual([host["name"] for host in cfg["board_hosts"]], ["board", "lab"])
         self.assertEqual(harness.save_count, 0)
 
     def test_delete_active_remote_resets_connection_and_preflight(self) -> None:
@@ -216,6 +246,20 @@ class ProfileActionControllerTests(unittest.TestCase):
         self.assertEqual(port.preflight, "not run")
         self.assertEqual(port.status, "Active project: two")
         self.assertEqual(harness.reload_count, 1)
+        self.assertEqual(harness.save_count, 1)
+
+    def test_set_active_project_disconnected_saves_without_runtime_reload(self) -> None:
+        cfg = config()
+        port = FakeProfilePort()
+        port.connection_state = "disconnected"
+        harness = Harness(cfg)
+
+        harness.controller.set_active_project(port, cfg["projects"][1])
+
+        self.assertEqual(cfg["active_project"], "two")
+        self.assertEqual(port.preflight, "not run")
+        self.assertEqual(port.status, "Active project: two")
+        self.assertEqual(harness.reload_count, 0)
         self.assertEqual(harness.save_count, 1)
 
     def test_set_active_project_does_not_save_unchanged_selection(self) -> None:

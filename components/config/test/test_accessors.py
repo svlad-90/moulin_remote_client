@@ -33,6 +33,7 @@ class ConfigAccessorBehaviorTests(unittest.TestCase):
                 {
                     "name": "board",
                     "label": "Board",
+                    "type": "custom",
                     "user": "u",
                     "host": "h",
                     "work_dir": "~/work/",
@@ -48,6 +49,7 @@ class ConfigAccessorBehaviorTests(unittest.TestCase):
         host = profiles.active_board_host(config)
 
         self.assertEqual(accessors.board_work_dir_for_config(config), accessors.board_work_dir(host))
+        self.assertEqual(accessors.board_type_for_config(config), accessors.board_type(host))
         self.assertEqual(
             accessors.board_artifacts_dir_for_config(config),
             accessors.board_artifacts_dir(accessors.board_work_dir(host)),

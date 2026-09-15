@@ -43,6 +43,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
             {
                 "name": "build",
                 "label": "Build",
+                "type": "gen5_x5h",
                 "user": "builder",
                 "host": "10.0.0.1",
                 "work_dir": "~/moulin-board-work",

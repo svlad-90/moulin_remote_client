@@ -107,19 +107,55 @@ class DialogWorkflowController:
         port.screen.timeout(250)
 
     def prompt(self, port: Any, label: str, current: str) -> str:
-        curses.echo()
+        value = current
+        cursor = len(value)
+        port.prompt_cancelled = False
         port.set_cursor(True)
         height, width = port.screen.getmaxyx()
+        row = height - 2
         prompt = ui_input_api.prompt_render(label, current, width)
-        port.add(height - 2, 0, prompt.clear_text)
-        port.add(height - 2, 0, prompt.visible_prompt)
         try:
-            curses.flushinp()
-            value = port.screen.getstr(height - 2, prompt.input_x).decode("utf-8")
-            return ui_input_api.prompt_value_or_current(value, current)
+            while True:
+                self.draw_prompt(port, row, width, prompt, value, cursor)
+                ch = port.read_key()
+                edit = ui_input_api.inline_edit_key_action(value, cursor, ch)
+                if edit.action == "noop":
+                    edit = ui_input_api.inline_edit_key_action(value, cursor, ch, port.read_queued_text(ch))
+                if edit.action == "save":
+                    return ui_input_api.prompt_value_or_current(value, current)
+                if edit.action == "cancel":
+                    port.prompt_cancelled = True
+                    return ""
+                if edit.action == "edit":
+                    value = edit.value
+                    cursor = edit.cursor
         finally:
-            curses.noecho()
             port.set_cursor(False)
+
+    def draw_prompt(
+        self,
+        port: Any,
+        row: int,
+        width: int,
+        prompt: ui_input_api.PromptRender,
+        value: str,
+        cursor: int,
+    ) -> None:
+        visible_width = max(0, width - 1)
+        input_x = max(0, min(prompt.input_x, visible_width))
+        input_width = max(0, visible_width - input_x)
+        cursor = min(max(0, cursor), len(value))
+        start = max(0, cursor - input_width + 1) if input_width else cursor
+        visible_value = value[start : start + input_width]
+        port.add(row, 0, prompt.clear_text)
+        port.add(row, 0, prompt.visible_prompt)
+        if input_width:
+            port.add(row, input_x, visible_value[:input_width])
+        try:
+            port.screen.move(row, min(input_x + cursor - start, max(0, width - 1)))
+        except curses.error:
+            pass
+        port.screen.refresh()
 
 
 def dialog_workflow_controller() -> DialogWorkflowController:

@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from components.host_config.api import host_fields as host_field_api
 from components.project_config.api import project_fields as project_field_api
+from components.ui.api import input as ui_input_api
 from components.ui.api import session as ui_session_api
 
 
@@ -86,12 +87,16 @@ class FieldActionController:
         port.status = str(plan["status"])
 
     def edit_remote_value(self, port: Any, remote: dict[str, Any], key: str, label: str) -> None:
+        value = port.prompt(label, str(remote.get(key, "")))
+        if ui_input_api.prompt_was_cancelled(port):
+            port.status = "Edit cancelled"
+            return
         try:
             plan = self.build_field_service.apply_labeled_field_update_for_config(
                 self.config,
                 remote,
                 key,
-                port.prompt(label, str(remote.get(key, ""))),
+                value,
                 label,
             )
         except ValueError as exc:
@@ -144,7 +149,7 @@ class FieldActionController:
         except ValueError as exc:
             port.status = str(exc)
             return
-        if plan["runtime_reload"]:
+        if plan["runtime_reload"] and getattr(port, "connection_state", "disconnected") == "connected":
             self.reload_runtime()
         if plan["preflight_reset"]:
             ui_session_api.reset_preflight(port)

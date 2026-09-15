@@ -1,0 +1,1 @@
+"""Board type adapters component."""

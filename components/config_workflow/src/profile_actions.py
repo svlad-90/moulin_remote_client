@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from components.config.api import profiles as config_profile_api
+from components.ui.api import input as ui_input_api
 from components.ui.api import session as ui_session_api
 
 
@@ -26,6 +27,11 @@ class ProfileActionController:
         self.reload_runtime = reload_runtime
         self.restore_project_menu_input = restore_project_menu_input
 
+    def _reload_runtime_if_build_connected(self, port: Any) -> None:
+        if getattr(port, "connection_state", "disconnected") != "connected":
+            return
+        self.reload_runtime()
+
     def delete_board_host(self, port: Any, host: dict[str, Any]) -> None:
         name = str(host.get("name", ""))
         if not self.confirm_action("Delete board host", f"Delete board host profile {name}."):
@@ -40,6 +46,9 @@ class ProfileActionController:
     def add_board_host(self, port: Any) -> None:
         default_name = config_profile_api.next_board_host_name(self.config.get("board_hosts", []))
         name = port.prompt("Board host profile name", default_name).strip()
+        if ui_input_api.prompt_was_cancelled(port):
+            port.status = "Board host add cancelled"
+            return
         if not name:
             port.status = "Board host add cancelled"
             return
@@ -75,6 +84,9 @@ class ProfileActionController:
     def add_remote(self, port: Any) -> None:
         default_name = config_profile_api.next_remote_name(self.config.get("remotes", []))
         name = port.prompt("Build host profile name", default_name).strip()
+        if ui_input_api.prompt_was_cancelled(port):
+            port.status = "Build host add cancelled"
+            return
         if not name:
             port.status = "Build host add cancelled"
             return
@@ -111,7 +123,7 @@ class ProfileActionController:
             port.status = str(exc)
             return
         if plan["runtime_reload"]:
-            self.reload_runtime()
+            self._reload_runtime_if_build_connected(port)
         if plan["preflight_reset"]:
             ui_session_api.reset_preflight(port)
         self.save_config(self.config)
@@ -121,7 +133,7 @@ class ProfileActionController:
     def set_active_project(self, port: Any, project: dict[str, Any]) -> None:
         plan = config_profile_api.apply_active_project_profile_for_config(self.config, project)
         if plan["runtime_reload"]:
-            self.reload_runtime()
+            self._reload_runtime_if_build_connected(port)
         if plan["preflight_reset"]:
             ui_session_api.reset_preflight(port)
         if plan["changed"]:
@@ -130,6 +142,9 @@ class ProfileActionController:
 
     def add_project_profile(self, port: Any) -> None:
         name = port.prompt("Project profile name", "project").strip()
+        if ui_input_api.prompt_was_cancelled(port):
+            port.status = "Project add cancelled"
+            return
         if not name:
             port.status = "Project add cancelled: empty name"
             return
@@ -146,7 +161,7 @@ class ProfileActionController:
             port.status = str(exc)
             return
         if plan["runtime_reload"]:
-            self.reload_runtime()
+            self._reload_runtime_if_build_connected(port)
         self.save_config(self.config)
         port.status = str(plan["status"])
 
@@ -168,7 +183,7 @@ class ProfileActionController:
             port.status = str(exc)
             return
         if plan["runtime_reload"]:
-            self.reload_runtime()
+            self._reload_runtime_if_build_connected(port)
         self.save_config(self.config)
         self.restore_project_menu_input()
         port.status = str(plan["status"])

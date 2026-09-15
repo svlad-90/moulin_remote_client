@@ -78,8 +78,11 @@ class FakePanelPort:
     def draw_box(self, top: int, left: int, height: int, width: int, title: str, attr: int | None = None) -> None:
         self.boxes.append((top, left, height, width, title, attr))
 
-    def draw_wrapped(self, row: int, _x: int, _width: int, _text: str, *, max_lines: int = 3) -> int:
-        return row + min(max_lines, 1)
+    def draw_wrapped(self, row: int, x: int, width: int, text: str, *, max_lines: int = 3) -> int:
+        lines = [text[index : index + width] for index in range(0, len(text), width)] or [""]
+        for offset, line in enumerate(lines[:max_lines]):
+            self.add(row + offset, x, line)
+        return row + min(max_lines, len(lines))
 
     def running_attr(self) -> int:
         return 1
@@ -118,6 +121,7 @@ def _job(*, output: list[str] | None = None) -> dict[str, Any]:
         "item_label": "Run product build",
         "output": deque(output or [], maxlen=1000),
         "process": None,
+        "finished": True,
     }
 
 
@@ -150,6 +154,22 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertTrue(any("Selected mappings: meta" in text for text in rendered))
         self.assertTrue(any("Pre-build sync: active" in text for text in rendered))
         self.assertTrue(any("Last exit: 0" in text for text in rendered))
+
+    def test_draw_details_panel_wraps_long_mapping_selection(self) -> None:
+        port = FakePanelPort()
+        port.mapping_selection_cache = [
+            "prod-devel-rcar-gen5.yaml",
+            "yocto-meta-xt-common",
+            "layers-meta-xt-dom0-gen5",
+            "layers-meta-xt-domd-gen5",
+        ]
+
+        panels.main_panels_controller().draw_details_panel(port, 0, 0, 12, 64, port.items[0])
+
+        rendered = [row[2] for row in port.rows]
+        mapping_lines = [text for text in rendered if "Selected mappings:" in text or "yocto-meta" in text or "layers-meta" in text]
+        self.assertGreaterEqual(len(mapping_lines), 2)
+        self.assertTrue(all(len(text) <= 60 for text in rendered))
 
     def test_draw_header_renders_configured_state(self) -> None:
         port = FakePanelPort()

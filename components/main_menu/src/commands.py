@@ -27,8 +27,8 @@ class MainMenuCommandItemsService:
         self.sync_command_workflow = sync_command_workflow
         self.board_command_workflow = board_command_workflow
 
-    def build_items(self) -> list[MenuItem]:
-        return [
+    def build_items(self, app: Any) -> list[MenuItem]:
+        items = [
             MenuItem(
                 "Build Docker image",
                 "build commands",
@@ -127,49 +127,9 @@ class MainMenuCommandItemsService:
                 lambda app: app.terminal_session_controller().open_board_shell(app),
                 allow_during_job=True,
             ),
-            MenuItem(
-                "Copy build artifacts",
-                "board commands",
-                "Copy configured build target artifacts from the build host project checkout to the board host artifacts directory.",
-                lambda app: ui_menu_api.command_preview(self.copy_build_artifacts_commands(app)),
-                lambda app: self.board_command_workflow.run_copy_build_artifacts(
-                    app.config,
-                    artifact_targets=getattr(app, "board_artifacts", "") or app.build_targets,
-                    build_params=app.build_params,
-                    runner=lambda title, commands: app.command_workflow_service().run_commands(app, title, commands),
-                ),
-                confirm=True,
-                requires_remote=True,
-                requires_project=True,
-            ),
-            MenuItem(
-                "Flash bootloaders",
-                "board commands",
-                "Deploy the bootloader flashing helper to the board host, enter flash mode, flash x5h_bootloaders.yaml, then switch the board to boot mode.",
-                lambda app: ui_menu_api.command_preview(
-                    self.board_command_workflow.flash_bootloaders_commands(app.config)
-                ),
-                lambda app: self.board_command_workflow.run_flash_bootloaders(
-                    app.config,
-                    runner=lambda title, commands: app.command_workflow_service().run_commands(app, title, commands),
-                ),
-                confirm=True,
-                allow_during_job=False,
-            ),
-            MenuItem(
-                "Flash UFS image",
-                "board commands",
-                "Deploy the UFS imager to the board host and flash artifacts/full_ufs.img.gz to UFS over /dev/GEN5_CONSOLE.",
-                lambda app: ui_menu_api.command_preview(
-                    self.board_command_workflow.flash_ufs_image_commands(app.config)
-                ),
-                lambda app: self.board_command_workflow.run_flash_ufs_image(
-                    app.config,
-                    runner=lambda title, commands: app.command_workflow_service().run_commands(app, title, commands),
-                ),
-                confirm=True,
-                allow_during_job=False,
-            ),
+        ]
+        items.extend(self.board_action_items(app))
+        items.extend([
             MenuItem(
                 "Stop board command",
                 "board commands",
@@ -188,7 +148,8 @@ class MainMenuCommandItemsService:
                 requires_remote=True,
                 requires_project=True,
             ),
-        ]
+        ])
+        return items
 
     def run_build_command(self, app: Any, title: str, command: list[str]) -> int:
         return app.command_workflow_service().run_build_command(
@@ -207,6 +168,41 @@ class MainMenuCommandItemsService:
             app.config,
             artifact_targets=getattr(app, "board_artifacts", "") or app.build_targets,
             build_params=app.build_params,
+        )
+
+    def board_action_items(self, app: Any) -> list[MenuItem]:
+        return [
+            MenuItem(
+                action.label,
+                "board commands",
+                action.description,
+                lambda app, action_id=action.action_id: ui_menu_api.command_preview(
+                    self.board_action_commands(app, action_id)
+                ),
+                lambda app, action_id=action.action_id: self.run_board_action(app, action_id),
+                confirm=action.confirm,
+                requires_remote=action.requires_remote,
+                requires_project=action.requires_project,
+                allow_during_job=action.allow_during_job,
+            )
+            for action in self.board_command_workflow.board_actions(app.config)
+        ]
+
+    def board_action_commands(self, app: Any, action_id: str) -> list[list[str]]:
+        return self.board_command_workflow.board_action_commands(
+            app.config,
+            action_id,
+            artifact_targets=getattr(app, "board_artifacts", "") or app.build_targets,
+            build_params=app.build_params,
+        )
+
+    def run_board_action(self, app: Any, action_id: str) -> Any:
+        return self.board_command_workflow.run_board_action(
+            app.config,
+            action_id,
+            artifact_targets=getattr(app, "board_artifacts", "") or app.build_targets,
+            build_params=app.build_params,
+            runner=lambda title, commands: app.command_workflow_service().run_commands(app, title, commands),
         )
 
 

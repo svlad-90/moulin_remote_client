@@ -9,6 +9,8 @@ from components.host_config_ui.api import board_screen_renderer as config_board_
 from components.host_config_ui.api import board_screen_state as config_board_screen_state_api
 from components.host_config.api import fields as config_field_api
 from components.ui.api import input as ui_input_api
+from components.ui.api import menu as ui_menu_api
+from components.ui.api import text as ui_text_api
 
 
 def run_board_host_configurations_screen(
@@ -107,14 +109,30 @@ def run_board_host_configurations_screen(
                     port.toggle_board_host_direct_copy(selected_host)
                 else:
                     field_action_controller.toggle_board_host_direct_copy(port, selected_host)
+            elif key == "type":
+                value = select_board_type(port, board_field_service, str(selected_host.get("type", "")))
+                if value is not None:
+                    if field_action_controller is None:
+                        port.apply_board_host_inline_value(selected_host, key, value)
+                    else:
+                        field_action_controller.apply_board_host_inline_value(port, selected_host, key, value)
             else:
                 screen_state.begin_inline_edit(key, str(selected_host.get(key, "")))
                 port.status = f"Editing {label}"
-        elif action["action"] == "toggle-direct-copy":
-            if field_action_controller is None:
-                port.toggle_board_host_direct_copy(selected_host)
-            else:
-                field_action_controller.toggle_board_host_direct_copy(port, selected_host)
+        elif action["action"] == "toggle-field-choice":
+            selected_key = screen_state.selected_field_key(fields)
+            if selected_key == "direct_copy":
+                if field_action_controller is None:
+                    port.toggle_board_host_direct_copy(selected_host)
+                else:
+                    field_action_controller.toggle_board_host_direct_copy(port, selected_host)
+            elif selected_key == "type":
+                value = select_board_type(port, board_field_service, str(selected_host.get("type", "")))
+                if value is not None:
+                    if field_action_controller is None:
+                        port.apply_board_host_inline_value(selected_host, selected_key, value)
+                    else:
+                        field_action_controller.apply_board_host_inline_value(port, selected_host, selected_key, value)
         elif action["action"] == "add":
             if profile_action_controller is None:
                 port.add_empty_board_host()
@@ -136,3 +154,59 @@ def run_board_host_configurations_screen(
             save_config(config)
             port.screen.timeout(250)
             return
+
+
+def select_board_type(
+    port: Any,
+    board_field_service: config_field_api.BoardHostFieldService,
+    current: str,
+) -> str | None:
+    options = board_field_service.available_board_type_options()
+    if not options:
+        port.status = "No board types available"
+        return None
+    values = [option["type"] for option in options]
+    index = values.index(current) if current in values else 0
+    port.screen.timeout(-1)
+    while True:
+        port.screen.clear()
+        height, width = port.screen.getmaxyx()
+        if height < 10 or width < 60:
+            port.add(0, 0, "Terminal is too small. Need at least 60x10.", port.warn_attr())
+            port.screen.refresh()
+            ch = port.read_key()
+            if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                port.status = "Board type selection cancelled"
+                return None
+            continue
+        index = ui_menu_api.clamp_index(index, len(options))
+        visible = max(1, height - 7)
+        scroll = ui_menu_api.list_scroll(index, len(options), visible)
+        port.draw_box(0, 0, height - 2, width, "Board type")
+        port.add(1, 2, "Select board behavior type:", port.accent_attr())
+        for offset, option in enumerate(options[scroll : scroll + visible]):
+            item_index = scroll + offset
+            selected = item_index == index
+            mark = "*" if option["type"] == current else " "
+            label = f"{mark} {option['type']}: {option['label']}"
+            attr = port.selected_attr() if selected else 0
+            port.add(3 + offset, 2, ui_text_api.fit_text(label, width - 4).ljust(width - 4), attr)
+        description = str(options[index].get("description", ""))
+        if description:
+            port.add(height - 4, 2, ui_text_api.fit_text(description, width - 4))
+        footer = "Up/Down: select | Enter: choose | q/Esc: cancel"
+        port.add(height - 2, 0, footer[:width], port.accent_attr())
+        port.add(height - 1, 0, port.status[:width].ljust(width), curses.A_REVERSE)
+        port.screen.refresh()
+        ch = port.read_key()
+        if (ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k")) and options:
+            index = ui_menu_api.move_index(index, len(options), -1)
+        elif (ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j")) and options:
+            index = ui_menu_api.move_index(index, len(options), 1)
+        elif ch in (10, 13):
+            value = options[index]["type"]
+            port.status = f"Board type: {value}"
+            return value
+        elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
+            port.status = "Board type selection cancelled"
+            return None

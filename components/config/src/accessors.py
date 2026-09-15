@@ -79,6 +79,10 @@ def board_work_dir(board_host: dict[str, Any]) -> str:
     return str(board_host.get("work_dir", "~/moulin-board-work")).strip().rstrip("/") or "~/moulin-board-work"
 
 
+def board_type(board_host: dict[str, Any]) -> str:
+    return str(board_host.get("type", "gen5_x5h")).strip() or "gen5_x5h"
+
+
 def board_artifacts_dir(board_work_dir_value: str) -> str:
     return str(PurePosixPath(board_work_dir_value) / "artifacts")
 
@@ -198,6 +202,10 @@ def remote_project_dir_for_config(config: dict[str, Any]) -> str:
 
 def board_work_dir_for_config(config: dict[str, Any]) -> str:
     return board_work_dir(config_profiles.active_board_host(config))
+
+
+def board_type_for_config(config: dict[str, Any]) -> str:
+    return board_type(config_profiles.active_board_host(config))
 
 
 def board_artifacts_dir_for_config(config: dict[str, Any]) -> str:

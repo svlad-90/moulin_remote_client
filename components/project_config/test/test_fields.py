@@ -97,8 +97,9 @@ class ProjectConfigFieldBehaviorTests(unittest.TestCase):
         self.assertEqual(fields.project_dir_field_update("project_dir", "proj"), ("proj", ""))
         self.assertEqual(fields.project_dir_field_update("git_url", "/mnt/storage/proj"), ("/mnt/storage/proj", ""))
 
-        for key in ("project_dir", "local_project_dir", "docker_image", "board_artifacts"):
+        for key in ("project_dir", "docker_image", "board_artifacts"):
             self.assertTrue(fields.project_runtime_reload_needed(key))
+        self.assertFalse(fields.project_runtime_reload_needed("local_project_dir"))
         self.assertFalse(fields.project_runtime_reload_needed("git_ref"))
 
         for key in ("project_dir", "git_url", "git_ref"):

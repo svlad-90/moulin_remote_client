@@ -51,6 +51,9 @@ class ProjectGitRefSelector:
                     apply_project_value(project, "git_ref", selected)
                     return
         value = port.prompt("Git branch/ref", str(project.get("git_ref", ""))).strip()
+        if ui_input_api.prompt_was_cancelled(port):
+            port.status = "Edit cancelled"
+            return
         apply_project_value(project, "git_ref", value)
 
     def select_git_branch(self, port: Any, branches: list[str], current: str) -> str | None:
@@ -92,7 +95,11 @@ class ProjectGitRefSelector:
                 index = ui_menu_api.move_index(index, len(choices), 1)
             elif ch in (10, 13) and choices:
                 if choices[index] == "<manual input>":
-                    return port.prompt("Git branch/ref", current).strip()
+                    value = port.prompt("Git branch/ref", current).strip()
+                    if ui_input_api.prompt_was_cancelled(port):
+                        port.status = "Edit cancelled"
+                        return None
+                    return value
                 return choices[index]
             elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
                 return None

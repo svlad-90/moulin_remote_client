@@ -7,6 +7,40 @@ from components.ui.api import menu
 from components.ui.api.menu import MenuItem
 
 
+def _item_enabled(item: MenuItem, **overrides: object) -> bool:
+    values = {
+        "active_job": None,
+        "board_job": None,
+        "board_host_has_ssh": True,
+        "board_connected": True,
+        "build_connected": True,
+        "remote_has_ssh": True,
+        "remote_has_project_dir": True,
+        "prepare_remote_project_needed": False,
+        "checkout_git_ref_needed": False,
+    }
+    values.update(overrides)
+    return menu.item_enabled(item, **values)
+
+
+def _disabled_reason(item: MenuItem, **overrides: object) -> str:
+    values = {
+        "active_job": None,
+        "board_job": None,
+        "board_host_user": "board",
+        "board_host_host": "host",
+        "board_connected": True,
+        "build_connected": True,
+        "remote_has_user": True,
+        "remote_has_host": True,
+        "remote_has_project_dir": True,
+        "prepare_remote_project_needed": False,
+        "checkout_git_ref_needed": False,
+    }
+    values.update(overrides)
+    return menu.disabled_reason(item, **values)
+
+
 class MenuModelBehaviorTests(unittest.TestCase):
     def test_menu_item_defaults_match_client_contract(self) -> None:
         item = MenuItem(
@@ -218,13 +252,24 @@ class MenuModelBehaviorTests(unittest.TestCase):
         build_item = MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True)
         stop_item = MenuItem("Stop running command", "build commands", "", lambda app: "", lambda app: None)
         active_job = {"item_label": "Regenerate Moulin/Ninja"}
+        connect_job = {"item_label": "Connect build host", "kind": "connect"}
 
-        self.assertFalse(menu.item_enabled(stop_item, active_job=None, board_job=None, board_host_has_ssh=True, board_connected=True, build_connected=True, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
-        self.assertTrue(menu.item_enabled(stop_item, active_job=active_job, board_job=None, board_host_has_ssh=True, board_connected=True, build_connected=True, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
-        self.assertFalse(menu.item_enabled(build_item, active_job=active_job, board_job=None, board_host_has_ssh=True, board_connected=True, build_connected=True, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
-        self.assertFalse(menu.item_enabled(copy_item, active_job=None, board_job=None, board_host_has_ssh=True, board_connected=False, build_connected=True, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
-        self.assertFalse(menu.item_enabled(copy_item, active_job=None, board_job=None, board_host_has_ssh=True, board_connected=True, build_connected=False, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
-        self.assertTrue(menu.item_enabled(copy_item, active_job=None, board_job=None, board_host_has_ssh=True, board_connected=True, build_connected=True, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
+        self.assertFalse(_item_enabled(stop_item, active_job=None))
+        self.assertFalse(_item_enabled(stop_item, active_job=connect_job))
+        self.assertTrue(_item_enabled(stop_item, active_job=active_job))
+        self.assertFalse(_item_enabled(build_item, active_job=active_job))
+        self.assertFalse(_item_enabled(copy_item, board_connected=False))
+        self.assertFalse(_item_enabled(copy_item, build_connected=False))
+        self.assertTrue(_item_enabled(copy_item))
+
+    def test_item_enabled_stops_only_stoppable_board_commands(self) -> None:
+        stop_item = MenuItem("Stop board command", "board commands", "", lambda app: "", lambda app: None)
+        board_connect_job = {"item_label": "Connect board host", "kind": "board-connect"}
+        board_command_job = {"item_label": "Flash UFS image"}
+
+        self.assertFalse(_item_enabled(stop_item, board_job=None))
+        self.assertFalse(_item_enabled(stop_item, board_job=board_connect_job))
+        self.assertTrue(_item_enabled(stop_item, board_job=board_command_job))
 
     def test_disabled_reason_preserves_current_messages(self) -> None:
         copy_item = MenuItem("Copy build artifacts", "board commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True)
@@ -236,24 +281,37 @@ class MenuModelBehaviorTests(unittest.TestCase):
             "set board SSH user first",
         )
         self.assertEqual(
-            menu.disabled_reason(copy_item, active_job=None, board_job=None, board_host_user="board", board_host_host="", board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_has_project_dir=False, prepare_remote_project_needed=False, checkout_git_ref_needed=False),
+            _disabled_reason(copy_item, board_host_host="", board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_has_project_dir=False),
             "set board SSH host first",
         )
         self.assertEqual(
-            menu.disabled_reason(copy_item, active_job=None, board_job=None, board_host_user="board", board_host_host="host", board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_has_project_dir=False, prepare_remote_project_needed=False, checkout_git_ref_needed=False),
+            _disabled_reason(copy_item, board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_has_project_dir=False),
             "connect to the board host first",
         )
         self.assertEqual(
-            menu.disabled_reason(copy_item, active_job=None, board_job=None, board_host_user="board", board_host_host="host", board_connected=True, build_connected=False, remote_has_user=True, remote_has_host=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False),
+            _disabled_reason(copy_item, build_connected=False),
             "connect to the build host first",
         )
         self.assertEqual(
-            menu.disabled_reason(board_shell, active_job=None, board_job=None, board_host_user="board", board_host_host="host", board_connected=False, build_connected=True, remote_has_user=True, remote_has_host=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False),
+            _disabled_reason(board_shell, board_connected=False),
             "connect to the board host first",
         )
         self.assertEqual(
-            menu.disabled_reason(build_item, active_job=None, board_job=None, board_host_user="board", board_host_host="host", board_connected=True, build_connected=True, remote_has_user=True, remote_has_host=True, remote_has_project_dir=True, prepare_remote_project_needed=True, checkout_git_ref_needed=False),
+            _disabled_reason(build_item, prepare_remote_project_needed=True),
             "remote project needs preparation",
+        )
+
+    def test_disabled_reason_treats_connect_jobs_as_no_stoppable_command(self) -> None:
+        build_stop = MenuItem("Stop running command", "build commands", "", lambda app: "", lambda app: None)
+        board_stop = MenuItem("Stop board command", "board commands", "", lambda app: "", lambda app: None)
+
+        self.assertEqual(
+            _disabled_reason(build_stop, active_job={"item_label": "Connect build host", "kind": "connect"}),
+            "no build or sync command is running",
+        )
+        self.assertEqual(
+            _disabled_reason(board_stop, board_job={"item_label": "Connect board host", "kind": "board-connect"}),
+            "no board command is running",
         )
 
     def test_selected_action_plan_reports_disabled_item(self) -> None:

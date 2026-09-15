@@ -12,6 +12,7 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
             [
                 ("Profile name", "name"),
                 ("Display label", "label"),
+                ("Board type", "type"),
                 ("SSH user", "user"),
                 ("SSH host", "host"),
                 ("Working dir", "work_dir"),
@@ -199,7 +200,18 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
                 selected_field_key="direct_copy",
                 space=True,
             ),
-            {"action": "toggle-direct-copy"},
+            {"action": "toggle-field-choice"},
+        )
+        self.assertEqual(
+            fields.configuration_screen_key_action(
+                focus="fields",
+                list_focus="hosts",
+                selected_exists=True,
+                fields_exist=True,
+                selected_field_key="type",
+                space=True,
+            ),
+            {"action": "toggle-field-choice"},
         )
         self.assertEqual(
             fields.configuration_screen_key_action(
@@ -236,6 +248,7 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
         host = {"user": ""}
 
         self.assertTrue(fields.board_host_field_enabled("name", host))
+        self.assertTrue(fields.board_host_field_enabled("type", host))
         self.assertTrue(fields.board_host_field_enabled("direct_copy", host))
         self.assertFalse(fields.board_host_field_enabled("host", host))
         self.assertEqual(fields.board_host_field_disabled_reason("host", host), "set SSH user first")
@@ -246,12 +259,15 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
 
     def test_board_host_field_hints_preserve_current_text(self) -> None:
         self.assertIn("board host profile", fields.board_host_field_hint("name"))
+        self.assertIn("gen5_x5h", fields.board_host_field_hint("type"))
         self.assertIn("auto-detect", fields.board_host_field_hint("console_device"))
         self.assertIn("Enter/Space toggles yes", fields.board_host_field_hint("direct_copy"))
         self.assertEqual(fields.board_host_field_hint("unknown"), "")
 
     def test_board_host_value_helpers_match_current_behavior(self) -> None:
         self.assertEqual(fields.normalize_board_host_field_value("label", "  Lab board  "), "Lab board")
+        self.assertEqual(fields.next_board_type_value(""), "gen5_x5h")
+        self.assertEqual(fields.next_board_type_value("unknown"), "gen5_x5h")
         for value in ("1", "true", "yes", "on", " YES "):
             self.assertEqual(fields.normalize_board_host_field_value("direct_copy", value), "yes")
             self.assertEqual(fields.next_direct_copy_value(value), "no")

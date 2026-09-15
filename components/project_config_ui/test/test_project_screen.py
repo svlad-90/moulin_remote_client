@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from components.project_config_ui.api import project_screen
 
@@ -248,6 +248,26 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
             self.assertEqual(len(saved), 1)
             self.assertEqual(port.screen.timeouts[-1], 250)
 
+    def test_run_project_configurations_screen_disconnected_does_not_load_remote_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            port = FakeProjectConfigPort([ord("q")])
+            remote_read = Mock(return_value="")
+
+            with patch("components.project_config_ui.src.project_screen.moulin_manifest_api.parameters_for_config") as parameters:
+                project_screen.run_project_configurations_screen(
+                    port,
+                    config_with_projects(),
+                    Path(tmpdir),
+                    remote_read_project_file=remote_read,
+                    manifest_cache={},
+                    default_moulin_manifest="missing.yaml",
+                    default_config_path=Path(tmpdir) / "config.json",
+                    save_config=lambda _config: None,
+                )
+
+            parameters.assert_not_called()
+            remote_read.assert_not_called()
+
     def test_run_project_configurations_screen_add_action_uses_port(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             port = FakeProjectConfigPort([ord("a"), ord("q")])
@@ -445,6 +465,7 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             keys = [curses.KEY_RIGHT] + [ord("j")] * 6 + [10, ord("q")]
             port = FakeProjectConfigPort(keys)
+            port.connection_state = "connected"
             settings = FakeProjectSettingsController()
             runtime_saves: list[dict[str, Any]] = []
 

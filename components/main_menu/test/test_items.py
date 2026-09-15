@@ -186,7 +186,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 manifest_cache={},
             )
             app = FakeApp(_config(app_dir))
-            command_items = builder.command_items.build_items()
+            command_items = builder.command_items.build_items(app)
             copy_item = next(item for item in command_items if item.label == "Copy build artifacts")
 
             copy_item.handler(app)

@@ -13,6 +13,7 @@ def board_host_fields() -> list[tuple[str, str]]:
     return [
         ("Profile name", "name"),
         ("Display label", "label"),
+        ("Board type", "type"),
         ("SSH user", "user"),
         ("SSH host", "host"),
         ("Working dir", "work_dir"),
@@ -170,8 +171,8 @@ def configuration_screen_key_action(
         if focus == list_focus:
             return {"action": "focus-fields"}
         return {"action": "enter-field"}
-    if space and selected_exists and focus == "fields" and selected_field_key == "direct_copy":
-        return {"action": "toggle-direct-copy"}
+    if space and selected_exists and focus == "fields" and selected_field_key in ("direct_copy", "type"):
+        return {"action": "toggle-field-choice"}
     if add:
         return {"action": "add"}
     if delete:
@@ -195,6 +196,14 @@ def normalize_board_host_field_value(key: str, value: str) -> str:
 
 def next_direct_copy_value(current: str) -> str:
     return host_fields.board_host_field_service().next_direct_copy_value(current)
+
+
+def next_board_type_value(current: str) -> str:
+    return host_fields.board_host_field_service().next_board_type_value(current)
+
+
+def available_board_type_options() -> list[dict[str, str]]:
+    return host_fields.board_host_field_service().available_board_type_options()
 
 
 def board_host_connection_reset_needed(key: str, host_name: str, active_board_host: str) -> bool:
@@ -408,4 +417,3 @@ def apply_remote_draft_create_for_config(config: dict[str, Any], draft: dict[str
         "connection_reset": True,
         "preflight_reset": True,
     }
-

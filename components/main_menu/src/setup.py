@@ -50,7 +50,7 @@ class MainMenuSetupItemsService:
             MenuItem(
                 "Project configurations",
                 "setup",
-                "Select and edit project-local build profile settings such as manifest, targets, parameters, Docker image, and local overlay.",
+                "Add, delete, select, and edit project profiles plus product-specific build settings, artifacts, and mappings.",
                 lambda app: f"Active project: {config_profile_api.active_project(app.config).get('label') or config_profile_api.active_project(app.config).get('name')}",
                 lambda app: app.config_workflow_controller().run_project_configurations_screen(app),
                 allow_during_job=True,

@@ -278,36 +278,29 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         self.assertIn("python3 -u ./flash_bootloaders.py --port /dev/GEN5_CONSOLE", argv[6][-1])
         self.assertIn("x5h_boot", argv[6][-1])
 
-    def test_flash_ufs_commands_from_config_match_low_level_builder(self) -> None:
+    def test_flash_ufs_commands_from_config_use_gen5_board_type_helper(self) -> None:
         config = sample_config()
         config["board_hosts"][0]["console_device"] = ""
         config["board_hosts"][0]["ufs_loadaddr"] = "0x50000000"
         config["board_hosts"][0]["ufs_buffersize"] = "0x4000000"
         config_profiles.normalize_board_host_profiles(config)
-        flash = self._flash_service()
         workflow = self._workflow_service()
 
-        argv = flash.flash_ufs_command_plan(
-            board_host=config_accessors.board_host_spec_for_config(config),
-            work_dir=config_accessors.board_work_dir_for_config(config),
-            artifacts_dir=config_accessors.board_artifacts_dir_for_config(config),
-            console=config_accessors.board_console_device_for_config(config),
-            loadaddr=config_accessors.board_ufs_loadaddr_for_config(config),
-            buffersize=config_accessors.board_ufs_buffersize_for_config(config),
-            tool=client.XT_IMAGER_TOOL,
-        )
+        argv = workflow.flash_ufs_image_commands(config)
 
-        self.assertEqual(
-            argv,
-            workflow.flash_ufs_image_commands(config),
-        )
-        self.assertEqual(len(argv), 4)
-        script = argv[3][-1]
+        self.assertEqual(len(argv), 6)
+        self.assertIn("xt-imager.py", argv[1][-1])
+        self.assertIn("xt-imager.py", argv[2][-1])
+        self.assertIn("gen5_x5h_flash_ufs.py", argv[3][-1])
+        self.assertIn("gen5_x5h_flash_ufs.py", argv[4][-1])
+        script = argv[5][-1]
         self.assertIn("x5h_off", script)
         self.assertIn("x5h_on", script)
         self.assertIn("x5h_boot", script)
         self.assertIn("console=$(ls -1 /dev/GEN5_CONSOLE*", script)
-        self.assertIn("To continue, type exactly: FLASH UFS 1", script)
+        self.assertIn("python3 /srv/tftp/vgon/gen5_x5h_flash_ufs.py", script)
+        self.assertIn("--tool /srv/tftp/vgon/xt-imager.py", script)
+        self.assertNotIn("python3 -c", script)
         self.assertIn("--loadaddr", script)
         self.assertIn("0x50000000", script)
         self.assertIn("--buffersize", script)

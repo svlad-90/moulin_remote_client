@@ -56,6 +56,7 @@ class JobsBehaviorTests(unittest.TestCase):
         self.assertIsNone(job["process"])
         self.assertEqual(job["current_command"], "")
         self.assertIsNone(job["rc"])
+        self.assertFalse(job["finished"])
         self.assertTrue(hasattr(job["output_lock"], "acquire"))
 
     def test_create_command_job_supports_connect_metadata(self) -> None:
@@ -105,12 +106,14 @@ class JobsBehaviorTests(unittest.TestCase):
         self.assertEqual(board["started_at"], 13.5)
         self.assertEqual(board["timeout"], 10.0)
 
-    def test_job_running_detects_live_process(self) -> None:
+    def test_job_running_tracks_active_sequence_until_finished(self) -> None:
         running = {"process": FakeProcess(None)}
-        stopped = {"process": FakeProcess(0)}
+        between_steps = {"process": FakeProcess(0)}
+        finished = {"process": FakeProcess(0), "finished": True}
 
         self.assertTrue(jobs.job_running(running))
-        self.assertFalse(jobs.job_running(stopped))
+        self.assertTrue(jobs.job_running(between_steps))
+        self.assertFalse(jobs.job_running(finished))
         self.assertFalse(jobs.job_running(None))
 
     def test_process_helpers_use_duck_typed_process_contract(self) -> None:
@@ -148,7 +151,7 @@ class JobsBehaviorTests(unittest.TestCase):
 
     def test_any_job_running_uses_job_state(self) -> None:
         self.assertFalse(jobs.any_job_running([]))
-        self.assertFalse(jobs.any_job_running([{"process": FakeProcess(0)}]))
+        self.assertFalse(jobs.any_job_running([{"process": FakeProcess(0), "finished": True}]))
         self.assertTrue(jobs.any_job_running([{"process": FakeProcess(0)}, {"process": FakeProcess(None)}]))
 
     def test_stop_running_preview_matches_current_messages(self) -> None:

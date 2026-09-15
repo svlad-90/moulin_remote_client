@@ -9,6 +9,7 @@ from components.config.api import accessors as config_accessor_api
 from components.config.api import profiles as config_profile_api
 from components.project_config.api import project_settings_service as config_project_settings_api
 from components.build_runtime.api import runtime as config_runtime_api
+from components.ui.api import input as ui_input_api
 from components.ui.api import session as ui_session_api
 
 
@@ -110,19 +111,26 @@ class ProjectSettingsActionController:
             "Local overlay dir",
             str(config_profile_api.active_project(self.config).get("local_project_dir", "")),
         )
+        if ui_input_api.prompt_was_cancelled(port):
+            port.status = "Edit cancelled"
+            return
         self.settings_service.apply_local_project_dir(value)
 
     def _edit_git_url(self, port: Any) -> None:
-        plan = self.settings_service.apply_git_url(
-            port.prompt("Project Git URL", config_accessor_api.project_git_url_for_config(self.config))
-        )
+        value = port.prompt("Project Git URL", config_accessor_api.project_git_url_for_config(self.config))
+        if ui_input_api.prompt_was_cancelled(port):
+            port.status = "Edit cancelled"
+            return
+        plan = self.settings_service.apply_git_url(value)
         if plan["preflight_reset"]:
             ui_session_api.reset_preflight(port)
 
     def _edit_docker_image(self, port: Any) -> None:
-        docker_image = self.settings_service.apply_docker_image(
-            port.prompt("Docker image name", port.docker_image)
-        )
+        value = port.prompt("Docker image name", port.docker_image)
+        if ui_input_api.prompt_was_cancelled(port):
+            port.status = "Edit cancelled"
+            return
+        docker_image = self.settings_service.apply_docker_image(value)
         if docker_image is not None:
             port.docker_image = docker_image
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from components.host_config.api import fields as config_field_api
+from components.ui.api import input as ui_input_api
 
 
 class RemoteDraftWorkflowService:
@@ -60,6 +61,9 @@ class RemoteDraftWorkflowService:
         kind = str(action["kind"])
         current = str(self.draft[kind])
         value = port.prompt(str(action["label"]), current).strip()
+        if ui_input_api.prompt_was_cancelled(port):
+            port.status = "Edit cancelled"
+            return
         self.draft[kind] = value
         if kind == "name" and not self.draft["label"]:
             self.draft["label"] = value

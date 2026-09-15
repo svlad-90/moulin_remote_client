@@ -91,13 +91,15 @@ def run_project_configurations_screen(
     while True:
         state = screen_state.state
         editing_cursor_yx = None
-        params = moulin_manifest_api.parameters_for_config(
-            config,
-            app_dir=app_dir,
-            remote_read_project_file=remote_read_project_file,
-            cache=manifest_cache,
-            default_moulin_manifest=default_moulin_manifest,
-        )
+        params = []
+        if getattr(port, "connection_state", "disconnected") == "connected":
+            params = moulin_manifest_api.parameters_for_config(
+                config,
+                app_dir=app_dir,
+                remote_read_project_file=remote_read_project_file,
+                cache=manifest_cache,
+                default_moulin_manifest=default_moulin_manifest,
+            )
         port.screen.clear()
         height, width = port.screen.getmaxyx()
         if height < 22 or width < 90:

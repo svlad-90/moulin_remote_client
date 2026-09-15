@@ -1,0 +1,1 @@
+"""Board type tests."""

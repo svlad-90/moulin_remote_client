@@ -34,7 +34,7 @@ class ProjectFieldService:
         return project_name or value, projects_dir
 
     def runtime_reload_needed(self, key: str) -> bool:
-        return key in ("project_dir", "local_project_dir", "docker_image", "board_artifacts")
+        return key in ("project_dir", "docker_image", "board_artifacts")
 
     def preflight_reset_needed(self, key: str) -> bool:
         return key in ("project_dir", "git_url", "git_ref")

@@ -193,6 +193,33 @@ class FieldActionControllerTests(unittest.TestCase):
         self.assertEqual(port.status, "project_dir updated")
         self.assertEqual(harness.save_count, 1)
 
+    def test_project_inline_update_disconnected_saves_without_runtime_reload(self) -> None:
+        cfg = config()
+        port = FakeFieldPort()
+        port.connection_state = "disconnected"
+        harness = Harness(cfg)
+
+        harness.controller.apply_project_inline_value(port, cfg["projects"][0], "project_dir", " meta-prod ")
+
+        self.assertEqual(cfg["projects"][0]["project_dir"], "meta-prod")
+        self.assertEqual(harness.reload_count, 0)
+        self.assertEqual(port.preflight, "not run")
+        self.assertEqual(port.status, "project_dir updated")
+        self.assertEqual(harness.save_count, 1)
+
+    def test_project_inline_local_overlay_dir_saves_without_runtime_reload(self) -> None:
+        cfg = config()
+        port = FakeFieldPort()
+        harness = Harness(cfg)
+
+        harness.controller.apply_project_inline_value(port, cfg["projects"][0], "local_project_dir", " workspace/project-overlay ")
+
+        self.assertEqual(cfg["projects"][0]["local_project_dir"], "workspace/project-overlay")
+        self.assertEqual(harness.reload_count, 0)
+        self.assertEqual(port.preflight, "ok")
+        self.assertEqual(port.status, "local_project_dir updated")
+        self.assertEqual(harness.save_count, 1)
+
     def test_project_inline_docker_image_updates_runtime_value_without_preflight_reset(self) -> None:
         cfg = config()
         port = FakeFieldPort()

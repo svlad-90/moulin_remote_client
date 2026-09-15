@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from components.board_types.api import registry as board_type_registry_api
 from components.config.api import accessors
 from components.config.api import profiles as config_profiles
 
@@ -20,8 +21,30 @@ class BoardHostFieldService:
     def next_direct_copy_value(self, current: str) -> str:
         return "no" if current.strip().lower() in {"1", "true", "yes", "on"} else "yes"
 
+    def available_board_type_options(self) -> list[dict[str, str]]:
+        return [
+            {
+                "type": adapter.type_id,
+                "label": adapter.label or adapter.type_id,
+                "description": adapter.description,
+            }
+            for adapter in board_type_registry_api.board_type_registry().adapters()
+        ]
+
+    def available_board_types(self) -> list[str]:
+        return [option["type"] for option in self.available_board_type_options()]
+
+    def next_board_type_value(self, current: str) -> str:
+        board_types = self.available_board_types()
+        if not board_types:
+            return "gen5_x5h"
+        clean_current = current.strip()
+        if clean_current not in board_types:
+            return board_types[0]
+        return board_types[(board_types.index(clean_current) + 1) % len(board_types)]
+
     def connection_reset_needed(self, key: str, host_name: str, active_board_host: str) -> bool:
-        return key in ("user", "host", "work_dir") and str(host_name) == str(active_board_host)
+        return key in ("type", "user", "host", "work_dir") and str(host_name) == str(active_board_host)
 
     def apply_inline_field_update_for_config(
         self,
@@ -51,7 +74,17 @@ class BoardHostFieldService:
         }
 
     def field_enabled(self, key: str, host: dict[str, Any]) -> bool:
-        if key in ("name", "label", "user", "work_dir", "console_device", "ufs_loadaddr", "ufs_buffersize", "direct_copy"):
+        if key in (
+            "name",
+            "label",
+            "type",
+            "user",
+            "work_dir",
+            "console_device",
+            "ufs_loadaddr",
+            "ufs_buffersize",
+            "direct_copy",
+        ):
             return True
         if key == "host":
             return bool(str(host.get("user", "")).strip())
@@ -66,6 +99,7 @@ class BoardHostFieldService:
         hints = {
             "name": "Unique local board host profile id. Renaming an active profile preserves active selection.",
             "label": "Display label shown in the main client header.",
+            "type": "Enter/Space selects board type. Available: " + ", ".join(self.available_board_types()),
             "user": "SSH user for the board access host.",
             "host": "SSH host name or IP address for board access.",
             "work_dir": "Working directory on the board host for copied artifacts and deployed helper scripts.",

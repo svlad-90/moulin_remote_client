@@ -11,6 +11,7 @@ def empty_host_profile(name: str = "") -> dict[str, str]:
     return {
         "name": name,
         "label": name,
+        "type": "gen5_x5h",
         "user": "",
         "host": "",
         "work_dir": "~/moulin-board-work",
@@ -377,6 +378,7 @@ def normalize_board_host_profiles(config: dict[str, Any]) -> None:
     for index, host in enumerate(hosts):
         host.setdefault("name", str(host.get("label") or f"board-{index + 1}"))
         host.setdefault("label", str(host.get("name") or f"board-{index + 1}"))
+        host.setdefault("type", "gen5_x5h")
         host.setdefault("user", "")
         host.setdefault("host", "")
         host.setdefault("work_dir", "~/moulin-board-work")

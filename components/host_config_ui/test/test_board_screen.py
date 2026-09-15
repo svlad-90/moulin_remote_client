@@ -4,6 +4,7 @@ import unittest
 from typing import Any
 
 from components.host_config_ui.api import board_screen
+from components.host_config_ui.src import board_screen as board_screen_src
 
 
 class FakeScreen:
@@ -135,6 +136,14 @@ class FakeFieldActionController:
         self.toggle_calls.append(str(host.get("name", "")))
 
 
+class FakeBoardTypeService:
+    def __init__(self, options: list[dict[str, str]]) -> None:
+        self.options = options
+
+    def available_board_type_options(self) -> list[dict[str, str]]:
+        return self.options
+
+
 def config_with_board_hosts() -> dict[str, Any]:
     return {
         "board_hosts": [
@@ -225,8 +234,62 @@ class BoardHostConfigurationScreenControllerTests(unittest.TestCase):
         self.assertEqual(controller.inline_calls, [("board-a", "label", "Board AX")])
         self.assertEqual(config["board_hosts"][0]["label"], "Board AX")
 
+    def test_run_board_host_configurations_screen_selects_board_type_from_registry(self) -> None:
+        port = FakeBoardConfigPort([ord("l"), ord("j"), ord("j"), ord(" "), 10, ord("q")])
+        config = config_with_board_hosts()
+        config["board_hosts"][0]["type"] = "unknown"
+
+        board_screen.run_board_host_configurations_screen(
+            port,
+            config,
+            save_config=lambda _config: None,
+        )
+
+        self.assertEqual(port.updated_fields, [("board-a", "type", "gen5_x5h")])
+        self.assertEqual(config["board_hosts"][0]["type"], "gen5_x5h")
+
+    def test_run_board_host_configurations_screen_uses_field_action_controller_for_board_type(self) -> None:
+        port = FakeBoardConfigPort([ord("l"), ord("j"), ord("j"), ord(" "), 10, ord("q")])
+        controller = FakeFieldActionController()
+        config = config_with_board_hosts()
+        config["board_hosts"][0]["type"] = "unknown"
+
+        board_screen.run_board_host_configurations_screen(
+            port,
+            config,
+            save_config=lambda _config: None,
+            field_action_controller=controller,
+        )
+
+        self.assertEqual(controller.inline_calls, [("board-a", "type", "gen5_x5h")])
+        self.assertEqual(port.updated_fields, [])
+
+    def test_select_board_type_uses_list_navigation(self) -> None:
+        port = FakeBoardConfigPort([ord("j"), 10])
+        service = FakeBoardTypeService([
+            {"type": "gen5_x5h", "label": "GEN5 X5H", "description": "Default board"},
+            {"type": "other_board", "label": "Other Board", "description": "Other workflow"},
+        ])
+
+        result = board_screen_src.select_board_type(port, service, "gen5_x5h")  # type: ignore[arg-type]
+
+        self.assertEqual(result, "other_board")
+        self.assertEqual(port.status, "Board type: other_board")
+        self.assertTrue(any("other_board" in row[2] for row in port.rows))
+
+    def test_select_board_type_can_cancel(self) -> None:
+        port = FakeBoardConfigPort([27])
+        service = FakeBoardTypeService([
+            {"type": "gen5_x5h", "label": "GEN5 X5H", "description": "Default board"},
+        ])
+
+        result = board_screen_src.select_board_type(port, service, "gen5_x5h")  # type: ignore[arg-type]
+
+        self.assertIsNone(result)
+        self.assertEqual(port.status, "Board type selection cancelled")
+
     def test_run_board_host_configurations_screen_toggles_direct_copy(self) -> None:
-        port = FakeBoardConfigPort([ord("l"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord(" "), ord("q")])
+        port = FakeBoardConfigPort([ord("l"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord(" "), ord("q")])
 
         board_screen.run_board_host_configurations_screen(
             port,
@@ -237,7 +300,7 @@ class BoardHostConfigurationScreenControllerTests(unittest.TestCase):
         self.assertEqual(port.toggle_calls, ["board-a"])
 
     def test_run_board_host_configurations_screen_uses_field_action_controller_for_direct_copy(self) -> None:
-        port = FakeBoardConfigPort([ord("l"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord(" "), ord("q")])
+        port = FakeBoardConfigPort([ord("l"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord(" "), ord("q")])
         controller = FakeFieldActionController()
 
         board_screen.run_board_host_configurations_screen(

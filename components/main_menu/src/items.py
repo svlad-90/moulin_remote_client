@@ -63,7 +63,7 @@ class MainMenuBuilder:
 
     def build_items(self, app: Any) -> list[MenuItem]:
         items = self.setup_items.build_items(app)
-        items.extend(self.command_items.build_items())
+        items.extend(self.command_items.build_items(app))
         return items
 
 

@@ -111,6 +111,19 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "Copy build artifacts")
         self.assertIn("full_ufs.img.gz: full_ufs.img.gz", calls[0][1][0][2])
 
+    def test_board_type_adapter_exposes_current_builtin_actions(self) -> None:
+        config = sample_config()
+        config_profiles.normalize_board_host_profiles(config)
+        service = self._service()
+
+        actions = service.board_actions(config)
+
+        self.assertEqual(
+            [action.action_id for action in actions],
+            ["copy_build_artifacts", "flash_bootloaders", "flash_ufs_image"],
+        )
+        self.assertEqual([action.label for action in actions], ["Copy build artifacts", "Flash bootloaders", "Flash UFS image"])
+
     def test_flash_services_match_command_builders(self) -> None:
         config = sample_config()
         config_profiles.normalize_board_host_profiles(config)
@@ -122,9 +135,11 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(len(bootloaders), 7)
         self.assertIn("x5h_flash", bootloaders[3][-1])
         self.assertIn("python3 -u ./flash_bootloaders.py", bootloaders[6][-1])
-        self.assertEqual(len(ufs), 4)
-        self.assertIn("x5h_boot", ufs[3][-1])
-        self.assertIn("XT_FLASH_TOOL", ufs[3][-1])
+        self.assertEqual(len(ufs), 6)
+        self.assertIn("gen5_x5h_flash_ufs.py", ufs[3][-1])
+        self.assertIn("gen5_x5h_flash_ufs.py", ufs[4][-1])
+        self.assertIn("x5h_boot", ufs[5][-1])
+        self.assertIn("python3 /srv/tftp/vgon/gen5_x5h_flash_ufs.py", ufs[5][-1])
 
     def test_workflow_runs_flash_scenarios_with_titles(self) -> None:
         config = sample_config()

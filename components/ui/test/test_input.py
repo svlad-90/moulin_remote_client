@@ -55,6 +55,13 @@ class InputBehaviorTests(unittest.TestCase):
         self.assertEqual(ui_input.prompt_value_or_current(" next ", "current"), "next")
         self.assertEqual(ui_input.prompt_value_or_current("   ", "current"), "current")
 
+    def test_prompt_was_cancelled_reads_port_flag(self) -> None:
+        class Port:
+            prompt_cancelled = True
+
+        self.assertTrue(ui_input.prompt_was_cancelled(Port()))
+        self.assertFalse(ui_input.prompt_was_cancelled(object()))
+
     def test_inline_edit_key_action_handles_save_cancel_and_cursor_keys(self) -> None:
         self.assertEqual(ui_input.inline_edit_key_action("abc", 2, 10).action, "save")
         self.assertEqual(ui_input.inline_edit_key_action("abc", 2, 27).action, "cancel")

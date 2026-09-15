@@ -147,8 +147,9 @@ class MainPanelsController:
 
         selection = ", ".join(port.mapping_selection_cache) or "none"
         if row < top + height - 3:
-            port.add(row, x, f"Selected mappings: {selection}"[:inner])
-            row += 1
+            reserved_rows = 2 if item.label in {"Build Docker image", "Regenerate Moulin/Ninja", "Run product build"} else 1
+            available_rows = max(1, top + height - reserved_rows - row)
+            row = port.draw_wrapped(row, x, inner, f"Selected mappings: {selection}", max_lines=available_rows)
         if item.label in {"Build Docker image", "Regenerate Moulin/Ninja", "Run product build"} and row < top + height - 2:
             mapping_status = port.mapping_status_snapshot()
             port.add(row, x, f"Pre-build sync: {mapping_status['text']}"[:inner], port.role_attr(mapping_status["role"]))
