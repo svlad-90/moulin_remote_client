@@ -10,6 +10,7 @@ from components.board.api import transfer as board_transfer_api
 from components.board.api import workflow as board_workflow_api
 from components.config.api import accessors as config_accessors
 from components.config.api import profiles as config_profiles
+from components.moulin.api import manifest as moulin_manifest_api
 
 
 def sample_config() -> dict[str, object]:
@@ -224,6 +225,7 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         self.assertEqual(argv[0][:2], ["bash", "-lc"])
         self.assertIn("No board artifacts configured", argv[0][2])
 
+    @unittest.skipUnless(moulin_manifest_api.yaml_available(), "PyYAML is not installed")
     def test_copy_build_artifacts_from_config_uses_manifest_specs(self) -> None:
         config = sample_copy_config()
         config_profiles.normalize_remote_profiles(config)

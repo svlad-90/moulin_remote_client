@@ -8,6 +8,7 @@ import moulin_remote_client as client
 from components.board.api import workflow
 from components.board.api.session import board_session_command_service
 from components.config.api import profiles as config_profiles
+from components.moulin.api import manifest as moulin_manifest_api
 
 from components.board.test.test_commands import sample_config, sample_copy_config
 
@@ -63,6 +64,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
             ["ssh", "-t", "testrpi5@10.13.64.242"],
         )
 
+    @unittest.skipUnless(moulin_manifest_api.yaml_available(), "PyYAML is not installed")
     def test_copy_build_artifacts_service_owns_config_use_case(self) -> None:
         config = sample_copy_config()
         config_profiles.normalize_remote_profiles(config)
