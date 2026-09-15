@@ -1,0 +1,1 @@
+"""Board command component tests."""

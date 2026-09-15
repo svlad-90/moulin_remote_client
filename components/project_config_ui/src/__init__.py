@@ -1,0 +1,1 @@
+"""Project configuration UI implementation."""

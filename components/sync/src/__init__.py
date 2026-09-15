@@ -1,0 +1,1 @@
+"""Sync component implementation."""

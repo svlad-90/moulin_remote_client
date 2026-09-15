@@ -1,0 +1,292 @@
+from __future__ import annotations
+
+import unittest
+
+import moulin_remote_client as client
+from components.ui.api import menu
+from components.ui.api.menu import MenuItem
+
+
+class MenuModelBehaviorTests(unittest.TestCase):
+    def test_menu_item_defaults_match_client_contract(self) -> None:
+        item = MenuItem(
+            "Open",
+            "setup",
+            "Open setup.",
+            lambda app: "preview",
+            lambda app: None,
+        )
+
+        self.assertIsInstance(item, client.MenuItem)
+        self.assertFalse(item.confirm)
+        self.assertFalse(item.requires_remote)
+        self.assertFalse(item.requires_ssh)
+        self.assertFalse(item.requires_project)
+        self.assertFalse(item.allow_during_job)
+        self.assertEqual(item.preview(None), "preview")
+
+    def test_menu_item_flags_are_preserved(self) -> None:
+        item = MenuItem(
+            "Run",
+            "commands",
+            "Run command.",
+            lambda app: "preview",
+            lambda app: None,
+            confirm=True,
+            requires_remote=True,
+            requires_ssh=True,
+            requires_project=True,
+            allow_during_job=True,
+        )
+
+        self.assertTrue(item.confirm)
+        self.assertTrue(item.requires_remote)
+        self.assertTrue(item.requires_ssh)
+        self.assertTrue(item.requires_project)
+        self.assertTrue(item.allow_during_job)
+
+    def test_item_job_slot_matches_current_menu_group_policy(self) -> None:
+        self.assertEqual(menu.item_job_slot(MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None)), "build")
+        self.assertEqual(menu.item_job_slot(MenuItem("Sync mapped files", "sync", "", lambda app: "", lambda app: None)), "build")
+        self.assertEqual(menu.item_job_slot(MenuItem("Connect build host", "build host session", "", lambda app: "", lambda app: None)), "build")
+        self.assertEqual(menu.item_job_slot(MenuItem("Flash UFS image", "board commands", "", lambda app: "", lambda app: None)), "board")
+        self.assertEqual(menu.item_job_slot(MenuItem("Connect board host", "board host session", "", lambda app: "", lambda app: None)), "board")
+        self.assertIsNone(menu.item_job_slot(MenuItem("Project configurations", "setup", "", lambda app: "", lambda app: None)))
+
+    def test_job_lookup_helpers_match_current_shape(self) -> None:
+        active = {"item_label": "Run product build"}
+        board = {"item_label": "Flash UFS image"}
+        item = MenuItem("Flash UFS image", "board commands", "", lambda app: "", lambda app: None)
+
+        self.assertIs(menu.job_for_item(item, [active, board]), board)
+        self.assertIs(menu.active_job_for_slot("build", active_job=active, board_job=board), active)
+        self.assertIs(menu.active_job_for_slot("board", active_job=active, board_job=board), board)
+        self.assertIsNone(menu.active_job_for_slot(None, active_job=active, board_job=board))
+        self.assertIs(
+            menu.display_job_for_item(item, active_job=active, board_job=board, last_board_job=None, last_job=None),
+            board,
+        )
+        self.assertIs(
+            menu.display_job_for_item(item, active_job=None, board_job=None, last_board_job=board, last_job=active),
+            board,
+        )
+        self.assertIsNone(
+            menu.display_job_for_item(
+                MenuItem("Other", "board commands", "", lambda app: "", lambda app: None),
+                active_job=None,
+                board_job=None,
+                last_board_job=board,
+                last_job=active,
+            )
+        )
+
+    def test_menu_rows_and_scroll_match_current_draw_policy(self) -> None:
+        items = [
+            MenuItem("Remote configurations", "setup", "", lambda app: "", lambda app: None),
+            MenuItem("Connect build host", "build host session", "", lambda app: "", lambda app: None),
+            MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None),
+        ]
+
+        rows = menu.menu_rows(items, ["Remote configurations", "Disconnect build host", "Run product build"])
+
+        self.assertEqual(
+            rows,
+            [
+                ("SETUP", None),
+                ("1. Remote configurations", 0),
+                ("", None),
+                ("BUILD HOST SESSION", None),
+                ("2. Disconnect build host", 1),
+                ("", None),
+                ("BUILD COMMANDS", None),
+                ("3. Run product build", 2),
+            ],
+        )
+        self.assertEqual(menu.selected_menu_row(rows, 2), 7)
+        self.assertEqual(menu.clamp_menu_scroll(rows, selected=2, scroll=0, visible_rows=4), 4)
+        self.assertEqual(menu.clamp_menu_scroll(rows, selected=0, scroll=3, visible_rows=4), 1)
+        self.assertEqual(menu.clamp_menu_scroll(rows, selected=1, scroll=3, visible_rows=4), 3)
+
+    def test_command_preview_matches_current_menu_preview_shape(self) -> None:
+        self.assertEqual(menu.command_preview([]), "no commands")
+        self.assertEqual(
+            menu.command_preview(
+                [
+                    ["ssh", "host", "echo hello"],
+                    ["bash", "-lc", "two words"],
+                    ["python3", "tool.py"],
+                    ["ignored"],
+                ]
+            ),
+            "ssh host 'echo hello'\nbash -lc 'two words'\npython3 tool.py",
+        )
+
+    def test_selected_action_guard_matches_current_run_selected_prechecks(self) -> None:
+        item = MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None)
+
+        self.assertEqual(
+            menu.selected_action_guard(
+                item,
+                action_running=True,
+                item_running=False,
+                enabled=True,
+                disabled_status="disabled",
+            ),
+            {"allowed": False, "status": "Another action is already running"},
+        )
+        self.assertEqual(
+            menu.selected_action_guard(
+                item,
+                action_running=False,
+                item_running=True,
+                enabled=True,
+                disabled_status="disabled",
+            ),
+            {"allowed": False, "status": "Command is already running; live log is shown in Logs"},
+        )
+        self.assertEqual(
+            menu.selected_action_guard(
+                item,
+                action_running=False,
+                item_running=False,
+                enabled=False,
+                disabled_status="connect to the build host first",
+            ),
+            {"allowed": False, "status": "connect to the build host first"},
+        )
+        self.assertEqual(
+            menu.selected_action_guard(
+                item,
+                action_running=False,
+                item_running=False,
+                enabled=True,
+                disabled_status="disabled",
+            ),
+            {"allowed": True, "status": ""},
+        )
+
+    def test_selection_helpers_match_current_navigation_policy(self) -> None:
+        self.assertEqual(menu.clamp_index(3, 0), 0)
+        self.assertEqual(menu.clamp_index(-2, 5), 0)
+        self.assertEqual(menu.clamp_index(9, 5), 4)
+        self.assertEqual(menu.clamp_index(2, 5), 2)
+
+        self.assertEqual(menu.move_index(0, 0, 1), 0)
+        self.assertEqual(menu.move_index(0, 3, -1), 2)
+        self.assertEqual(menu.move_index(2, 3, 1), 0)
+        self.assertEqual(menu.move_index(1, 3, 1), 2)
+
+        self.assertEqual(menu.list_scroll(index=0, count=10, visible=4), 0)
+        self.assertEqual(menu.list_scroll(index=3, count=10, visible=4), 0)
+        self.assertEqual(menu.list_scroll(index=4, count=10, visible=4), 1)
+        self.assertEqual(menu.list_scroll(index=9, count=10, visible=4), 6)
+        self.assertEqual(menu.list_scroll(index=9, count=3, visible=10), 0)
+
+        self.assertEqual(menu.move_selection(0, [], 1), 0)
+        self.assertEqual(menu.move_selection(0, [False, True, False], 1), 1)
+        self.assertEqual(menu.move_selection(2, [True, False, True], 1), 0)
+        self.assertEqual(menu.move_selection(1, [False, False, False], 1), 2)
+        self.assertEqual(menu.move_selection(0, [False, False, False], -1), 2)
+
+        self.assertEqual(menu.nearest_enabled_selection(2, []), 0)
+        self.assertEqual(menu.nearest_enabled_selection(2, [False, True, False, True]), 3)
+        self.assertEqual(menu.nearest_enabled_selection(2, [False, True, False, False]), 1)
+        self.assertEqual(menu.nearest_enabled_selection(1, [False, False]), 1)
+
+        self.assertEqual(menu.normalize_selection(8, [False, True, True]), 2)
+        self.assertEqual(menu.normalize_selection(-3, [False, True, True]), 1)
+        self.assertEqual(menu.normalize_selection(1, [False, False, False]), 1)
+
+    def test_sync_menu_selection_preserves_label_and_normalizes_enabled_item(self) -> None:
+        old_items = [
+            MenuItem("Remote configurations", "setup", "", lambda app: "", lambda app: None),
+            MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None),
+        ]
+        new_items = [
+            MenuItem("Connect build host", "build host session", "", lambda app: "", lambda app: None),
+            MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None),
+            MenuItem("Stop running command", "build commands", "", lambda app: "", lambda app: None),
+        ]
+
+        self.assertEqual(menu.sync_menu_selection(old_items, 1, new_items, [True, True, True]), 1)
+        self.assertEqual(menu.sync_menu_selection(old_items, 99, new_items, [True, True, True]), 1)
+        self.assertEqual(menu.sync_menu_selection(old_items, 0, [], []), 0)
+        self.assertEqual(menu.sync_menu_selection(old_items, 1, new_items, [True, False, True]), 2)
+
+    def test_item_enabled_preserves_command_gating_order(self) -> None:
+        copy_item = MenuItem("Copy build artifacts", "board commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True)
+        build_item = MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True)
+        stop_item = MenuItem("Stop running command", "build commands", "", lambda app: "", lambda app: None)
+        active_job = {"item_label": "Regenerate Moulin/Ninja"}
+
+        self.assertFalse(menu.item_enabled(stop_item, active_job=None, board_job=None, board_host_has_ssh=True, board_connected=True, build_connected=True, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
+        self.assertTrue(menu.item_enabled(stop_item, active_job=active_job, board_job=None, board_host_has_ssh=True, board_connected=True, build_connected=True, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
+        self.assertFalse(menu.item_enabled(build_item, active_job=active_job, board_job=None, board_host_has_ssh=True, board_connected=True, build_connected=True, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
+        self.assertFalse(menu.item_enabled(copy_item, active_job=None, board_job=None, board_host_has_ssh=True, board_connected=False, build_connected=True, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
+        self.assertFalse(menu.item_enabled(copy_item, active_job=None, board_job=None, board_host_has_ssh=True, board_connected=True, build_connected=False, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
+        self.assertTrue(menu.item_enabled(copy_item, active_job=None, board_job=None, board_host_has_ssh=True, board_connected=True, build_connected=True, remote_has_ssh=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False))
+
+    def test_disabled_reason_preserves_current_messages(self) -> None:
+        copy_item = MenuItem("Copy build artifacts", "board commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True)
+        build_item = MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True)
+        board_shell = MenuItem("Open board host shell", "board host session", "", lambda app: "", lambda app: None)
+
+        self.assertEqual(
+            menu.disabled_reason(copy_item, active_job=None, board_job=None, board_host_user="", board_host_host="", board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_has_project_dir=False, prepare_remote_project_needed=False, checkout_git_ref_needed=False),
+            "set board SSH user first",
+        )
+        self.assertEqual(
+            menu.disabled_reason(copy_item, active_job=None, board_job=None, board_host_user="board", board_host_host="", board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_has_project_dir=False, prepare_remote_project_needed=False, checkout_git_ref_needed=False),
+            "set board SSH host first",
+        )
+        self.assertEqual(
+            menu.disabled_reason(copy_item, active_job=None, board_job=None, board_host_user="board", board_host_host="host", board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_has_project_dir=False, prepare_remote_project_needed=False, checkout_git_ref_needed=False),
+            "connect to the board host first",
+        )
+        self.assertEqual(
+            menu.disabled_reason(copy_item, active_job=None, board_job=None, board_host_user="board", board_host_host="host", board_connected=True, build_connected=False, remote_has_user=True, remote_has_host=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False),
+            "connect to the build host first",
+        )
+        self.assertEqual(
+            menu.disabled_reason(board_shell, active_job=None, board_job=None, board_host_user="board", board_host_host="host", board_connected=False, build_connected=True, remote_has_user=True, remote_has_host=True, remote_has_project_dir=True, prepare_remote_project_needed=False, checkout_git_ref_needed=False),
+            "connect to the board host first",
+        )
+        self.assertEqual(
+            menu.disabled_reason(build_item, active_job=None, board_job=None, board_host_user="board", board_host_host="host", board_connected=True, build_connected=True, remote_has_user=True, remote_has_host=True, remote_has_project_dir=True, prepare_remote_project_needed=True, checkout_git_ref_needed=False),
+            "remote project needs preparation",
+        )
+
+    def test_selected_action_plan_reports_disabled_item(self) -> None:
+        item = MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None)
+
+        plan = menu.selected_action_plan(
+            item,
+            [],
+            action_running=False,
+            enabled_for_item=lambda _item: False,
+            disabled_reason_for_item=lambda _item: "connect to the build host first",
+        )
+
+        self.assertFalse(plan["item_running"])
+        self.assertFalse(plan["enabled"])
+        self.assertEqual(plan["disabled_status"], "connect to the build host first")
+        self.assertEqual(plan["guard"], {"allowed": False, "status": "connect to the build host first"})
+
+    def test_selected_action_plan_reports_running_item_without_enabled_check(self) -> None:
+        item = MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None)
+
+        plan = menu.selected_action_plan(
+            item,
+            [{"item_label": "Run product build"}],
+            action_running=False,
+            enabled_for_item=lambda _item: (_ for _ in ()).throw(AssertionError("enabled check should not run")),
+            disabled_reason_for_item=lambda _item: "disabled",
+        )
+
+        self.assertTrue(plan["item_running"])
+        self.assertTrue(plan["enabled"])
+        self.assertEqual(plan["guard"], {"allowed": False, "status": "Command is already running; live log is shown in Logs"})
+
+
+if __name__ == "__main__":
+    unittest.main()

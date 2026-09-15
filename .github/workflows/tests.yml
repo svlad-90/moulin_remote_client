@@ -1,0 +1,55 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Check whitespace
+        run: |
+          python - <<'PY'
+          import pathlib
+          import subprocess
+          import sys
+
+          suffixes = {".json", ".md", ".py", ".yml", ".yaml"}
+          failed = False
+          files = subprocess.check_output(
+              ["git", "ls-files"], text=True
+          ).splitlines()
+          for raw in files:
+              path = pathlib.Path(raw)
+              if path.suffix not in suffixes:
+                  continue
+              try:
+                  lines = path.read_text(encoding="utf-8").splitlines(True)
+              except UnicodeDecodeError:
+                  continue
+              for number, line in enumerate(lines, 1):
+                  body = line.rstrip("\r\n")
+                  if body.endswith((" ", "\t")):
+                      print(f"{path}:{number}: trailing whitespace")
+                      failed = True
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Compile Python sources
+        run: |
+          git ls-files '*.py' | xargs python -m py_compile
+
+      - name: Run unit tests
+        run: python -m unittest discover -s . -p 'test_*.py'

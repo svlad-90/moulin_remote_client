@@ -1,0 +1,1 @@
+"""Host configuration component."""

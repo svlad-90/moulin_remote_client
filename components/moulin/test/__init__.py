@@ -1,0 +1,1 @@
+"""Moulin component tests."""
