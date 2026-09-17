@@ -17,6 +17,17 @@ REMOTE_CLI_COMMANDS = {
     "build-docker",
     "regen-moulin",
     "build",
+    "yocto-impact",
+    "yocto-impact-clean",
+    "yocto-impact-rebuild",
+    "yocto-impact-clean-rebuild",
+}
+
+YOCTO_IMPACT_ACTIONS = {
+    "yocto-impact": "analyze",
+    "yocto-impact-clean": "clean",
+    "yocto-impact-rebuild": "rebuild",
+    "yocto-impact-clean-rebuild": "clean-rebuild",
 }
 
 
@@ -113,6 +124,38 @@ class RemoteCommandWorkflowService:
             config,
             docker_image=docker_image,
             targets=targets,
+        )
+
+    def ninja_tool_command(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        args: str,
+    ) -> list[str]:
+        return self.build_service.ninja_tool_command_for_config(
+            config,
+            docker_image=docker_image,
+            args=args,
+        )
+
+    def yocto_impact_command(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        targets: str,
+        action: str = "analyze",
+        image_recipes: list[str] | None = None,
+        allow_empty: bool = False,
+    ) -> list[str]:
+        return self.build_service.yocto_impact_command_for_config(
+            config,
+            docker_image=docker_image,
+            targets=targets,
+            action=action,
+            image_recipes=image_recipes,
+            allow_empty=allow_empty,
         )
 
     def run_docker_image(
@@ -225,6 +268,16 @@ class RemoteCommandWorkflowService:
                 docker_image=docker_image,
                 targets=str(context["build_targets"]),
                 runner=runner,
+            )
+            return
+        if command in YOCTO_IMPACT_ACTIONS:
+            runner(
+                self.yocto_impact_command(
+                    config,
+                    docker_image=docker_image,
+                    targets=str(context["build_targets"]),
+                    action=YOCTO_IMPACT_ACTIONS[command],
+                )
             )
             return
         raise ValueError(f"unsupported remote command: {command}")

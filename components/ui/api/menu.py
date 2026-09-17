@@ -24,6 +24,7 @@ from components.ui.src.menu import (
     selected_action_plan,
     selected_menu_row,
     sync_menu_selection,
+    wrapped_menu_rows,
 )
 
 __all__ = [
@@ -48,4 +49,5 @@ __all__ = [
     "selected_action_plan",
     "selected_menu_row",
     "sync_menu_selection",
+    "wrapped_menu_rows",
 ]

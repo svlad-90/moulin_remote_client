@@ -396,9 +396,52 @@ def record_command_step_start(
     total: int,
     current_command: str,
     command_lines: list[str],
+    step_label: str = "",
 ) -> list[str]:
     job["current_command"] = current_command
-    return [f"Starting step {int(index) + 1}/{int(total)}..."] + list(command_lines)
+    header = f"Starting step {int(index) + 1}/{int(total)}"
+    if step_label:
+        header += f": {step_label}"
+    else:
+        header += "..."
+    separator = "=" * max(36, len(header))
+    lines = [separator, header, separator, ""]
+    if int(index) > 0:
+        lines.insert(0, "")
+    return lines + list(command_lines)
+
+
+def command_step_label(command: list[str]) -> str:
+    text = " ".join(command)
+    if 'ACTION = "clean"' in text:
+        return "Clean impacted Yocto recipes"
+    if 'ACTION = "rebuild"' in text:
+        return "Rebuild impacted Yocto recipes"
+    if 'ACTION = "analyze"' in text:
+        return "Analyze changed Yocto recipes"
+    if " moulin " in text or "moulin " in text:
+        return "Regenerate Moulin/Ninja"
+    if " ninja " in text or "ninja " in text:
+        return "Run product build"
+    if "docker build " in text:
+        return "Build Docker image"
+    if "rsync " in text or "Copy mapped files" in text:
+        return "Copy mapped files"
+    if "Prepare board artifacts directory" in text:
+        return "Prepare board artifacts directory"
+    if "Deploy board helper" in text:
+        return "Deploy board helper"
+    if "board console: start xt-imager" in text or "XT_FLASH_IMAGE" in text:
+        return "Run UFS flasher"
+    if "run bootloader flasher" in text:
+        return "Run bootloader flasher"
+    if "unpack boot artifacts" in text:
+        return "Unpack boot artifacts"
+    if "install bootloader flasher" in text:
+        return "Install bootloader flasher"
+    if "run: x5h_flash" in text:
+        return "Enter bootloader flash mode"
+    return ""
 
 
 def prepare_command_step_start(
@@ -415,6 +458,7 @@ def prepare_command_step_start(
         total=int(plan["total"]),
         current_command=display_command(command),
         command_lines=display_command_lines(command),
+        step_label=command_step_label(command),
     )
     return {"command": command, "log_lines": lines}
 

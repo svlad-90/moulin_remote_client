@@ -489,3 +489,131 @@ def artifact_copy_specs_for_config(
         build_params=build_params,
     )
     return artifact_copy_specs_from_manifest(data, targets)
+
+
+def yocto_image_recipes_from_manifest(
+    data: dict[str, Any],
+    build_params: dict[str, str] | None = None,
+) -> list[str]:
+    effective = effective_manifest(data, build_params)
+    variables = effective_variables(effective)
+    components = effective.get("components", {}) if isinstance(effective.get("components", {}), dict) else {}
+    recipes: list[str] = []
+    seen: set[str] = set()
+    for raw in components.values():
+        builder = raw.get("builder", {}) if isinstance(raw, dict) else {}
+        if not isinstance(builder, dict) or builder.get("type") != "yocto":
+            continue
+        target = str(builder.get("build_target", "")).strip()
+        if not target:
+            continue
+        recipe = expand_value(target, variables).strip()
+        if not recipe or "%{" in recipe or recipe in seen:
+            continue
+        seen.add(recipe)
+        recipes.append(recipe)
+    return recipes
+
+
+def component_enabled_by_params(name: str, build_params: dict[str, str] | None) -> bool:
+    if not build_params:
+        return True
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").upper()
+    candidates = [f"ENABLE_{normalized}"]
+    if normalized.endswith("_KERNEL"):
+        candidates.append(f"ENABLE_{normalized.removesuffix('_KERNEL')}")
+    disabled_values = {"0", "false", "no", "off", "disable", "disabled"}
+    for param_name in candidates:
+        value = build_params.get(param_name)
+        if value is not None and str(value).strip().lower() in disabled_values:
+            return False
+    return True
+
+
+def component_builders_from_manifest(
+    data: dict[str, Any],
+    build_params: dict[str, str] | None = None,
+) -> list[dict[str, str]]:
+    effective = effective_manifest(data, build_params)
+    variables = effective_variables(effective)
+    components = effective.get("components", {}) if isinstance(effective.get("components", {}), dict) else {}
+    result: list[dict[str, str]] = []
+    for name, raw in components.items():
+        if not component_enabled_by_params(str(name), build_params):
+            continue
+        builder = raw.get("builder", {}) if isinstance(raw, dict) else {}
+        if not isinstance(builder, dict):
+            continue
+        builder_type = str(builder.get("type", "")).strip()
+        if not builder_type:
+            continue
+        target = str(builder.get("build_target") or builder.get("target") or name).strip()
+        expanded_target = expand_value(target, variables).strip()
+        result.append(
+            {
+                "name": str(name),
+                "builder_type": builder_type,
+                "target": expanded_target,
+            }
+        )
+    return result
+
+
+def component_builders_for_config(
+    config: dict[str, Any],
+    *,
+    app_dir: Path,
+    remote_read_project_file: Callable[[dict[str, Any], str], str],
+    cache: dict[tuple[str, str, str], dict[str, Any]],
+    default_moulin_manifest: str = "product.yaml",
+    build_params: dict[str, str] | None = None,
+) -> list[dict[str, str]]:
+    data = load_manifest_for_config(
+        config,
+        app_dir=app_dir,
+        remote_read_project_file=remote_read_project_file,
+        cache=cache,
+        default_moulin_manifest=default_moulin_manifest,
+    )
+    if not data:
+        return []
+    return component_builders_from_manifest(
+        data,
+        build_params or default_parameters_for_config(
+            config,
+            app_dir=app_dir,
+            remote_read_project_file=remote_read_project_file,
+            cache=cache,
+            default_moulin_manifest=default_moulin_manifest,
+        ),
+    )
+
+
+def yocto_image_recipes_for_config(
+    config: dict[str, Any],
+    *,
+    app_dir: Path,
+    remote_read_project_file: Callable[[dict[str, Any], str], str],
+    cache: dict[tuple[str, str, str], dict[str, Any]],
+    default_moulin_manifest: str = "product.yaml",
+    build_params: dict[str, str] | None = None,
+) -> list[str]:
+    data = load_manifest_for_config(
+        config,
+        app_dir=app_dir,
+        remote_read_project_file=remote_read_project_file,
+        cache=cache,
+        default_moulin_manifest=default_moulin_manifest,
+    )
+    if not data:
+        return []
+    return yocto_image_recipes_from_manifest(
+        data,
+        build_params or default_parameters_for_config(
+            config,
+            app_dir=app_dir,
+            remote_read_project_file=remote_read_project_file,
+            cache=cache,
+            default_moulin_manifest=default_moulin_manifest,
+        ),
+    )

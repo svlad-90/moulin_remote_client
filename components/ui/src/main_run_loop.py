@@ -24,6 +24,7 @@ class MainRunLoopController:
 
     def run(self, port: Any) -> None:
         port.configure_escape_delay()
+        port.configure_mouse()
         port.set_cursor(False)
         port.screen.keypad(True)
         port.screen.timeout(250)

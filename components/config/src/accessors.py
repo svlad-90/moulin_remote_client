@@ -172,6 +172,24 @@ def moulin_manifest_name(
     return str(config.get("moulin", {}).get("manifest", default_moulin_manifest))
 
 
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return value.split()
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def yocto_image_recipes(config: dict[str, Any], project: dict[str, Any], remote: dict[str, Any]) -> list[str]:
+    for source in (project, remote, config.get("yocto", {})):
+        recipes = _string_list(source.get("yocto_image_recipes"))
+        if recipes:
+            return recipes
+    return []
+
+
 def remote_label_for_config(config: dict[str, Any]) -> str:
     return profile_label(config_profiles.active_remote(config), "remote")
 
@@ -304,4 +322,12 @@ def moulin_manifest_name_for_config(config: dict[str, Any], default_moulin_manif
         config_profiles.active_project(config),
         config_profiles.active_remote(config),
         default_moulin_manifest,
+    )
+
+
+def yocto_image_recipes_for_config(config: dict[str, Any]) -> list[str]:
+    return yocto_image_recipes(
+        config,
+        config_profiles.active_project(config),
+        config_profiles.active_remote(config),
     )

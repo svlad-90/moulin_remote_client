@@ -20,7 +20,7 @@ SYNC_SCREEN_ACTIONS = [
     {
         "kind": "activate-mappings",
         "label": "Activate mappings",
-        "description": "Choose the active subset of saved mappings for pull, push, and automatic pre-build sync.",
+        "description": "Choose the active subset of saved mappings for pull, push, and explicit build-host copy.",
         "requires_remote": False,
         "confirm": False,
     },

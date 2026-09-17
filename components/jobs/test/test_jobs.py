@@ -507,8 +507,18 @@ class JobsBehaviorTests(unittest.TestCase):
                 total=3,
                 current_command="ssh host '<script>'",
                 command_lines=["command: ssh host '<script>'", "script:", "  ninja"],
+                step_label="Run product build",
             ),
-            ["Starting step 2/3...", "command: ssh host '<script>'", "script:", "  ninja"],
+            [
+                "",
+                "====================================",
+                "Starting step 2/3: Run product build",
+                "====================================",
+                "",
+                "command: ssh host '<script>'",
+                "script:",
+                "  ninja",
+            ],
         )
         self.assertEqual(job["current_command"], "ssh host '<script>'")
 
@@ -527,10 +537,58 @@ class JobsBehaviorTests(unittest.TestCase):
             result,
             {
                 "command": ["ssh", "host", "echo ok"],
-                "log_lines": ["Starting step 1/2...", "command: ssh host echo ok"],
+                "log_lines": [
+                    "====================================",
+                    "Starting step 1/2...",
+                    "====================================",
+                    "",
+                    "command: ssh host echo ok",
+                ],
             },
         )
         self.assertEqual(job["current_command"], "ssh host echo ok")
+
+    def test_prepare_command_step_start_uses_known_step_labels(self) -> None:
+        job: dict[str, Any] = {}
+        plan = {"command": ["bash", "-lc", "ninja full_ufs.img.gz"], "index": 0, "total": 2}
+
+        result = jobs.prepare_command_step_start(
+            job,
+            plan,
+            display_command=lambda command: " ".join(command),
+            display_command_lines=lambda _command: [],
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "command": ["bash", "-lc", "ninja full_ufs.img.gz"],
+                "log_lines": [
+                    "====================================",
+                    "Starting step 1/2: Run product build",
+                    "====================================",
+                    "",
+                ],
+            },
+        )
+
+    def test_prepare_command_step_start_labels_board_steps(self) -> None:
+        cases = [
+            ("printf '%s\\n' 'Prepare board artifacts directory'", "Prepare board artifacts directory"),
+            ("printf '%s\\n' 'Deploy board helper'", "Deploy board helper"),
+            ("echo 'board console: start xt-imager'", "Run UFS flasher"),
+        ]
+
+        for script, label in cases:
+            with self.subTest(label=label):
+                result = jobs.prepare_command_step_start(
+                    {},
+                    {"command": ["bash", "-lc", script], "index": 0, "total": 3},
+                    display_command=lambda command: " ".join(command),
+                    display_command_lines=lambda _command: [],
+                )
+
+                self.assertIn(f"Starting step 1/3: {label}", result["log_lines"])
 
     def test_advance_completed_command_step_matches_client_advance_branch(self) -> None:
         job: dict[str, Any] = {"index": 1, "process": object()}

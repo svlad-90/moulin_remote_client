@@ -38,6 +38,8 @@ class SyncMappingCommandService:
         argv = ["rsync", "-az", "--delete"]
         if dry_run:
             argv.extend(["--dry-run", "--itemize-changes"])
+        else:
+            argv.extend(["--progress", "--stats", "--human-readable"])
         argv.extend(excludes)
         source_suffix = "/" if mapping["kind"] == "directory" else ""
         target_suffix = "/" if mapping["kind"] == "directory" else ""

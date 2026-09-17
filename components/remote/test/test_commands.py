@@ -385,6 +385,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertIn("--network=host --privileged", command)
+        self.assertIn("-e PYTHONUNBUFFERED=1", command)
         self.assertIn("-v /mnt/projects/meta-product:/home/builder/workspace", command)
         self.assertIn(shlex.quote("cd /home/builder/workspace && ninja boot_artifacts full_ufs.img.gz"), command)
 

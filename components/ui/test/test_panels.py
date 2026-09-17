@@ -147,12 +147,13 @@ class MainPanelsControllerTests(unittest.TestCase):
 
     def test_draw_details_panel_renders_mapping_and_last_exit(self) -> None:
         port = FakePanelPort()
+        port.items[0] = FakeMenuItem("Copy mapped files to build host", "Push selected mappings.")
 
         panels.main_panels_controller().draw_details_panel(port, 0, 0, 12, 100, port.items[0])
 
         rendered = [row[2] for row in port.rows]
         self.assertTrue(any("Selected mappings: meta" in text for text in rendered))
-        self.assertTrue(any("Pre-build sync: active" in text for text in rendered))
+        self.assertTrue(any("Copy status: active" in text for text in rendered))
         self.assertTrue(any("Last exit: 0" in text for text in rendered))
 
     def test_draw_details_panel_wraps_long_mapping_selection(self) -> None:

@@ -81,6 +81,7 @@ class MenuModelBehaviorTests(unittest.TestCase):
 
     def test_item_job_slot_matches_current_menu_group_policy(self) -> None:
         self.assertEqual(menu.item_job_slot(MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None)), "build")
+        self.assertEqual(menu.item_job_slot(MenuItem("Analyze Yocto", "build commands / yocto incremental build", "", lambda app: "", lambda app: None)), "build")
         self.assertEqual(menu.item_job_slot(MenuItem("Sync mapped files", "sync", "", lambda app: "", lambda app: None)), "build")
         self.assertEqual(menu.item_job_slot(MenuItem("Connect build host", "build host session", "", lambda app: "", lambda app: None)), "build")
         self.assertEqual(menu.item_job_slot(MenuItem("Flash UFS image", "board commands", "", lambda app: "", lambda app: None)), "board")
@@ -138,6 +139,66 @@ class MenuModelBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(menu.selected_menu_row(rows, 2), 7)
         self.assertEqual(menu.clamp_menu_scroll(rows, selected=2, scroll=0, visible_rows=4), 4)
+
+    def test_menu_rows_render_slash_groups_as_subgroups(self) -> None:
+        items = [
+            MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None),
+            MenuItem("Clean impacted Yocto recipes + run product build", "build commands / yocto incremental build", "", lambda app: "", lambda app: None),
+        ]
+
+        rows = menu.menu_rows(items, ["Run product build", "Clean impacted Yocto recipes + run product build"])
+
+        self.assertEqual(
+            rows,
+            [
+                ("BUILD COMMANDS", None),
+                ("1. Run product build", 0),
+                ("", None),
+                ("Yocto incremental build", None),
+                ("2. Clean impacted Yocto recipes + run product build", 1),
+            ],
+        )
+
+    def test_wrapped_menu_rows_indent_continuation_under_item_text(self) -> None:
+        rows = [
+            ("Yocto incremental build", None),
+            ("10. Clean impacted Yocto recipes + run product build", 9),
+        ]
+
+        wrapped = menu.wrapped_menu_rows(rows, 30)
+
+        self.assertEqual(
+            wrapped,
+            [
+                ("Yocto incremental build", None),
+                ("10. Clean impacted Yocto", 9),
+                ("    recipes + run product", 9),
+                ("    build", 9),
+            ],
+        )
+        self.assertEqual(menu.selected_menu_row(wrapped, 9), 1)
+
+    def test_menu_rows_separate_subgroup_when_returning_to_parent_group(self) -> None:
+        items = [
+            MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None),
+            MenuItem("Clean impacted Yocto recipes + run product build", "build commands / yocto incremental build", "", lambda app: "", lambda app: None),
+            MenuItem("Stop running command", "build commands", "", lambda app: "", lambda app: None),
+        ]
+
+        rows = menu.menu_rows(items, ["Run product build", "Clean impacted Yocto recipes + run product build", "Stop running command"])
+
+        self.assertEqual(
+            rows,
+            [
+                ("BUILD COMMANDS", None),
+                ("1. Run product build", 0),
+                ("", None),
+                ("Yocto incremental build", None),
+                ("2. Clean impacted Yocto recipes + run product build", 1),
+                ("", None),
+                ("3. Stop running command", 2),
+            ],
+        )
         self.assertEqual(menu.clamp_menu_scroll(rows, selected=0, scroll=3, visible_rows=4), 1)
         self.assertEqual(menu.clamp_menu_scroll(rows, selected=1, scroll=3, visible_rows=4), 3)
 

@@ -14,7 +14,7 @@ from components.sync.src.selected_paths import SyncSelectedPathService, sync_sel
 
 
 class SyncCommandPlanner:
-    """Build concrete rsync and pre-build command plans."""
+    """Build concrete rsync, mapped-file copy, and CLI command plans."""
 
     def __init__(
         self,

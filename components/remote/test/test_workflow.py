@@ -121,6 +121,53 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
                 targets="boot_artifacts full_ufs.img.gz",
             ),
         )
+        yocto_impact = service.yocto_impact_command(
+            config,
+            docker_image="prod_img",
+            targets="boot_artifacts full_ufs.img.gz",
+        )
+        self.assertIn("-e PYTHONUNBUFFERED=1", yocto_impact[-1])
+        self.assertIn("python3 -u - <<", yocto_impact[-1])
+        self.assertIn("Impacted Yocto recipes", yocto_impact[-1])
+        self.assertIn('ACTION = "analyze"', yocto_impact[-1])
+        self.assertIn("[progress] step", yocto_impact[-1])
+        self.assertIn("[progress] still running", yocto_impact[-1])
+        self.assertIn("available_by_build_dir", yocto_impact[-1])
+        self.assertIn("scan available recipes in", yocto_impact[-1])
+        self.assertIn("elapsed:", yocto_impact[-1])
+        self.assertIn("== yocto impact {ACTION} ==", yocto_impact[-1])
+        self.assertIn("MOULIN_TUI_SHOW_COMMANDS", yocto_impact[-1])
+        self.assertIn('ALLOW_EMPTY = "0" == "1"', yocto_impact[-1])
+        self.assertIn(
+            'ALLOW_EMPTY = "1" == "1"',
+            service.yocto_impact_command(
+                config,
+                docker_image="prod_img",
+                targets="boot_artifacts full_ufs.img.gz",
+                action="clean",
+                allow_empty=True,
+            )[-1],
+        )
+        self.assertIn(
+            'ACTION = "clean-rebuild"',
+            service.yocto_impact_command(
+                config,
+                docker_image="prod_img",
+                targets="boot_artifacts full_ufs.img.gz",
+                action="clean-rebuild",
+            )[-1],
+        )
+        config_profiles.active_project(config)["yocto_image_recipes"] = "rcar-image-adas xt-rcar-image"
+        yocto_clean_rebuild = service.yocto_impact_command(
+            config,
+            docker_image="prod_img",
+            targets="boot_artifacts full_ufs.img.gz",
+            action="clean-rebuild",
+        )[-1]
+        self.assertIn('IMAGE_RECIPES = "rcar-image-adas xt-rcar-image".strip().split()', yocto_clean_rebuild)
+        self.assertIn("Configured Yocto image recipes", yocto_clean_rebuild)
+        self.assertIn("cleansstate images", yocto_clean_rebuild)
+        self.assertIn("rebuild images", yocto_clean_rebuild)
 
     def test_workflow_owns_cli_remote_command_routing(self) -> None:
         config = sample_config()
@@ -152,6 +199,77 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_workflow_routes_yocto_impact_to_build_host_command(self) -> None:
+        config = sample_config()
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        service = self._service()
+        calls: list[list[str]] = []
+        context = {
+            "docker_image": "prod_img",
+            "build_params": {"ENABLE_ANDROID": "yes"},
+            "build_targets": "boot_artifacts full_ufs.img.gz",
+        }
+
+        service.run_cli_command(
+            config,
+            "yocto-impact",
+            runtime_context=lambda: context,
+            structured_script=commands.build_structured_script,
+            runner=lambda argv: calls.append(argv),
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                service.yocto_impact_command(
+                    config,
+                    docker_image="prod_img",
+                    targets="boot_artifacts full_ufs.img.gz",
+                )
+            ],
+        )
+
+    def test_workflow_routes_yocto_impact_action_commands(self) -> None:
+        config = sample_config()
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        service = self._service()
+        context = {
+            "docker_image": "prod_img",
+            "build_params": {"ENABLE_ANDROID": "yes"},
+            "build_targets": "boot_artifacts full_ufs.img.gz",
+        }
+        expected_actions = {
+            "yocto-impact-clean": "clean",
+            "yocto-impact-rebuild": "rebuild",
+            "yocto-impact-clean-rebuild": "clean-rebuild",
+        }
+
+        for command, action in expected_actions.items():
+            with self.subTest(command=command):
+                calls: list[list[str]] = []
+
+                service.run_cli_command(
+                    config,
+                    command,
+                    runtime_context=lambda: context,
+                    structured_script=commands.build_structured_script,
+                    runner=lambda argv: calls.append(argv),
+                )
+
+                self.assertEqual(
+                    calls,
+                    [
+                        service.yocto_impact_command(
+                            config,
+                            docker_image="prod_img",
+                            targets="boot_artifacts full_ufs.img.gz",
+                            action=action,
+                        )
+                    ],
+                )
 
     def test_workflow_routes_connect_without_runtime_context(self) -> None:
         config = sample_config()

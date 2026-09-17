@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import curses
+import os
 from typing import Any
 
 from components.ui.api import input as ui_input
@@ -30,6 +31,15 @@ class TerminalPortController:
     def configure_escape_delay(self) -> None:
         try:
             curses.set_escdelay(100)
+        except (AttributeError, curses.error):
+            pass
+
+    def configure_mouse(self) -> None:
+        try:
+            if os.environ.get("MOULIN_TUI_MOUSE", "").lower() in {"1", "true", "yes", "on"}:
+                curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+            else:
+                curses.mousemask(0)
         except (AttributeError, curses.error):
             pass
 
@@ -209,6 +219,7 @@ class TerminalPortController:
     def restore_tui(self, port: Any) -> None:
         curses.reset_prog_mode()
         port.screen.keypad(True)
+        self.configure_mouse()
         port.screen.timeout(250)
 
 

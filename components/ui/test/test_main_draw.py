@@ -29,12 +29,14 @@ class FakeScreen:
 class FakePanels:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.actions_kwargs: dict[str, Any] = {}
 
     def draw_header(self, *_args: Any, **_kwargs: Any) -> None:
         self.calls.append("header")
 
     def draw_actions_panel(self, *_args: Any, **_kwargs: Any) -> None:
         self.calls.append("actions")
+        self.actions_kwargs = _kwargs
 
     def draw_details_panel(self, *_args: Any, **_kwargs: Any) -> None:
         self.calls.append("details")
@@ -140,6 +142,25 @@ class MainDrawControllerTests(unittest.TestCase):
         self.assertFalse(port.main_full_redraw)
         self.assertFalse(port.logs_dirty)
         self.assertEqual(port.screen.refresh_count, 1)
+
+    def test_full_draw_wraps_long_action_labels_before_scroll_and_render(self) -> None:
+        port = FakePort(width=82)
+        port.items = [
+            MenuItem("Build Docker image", "build commands", "", lambda _app: "", lambda _app: None),
+            MenuItem("Clean impacted Yocto recipes + run product build", "build commands", "", lambda _app: "", lambda _app: None),
+            MenuItem("Run product build", "build commands", "", lambda _app: "", lambda _app: None),
+        ]
+        port.selected = 1
+        panels = FakePanels()
+
+        with patch("components.ui.src.main_draw.ui_panels_api.main_panels_controller", return_value=panels):
+            main_draw.main_draw_controller(app_dir=Path("/app")).draw(port)
+
+        menu_rows = panels.actions_kwargs["menu_rows"]
+        rendered_labels = [label for label, item_index in menu_rows if item_index == 1]
+        self.assertGreater(len(rendered_labels), 1)
+        self.assertTrue(all(len(label) <= 34 for label in rendered_labels))
+        self.assertTrue(rendered_labels[1].startswith("   "))
 
     def test_expanded_logs_draws_only_expanded_panel(self) -> None:
         port = FakePort()

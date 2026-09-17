@@ -59,6 +59,8 @@ from components.config.src.accessors import (
     remote_spec_for_config,
     remote_user_for_config,
     ui_title,
+    yocto_image_recipes,
+    yocto_image_recipes_for_config,
 )
 
 __all__ = [
@@ -118,4 +120,6 @@ __all__ = [
     "remote_spec_for_config",
     "remote_user_for_config",
     "ui_title",
+    "yocto_image_recipes",
+    "yocto_image_recipes_for_config",
 ]

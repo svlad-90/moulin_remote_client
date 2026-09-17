@@ -32,6 +32,8 @@ class MainKeyController:
             self._move_up(port)
         elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j"):
             self._move_down(port)
+        elif ch == curses.KEY_MOUSE:
+            self._handle_mouse(port)
         elif ch in (curses.KEY_ENTER, 10, 13) or ui_input_api.key_code_matches(ch, "r"):
             port.run_selected()
         elif ui_input_api.key_code_matches(ch, "f"):
@@ -64,8 +66,31 @@ class MainKeyController:
             ui_panels_api.main_panels_controller().scroll_logs(port, -10)
         elif ch in (curses.KEY_NPAGE,):
             ui_panels_api.main_panels_controller().scroll_logs(port, 10)
+        elif ch == curses.KEY_MOUSE:
+            self._handle_mouse(port)
         else:
             port.status = "Logs expanded; use f/Esc to return"
+
+    def _handle_mouse(self, port: Any) -> None:
+        try:
+            _mouse_id, _x, _y, _z, bstate = curses.getmouse()
+        except curses.error:
+            return
+        if bstate & getattr(curses, "BUTTON4_PRESSED", 0):
+            self._move_or_scroll(port, -1)
+        elif bstate & getattr(curses, "BUTTON5_PRESSED", 0):
+            self._move_or_scroll(port, 1)
+
+    def _move_or_scroll(self, port: Any, delta: int) -> None:
+        if port.logs_expanded or port.focus_panel == "logs":
+            ui_panels_api.main_panels_controller().scroll_logs(port, delta)
+            return
+        port.selected = ui_menu_api.move_selection(
+            port.selected,
+            [port.item_enabled(item) for item in port.items],
+            delta,
+        )
+        port.log_follow = True
 
     def _move_up(self, port: Any) -> None:
         if port.focus_panel == "logs":

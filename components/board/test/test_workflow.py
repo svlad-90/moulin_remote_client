@@ -134,14 +134,13 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         bootloaders = service.flash_bootloaders_commands(config)
         ufs = service.flash_ufs_image_commands(config)
 
-        self.assertEqual(len(bootloaders), 7)
-        self.assertIn("x5h_flash", bootloaders[3][-1])
-        self.assertIn("python3 -u ./flash_bootloaders.py", bootloaders[6][-1])
-        self.assertEqual(len(ufs), 6)
-        self.assertIn("gen5_x5h_flash_ufs.py", ufs[3][-1])
-        self.assertIn("gen5_x5h_flash_ufs.py", ufs[4][-1])
-        self.assertIn("x5h_boot", ufs[5][-1])
-        self.assertIn("python3 /srv/tftp/vgon/gen5_x5h_flash_ufs.py", ufs[5][-1])
+        self.assertEqual(len(bootloaders), 6)
+        self.assertIn("x5h_flash", bootloaders[2][-1])
+        self.assertIn("python3 -u ./flash_bootloaders.py", bootloaders[5][-1])
+        self.assertEqual(len(ufs), 4)
+        self.assertIn("gen5_x5h_flash_ufs.py", ufs[2][-1])
+        self.assertIn("x5h_boot", ufs[3][-1])
+        self.assertIn("python3 /srv/tftp/vgon/gen5_x5h_flash_ufs.py", ufs[3][-1])
 
     def test_workflow_runs_flash_scenarios_with_titles(self) -> None:
         config = sample_config()

@@ -111,6 +111,35 @@ class ConfigAccessorBehaviorTests(unittest.TestCase):
             accessors.moulin_manifest_name(config, project, remote, "product.yaml"),
         )
 
+    def test_yocto_image_recipes_prefer_project_then_remote_then_config(self) -> None:
+        config = {
+            "yocto": {"yocto_image_recipes": "fallback-image"},
+            "remotes": [
+                {
+                    "name": "build",
+                    "yocto_image_recipes": ["remote-image"],
+                }
+            ],
+            "active_remote": "build",
+            "projects": [
+                {
+                    "name": "prod",
+                    "yocto_image_recipes": "rcar-image-adas xt-rcar-image",
+                }
+            ],
+            "active_project": "prod",
+        }
+        profiles.normalize_remote_profiles(config)
+        profiles.normalize_project_profiles(config)
+
+        self.assertEqual(accessors.yocto_image_recipes_for_config(config), ["rcar-image-adas", "xt-rcar-image"])
+
+        del config["projects"][0]["yocto_image_recipes"]
+        self.assertEqual(accessors.yocto_image_recipes_for_config(config), ["remote-image"])
+
+        del config["remotes"][0]["yocto_image_recipes"]
+        self.assertEqual(accessors.yocto_image_recipes_for_config(config), ["fallback-image"])
+
     def test_remote_project_config_ready_plan_matches_current_status_order(self) -> None:
         config = {
             "remotes": [{"name": "build", "projects_dir": "/projects"}],

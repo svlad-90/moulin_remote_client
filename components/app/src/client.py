@@ -137,6 +137,9 @@ class ClientApp:
     def configure_escape_delay(self) -> None:
         self.terminal.configure_escape_delay()
 
+    def configure_mouse(self) -> None:
+        self.terminal.configure_mouse()
+
     def set_cursor(self, visible: bool) -> None:
         self.terminal.set_cursor(visible)
 

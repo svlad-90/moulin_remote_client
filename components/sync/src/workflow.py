@@ -66,6 +66,9 @@ class SyncCommandWorkflowService:
     def supports_cli_command(self, command: str) -> bool:
         return self.cli_service.supports_command(command)
 
+    def mapping_selection_path(self, config: dict[str, Any]) -> Path:
+        return config_accessors.mapping_selection_path_for_config(config, self.app_dir)
+
     def build_command_sequence(
         self,
         config: dict[str, Any],
@@ -84,6 +87,13 @@ class SyncCommandWorkflowService:
             selection_path=config_accessors.mapping_selection_path_for_config(config, self.app_dir),
             app_dir=self.app_dir,
             default_config_path=self.default_config_path,
+        )
+
+    def mapped_files_push_sequence(self, config: dict[str, Any]) -> list[list[str]]:
+        return self.pre_build_service.pre_build_sync_commands_for_config(
+            config,
+            selection_path=config_accessors.mapping_selection_path_for_config(config, self.app_dir),
+            app_dir=self.app_dir,
         )
 
     def run_cli_command(

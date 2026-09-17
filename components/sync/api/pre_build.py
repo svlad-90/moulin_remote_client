@@ -1,4 +1,4 @@
-"""Pre-build sync command sequencing API."""
+"""Mapped-file copy and build setting sequencing API."""
 
 from __future__ import annotations
 

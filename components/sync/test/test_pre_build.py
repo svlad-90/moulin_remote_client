@@ -13,7 +13,8 @@ class SyncPreBuildServiceTests(unittest.TestCase):
     def test_pre_build_sync_commands_own_intro_issue_and_failure_paths(self) -> None:
         service = pre_build.sync_pre_build_service()
 
-        self.assertEqual(service.pre_build_sync_commands([], [], [], rsync_command=lambda mapping: ["rsync"]), [])
+        no_mapping_commands = service.pre_build_sync_commands([], [], [], rsync_command=lambda mapping: ["rsync"])
+        self.assertIn("Copy mapped files: no active mappings selected", no_mapping_commands[0][2])
 
         issue_commands = service.pre_build_sync_commands(
             ["layer"],
@@ -22,7 +23,7 @@ class SyncPreBuildServiceTests(unittest.TestCase):
             rsync_command=lambda mapping: ["rsync"],
         )
         self.assertEqual(len(issue_commands), 1)
-        self.assertIn("Pre-build sync skipped: local overlay is not ready", issue_commands[0][2])
+        self.assertIn("Copy mapped files skipped: local overlay is not ready", issue_commands[0][2])
         self.assertIn("issue-7", issue_commands[0][2])
         self.assertNotIn("issue-8", issue_commands[0][2])
 
@@ -37,8 +38,9 @@ class SyncPreBuildServiceTests(unittest.TestCase):
             [],
             rsync_command=failing_rsync,
         )
-        self.assertEqual(failure_commands[1], ["rsync", "ok"])
-        self.assertIn("Pre-build sync failed: bad", failure_commands[2][2])
+        self.assertIn("Copy mapped files mapping: ok", failure_commands[1][2])
+        self.assertEqual(failure_commands[1][-2:], ["rsync", "ok"])
+        self.assertIn("Copy mapped files failed: bad", failure_commands[2][2])
 
     def test_pre_build_sync_commands_for_config_push_active_mappings(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -56,9 +58,11 @@ class SyncPreBuildServiceTests(unittest.TestCase):
                 app_dir=app_dir,
             )
 
-            self.assertEqual(len(argv), 2)
-            self.assertIn("Pre-build sync: pushing active mappings to remote", argv[0][2])
+            self.assertEqual(len(argv), 3)
+            self.assertIn("Copy mapped files: pushing active mappings to remote", argv[0][2])
+            self.assertIn("Copy mapped files mapping: layer", argv[1][2])
             self.assertEqual(argv[1][-2:], [str(layer) + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
+            self.assertIn("recorded incremental build baseline", argv[2][2])
 
     def test_command_sequence_saves_build_settings_and_appends_build_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

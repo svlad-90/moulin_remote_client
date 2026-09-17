@@ -153,7 +153,6 @@ class Gen5X5hBoardAdapter(BoardTypeAdapter):
         )
         return [
             builder.board_prepare_work_dir_command(board_host, artifacts_dir),
-            builder.board_deploy_tool_log_command(board_host, work_dir, tool),
             builder.board_deploy_tool_command(board_host, work_dir, tool),
             builder.board_ssh_command(board_host, enter_flash_script, tty=True),
             builder.board_ssh_command(board_host, unpack_script, tty=True),
@@ -229,9 +228,7 @@ class Gen5X5hBoardAdapter(BoardTypeAdapter):
         )
         return [
             builder.board_prepare_work_dir_command(board_host, artifacts_dir),
-            builder.board_deploy_tool_log_command(board_host, work_dir, tool),
             builder.board_deploy_tool_command(board_host, work_dir, tool),
-            builder.board_deploy_tool_log_command(board_host, work_dir, helper_tool),
             builder.board_deploy_tool_command(board_host, work_dir, helper_tool),
             builder.board_ssh_command(board_host, script, tty=True),
         ]

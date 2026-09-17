@@ -67,16 +67,19 @@ class MainDrawController:
             port.render_cache.pop("details", None)
             port.render_cache.pop("logs", None)
 
-        menu_rows = ui_menu_api.menu_rows(
-            port.items,
-            [
-                ui_session_api.connection_menu_label(
-                    item.label,
-                    build_state=port.connection_state,
-                    board_state=port.board_connection_state,
-                )
-                for item in port.items
-            ],
+        menu_rows = ui_menu_api.wrapped_menu_rows(
+            ui_menu_api.menu_rows(
+                port.items,
+                [
+                    ui_session_api.connection_menu_label(
+                        item.label,
+                        build_state=port.connection_state,
+                        board_state=port.board_connection_state,
+                    )
+                    for item in port.items
+                ],
+            ),
+            max(1, left_width - 4),
         )
         port.menu_scroll = ui_menu_api.clamp_menu_scroll(
             menu_rows,

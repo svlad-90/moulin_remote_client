@@ -13,6 +13,18 @@ class CliArgumentBehaviorTests(unittest.TestCase):
         self.assertEqual(args.command, "status")
         self.assertEqual(args.config, Path("config.json"))
 
+    def test_parse_yocto_impact_command(self) -> None:
+        args = arguments.parse_args(["yocto-impact"], description="desc", default_config=Path("config.json"))
+
+        self.assertEqual(args.command, "yocto-impact")
+
+    def test_parse_yocto_impact_action_commands(self) -> None:
+        for command in ("yocto-impact-clean", "yocto-impact-rebuild", "yocto-impact-clean-rebuild"):
+            with self.subTest(command=command):
+                args = arguments.parse_args([command], description="desc", default_config=Path("config.json"))
+
+                self.assertEqual(args.command, command)
+
     def test_parse_config_override_and_mapping_names(self) -> None:
         args = arguments.parse_args(
             ["--config", "custom.json", "pull-map", "one", "two"],

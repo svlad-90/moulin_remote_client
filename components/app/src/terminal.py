@@ -30,6 +30,9 @@ class AppTerminalPortAdapter:
     def configure_escape_delay(self) -> None:
         self.terminal_port.configure_escape_delay()
 
+    def configure_mouse(self) -> None:
+        self.terminal_port.configure_mouse()
+
     def set_cursor(self, visible: bool) -> None:
         self.terminal_port.set_cursor(visible)
 

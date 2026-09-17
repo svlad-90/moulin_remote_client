@@ -46,6 +46,10 @@ class BoardCommandBuilder:
     def board_deploy_tool_command(self, board_host: str, work_dir: str, tool: Path) -> list[str]:
         remote_path = self.board_tool_remote_path(work_dir, tool)
         script = (
+            "set -euo pipefail\n"
+            f"printf '%s\\n' 'Deploy board helper'\n"
+            f"printf '%s\\n' {shlex.quote('from: ' + str(tool))}\n"
+            f"printf '%s\\n' {shlex.quote('to:   ' + board_host + ':' + remote_path)}\n"
             f"mkdir -p {self.quote_remote_shell_path(work_dir)} && "
             f"cat > {self.quote_remote_shell_path(remote_path)} && chmod +x {self.quote_remote_shell_path(remote_path)}"
         )
@@ -62,7 +66,11 @@ class BoardCommandBuilder:
         return self.script_service.local_log_command(*lines, exit_code=exit_code)
 
     def board_prepare_work_dir_command(self, board_host: str, artifacts_dir: str) -> list[str]:
-        script = f"mkdir -p {self.quote_remote_shell_path(artifacts_dir)}"
+        script = (
+            f"printf '%s\\n' 'Prepare board artifacts directory'\n"
+            f"printf '%s\\n' {shlex.quote('path: ' + artifacts_dir)}\n"
+            f"mkdir -p {self.quote_remote_shell_path(artifacts_dir)}"
+        )
         return self.board_ssh_command(board_host, script)
 
 

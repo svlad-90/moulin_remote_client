@@ -24,6 +24,8 @@ class FakeCurses:
     A_BOLD = 100
     A_REVERSE = 200
     A_DIM = 400
+    ALL_MOUSE_EVENTS = 0xFFFF
+    REPORT_MOUSE_POSITION = 0x10000
 
     def __init__(self, *, has_colors: bool = True) -> None:
         self._has_colors = has_colors
@@ -47,6 +49,9 @@ class FakeCurses:
 
     def set_escdelay(self, value: int) -> None:
         self.calls.append(("set_escdelay", value))
+
+    def mousemask(self, value: int) -> None:
+        self.calls.append(("mousemask", value))
 
     def curs_set(self, value: int) -> None:
         self.calls.append(("curs_set", value))
@@ -174,9 +179,29 @@ class TerminalPortControllerTests(unittest.TestCase):
             controller.suspend_tui()
             controller.restore_tui(port)
 
-        self.assertEqual(fake_curses.calls, [("def_prog_mode", None), ("endwin", None), ("reset_prog_mode", None)])
+        self.assertEqual(fake_curses.calls, [("def_prog_mode", None), ("endwin", None), ("reset_prog_mode", None), ("mousemask", 0)])
         self.assertEqual(port.screen.keypad_values, [True])
         self.assertEqual(port.screen.timeouts, [250])
+
+    def test_configure_mouse_is_disabled_by_default_and_opt_in_by_env(self) -> None:
+        fake_curses = FakeCurses()
+
+        with (
+            patch("components.ui.src.terminal_port.curses", fake_curses),
+            patch.dict("components.ui.src.terminal_port.os.environ", {}, clear=True),
+        ):
+            terminal_port.terminal_port_controller().configure_mouse()
+
+        self.assertIn(("mousemask", 0), fake_curses.calls)
+
+        fake_curses = FakeCurses()
+        with (
+            patch("components.ui.src.terminal_port.curses", fake_curses),
+            patch.dict("components.ui.src.terminal_port.os.environ", {"MOULIN_TUI_MOUSE": "1"}, clear=True),
+        ):
+            terminal_port.terminal_port_controller().configure_mouse()
+
+        self.assertIn(("mousemask", fake_curses.ALL_MOUSE_EVENTS | fake_curses.REPORT_MOUSE_POSITION), fake_curses.calls)
 
 
 if __name__ == "__main__":

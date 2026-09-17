@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import shlex
+import textwrap
 from dataclasses import dataclass
 from typing import Any, Callable
 
 BOARD_COMMAND_LABELS = {"Copy build artifacts", "Flash bootloaders", "Flash UFS image"}
+GROUP_SEPARATOR = " / "
 
 
 @dataclass(frozen=True)
@@ -26,9 +28,16 @@ class MenuItem:
 def item_job_slot(item: MenuItem) -> str | None:
     if item.group == "board commands" or item.label == "Connect board host":
         return "board"
-    if item.group in {"build commands", "sync"} or item.label == "Connect build host":
+    if item.group == "build commands" or item.group.startswith("build commands / ") or item.group == "sync" or item.label == "Connect build host":
         return "build"
     return None
+
+
+def split_group(group: str) -> tuple[str, str]:
+    if GROUP_SEPARATOR not in group:
+        return group, ""
+    parent, child = group.split(GROUP_SEPARATOR, 1)
+    return parent, child
 
 
 def job_for_item(item: MenuItem, jobs: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -58,15 +67,54 @@ def display_job_for_item(
 
 def menu_rows(items: list[MenuItem], labels: list[str]) -> list[tuple[str, int | None]]:
     rows: list[tuple[str, int | None]] = []
-    last_group = ""
+    last_parent = ""
+    last_child = ""
     for index, item in enumerate(items):
-        if item.group != last_group:
-            if last_group:
+        parent, child = split_group(item.group)
+        if parent != last_parent:
+            if last_parent:
                 rows.append(("", None))
-            rows.append((item.group.upper(), None))
-            last_group = item.group
+            rows.append((parent.upper(), None))
+            last_parent = parent
+            last_child = ""
+        if child and child != last_child:
+            if rows and rows[-1][0]:
+                rows.append(("", None))
+            rows.append((child.capitalize(), None))
+            last_child = child
+        elif not child:
+            if last_child and rows and rows[-1][0]:
+                rows.append(("", None))
+            last_child = ""
         rows.append((f"{index + 1}. {labels[index]}", index))
     return rows
+
+
+def wrapped_menu_rows(rows: list[tuple[str, int | None]], width: int) -> list[tuple[str, int | None]]:
+    if width <= 0:
+        return [("", item_index) for _label, item_index in rows]
+    wrapped: list[tuple[str, int | None]] = []
+    for label, item_index in rows:
+        if not label or item_index is None or len(label) <= width:
+            wrapped.append((label[:width], item_index))
+            continue
+        continuation_indent = " " * _menu_item_prefix_width(label)
+        lines = textwrap.wrap(
+            label,
+            width=width,
+            subsequent_indent=continuation_indent,
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+        wrapped.extend((line, item_index) for line in lines or [label[:width]])
+    return wrapped
+
+
+def _menu_item_prefix_width(label: str) -> int:
+    number_end = label.find(". ")
+    if number_end <= 0 or not label[:number_end].isdigit():
+        return 0
+    return number_end + 2
 
 
 def command_preview(commands: list[list[str]]) -> str:

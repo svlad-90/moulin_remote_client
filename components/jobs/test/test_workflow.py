@@ -96,7 +96,7 @@ class CommandWorkflowServiceTests(unittest.TestCase):
                     "docker_image": docker_image,
                 }
             )
-            return [["pre-build-sync"], ["ninja", "full_ufs.img.gz"]]
+            return [["save-build-settings"], ["ninja", "full_ufs.img.gz"]]
 
         rc = service.run_build_command(
             port,
@@ -112,7 +112,7 @@ class CommandWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(
             runner.calls,
-            [(port, "Run product build", [["pre-build-sync"], ["ninja", "full_ufs.img.gz"]])],
+            [(port, "Run product build", [["save-build-settings"], ["ninja", "full_ufs.img.gz"]])],
         )
         self.assertEqual(sequence_calls[0]["config"], config)
         self.assertEqual(sequence_calls[0]["build_command"], ["ninja"])

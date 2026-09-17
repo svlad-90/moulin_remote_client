@@ -92,6 +92,31 @@ class MainKeyControllerTests(unittest.TestCase):
         self.assertEqual(port.selected, 0)
         self.assertEqual(panels.scrolls, [-1])
 
+    def test_mouse_wheel_moves_action_selection_one_item(self) -> None:
+        port = FakePort()
+        button_down = getattr(curses, "BUTTON5_PRESSED", 0x200000)
+
+        with patch("components.ui.src.main_keys.curses.getmouse", return_value=(0, 0, 0, 0, button_down)):
+            main_keys.main_key_controller().handle_key(port, curses.KEY_MOUSE)
+
+        self.assertEqual(port.selected, 1)
+        self.assertTrue(port.log_follow)
+
+    def test_mouse_wheel_scrolls_logs_one_line_when_logs_are_focused(self) -> None:
+        port = FakePort()
+        port.focus_panel = "logs"
+        panels = FakePanels()
+        button_up = getattr(curses, "BUTTON4_PRESSED", 0x100000)
+
+        with (
+            patch("components.ui.src.main_keys.curses.getmouse", return_value=(0, 0, 0, 0, button_up)),
+            patch("components.ui.src.main_keys.ui_panels_api.main_panels_controller", return_value=panels),
+        ):
+            main_keys.main_key_controller().handle_key(port, curses.KEY_MOUSE)
+
+        self.assertEqual(port.selected, 0)
+        self.assertEqual(panels.scrolls, [-1])
+
     def test_expanded_logs_escape_restores_previous_focus_and_clears_cache(self) -> None:
         port = FakePort()
         port.logs_expanded = True

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Callable
+from unittest.mock import patch
 
 from components.sync.api import display as sync_display_api
 from components.sync.api import planner as sync_planner_api
@@ -419,6 +420,9 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                     "rsync",
                     "-az",
                     "--delete",
+                    "--progress",
+                    "--stats",
+                    "--human-readable",
                     str(local_file),
                     "builder@example:/work/product/prod.yaml",
                 ],
@@ -445,28 +449,34 @@ class SyncCommandBehaviorTests(unittest.TestCase):
 
             self.assertEqual(argv[:2], ["bash", "-lc"])
             self.assertIn("SKIP push dry-run: readonly", argv[2])
-            self.assertEqual(commands.display_command_lines(argv), ["command: <log message>"])
+            self.assertEqual(commands.display_command_lines(argv), [])
+            with patch.dict("os.environ", {"MOULIN_TUI_SHOW_COMMANDS": "1"}):
+                self.assertEqual(commands.display_command_lines(argv), ["command: <log message>"])
 
     def test_display_command_lines_expands_multiline_script(self) -> None:
         argv = ["ssh", "board", "set -e\nx5h_flash\n"]
 
-        self.assertEqual(
-            commands.display_command_lines(argv),
-            ["command: ssh board '<script>'", "script:", "  set -e", "  x5h_flash", ""],
-        )
+        self.assertEqual(commands.display_command_lines(argv), [])
+        with patch.dict("os.environ", {"MOULIN_TUI_SHOW_COMMANDS": "1"}):
+            self.assertEqual(
+                commands.display_command_lines(argv),
+                ["command: ssh board '<script>'", "script:", "  set -e", "  x5h_flash", ""],
+            )
 
     def test_display_command_lines_expands_nested_bash_login_script(self) -> None:
         script = "bash -lic " + shlex_quote("set -e\nx5h_boot\n")
         argv = ["ssh", "-tt", "board", script]
 
-        self.assertEqual(
-            commands.display_command_lines(argv),
-            ["command: ssh -tt board bash -lic '<script>'", "script:", "  set -e", "  x5h_boot", ""],
-        )
+        with patch.dict("os.environ", {"MOULIN_TUI_SHOW_COMMANDS": "1"}):
+            self.assertEqual(
+                commands.display_command_lines(argv),
+                ["command: ssh -tt board bash -lic '<script>'", "script:", "  set -e", "  x5h_boot", ""],
+            )
 
     def test_display_command_lines_wraps_long_script_lines(self) -> None:
         long_line = "x" * 120
-        lines = commands.display_command_lines(["bash", "-lc", long_line + "\n"])
+        with patch.dict("os.environ", {"MOULIN_TUI_SHOW_COMMANDS": "1"}):
+            lines = commands.display_command_lines(["bash", "-lc", long_line + "\n"])
 
         self.assertEqual(lines[0:2], ["command: bash -lc '<script>'", "script:"])
         self.assertEqual(lines[2], "  " + ("x" * 112))
@@ -588,6 +598,9 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                     "-az",
                     "--relative",
                     "--delete",
+                    "--progress",
+                    "--stats",
+                    "--human-readable",
                     str(local_base) + "/./layers/meta",
                     "builder@10.0.0.1:/mnt/projects/meta-product/",
                 ],
@@ -888,7 +901,11 @@ class SyncCommandBehaviorTests(unittest.TestCase):
             self.assertEqual(len(argv), 2)
             self.assertEqual(argv[0][-2:], [str(local_base / "a") + "/", "builder@example:/work/product/remote-a/"])
             self.assertEqual(argv[1][-2:], [str(local_base / "b") + "/", "builder@example:/work/product/remote-b/"])
-            self.assertEqual(argv[0][3:5], ["--exclude", "tmp/"])
+            self.assertIn("--progress", argv[0])
+            self.assertIn("--stats", argv[0])
+            self.assertIn("--human-readable", argv[0])
+            self.assertIn("--exclude", argv[0])
+            self.assertIn("tmp/", argv[0])
 
     def test_mapping_command_for_config_resolves_active_project_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -955,10 +972,10 @@ class SyncCommandBehaviorTests(unittest.TestCase):
             self.assertEqual(argv[0][-2:], [str(local_base / "layers/meta") + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
 
     def test_pre_build_sync_commands_match_current_no_selection_behavior(self) -> None:
-        self.assertEqual(
-            commands.build_pre_build_sync_commands([], [], [], rsync_command=lambda mapping: ["rsync"]),
-            [],
-        )
+        argv = commands.build_pre_build_sync_commands([], [], [], rsync_command=lambda mapping: ["rsync"])
+
+        self.assertEqual(len(argv), 1)
+        self.assertIn("Copy mapped files: no active mappings selected", argv[0][2])
 
     def test_pre_build_sync_commands_report_local_overlay_issues(self) -> None:
         argv = commands.build_pre_build_sync_commands(
@@ -969,7 +986,7 @@ class SyncCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(len(argv), 1)
-        self.assertIn("Pre-build sync skipped: local overlay is not ready", argv[0][2])
+        self.assertIn("Copy mapped files skipped: local overlay is not ready", argv[0][2])
         self.assertIn("Run Sync mapped files -> Pull selected apply first.", argv[0][2])
         self.assertIn("issue-7", argv[0][2])
         self.assertNotIn("issue-8", argv[0][2])
@@ -986,9 +1003,12 @@ class SyncCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(len(argv), 3)
-        self.assertIn("Pre-build sync: pushing active mappings to remote", argv[0][2])
+        self.assertIn("Copy mapped files: pushing active mappings to remote", argv[0][2])
         self.assertIn("mappings: a, b", argv[0][2])
-        self.assertEqual(argv[1:], [["rsync", "a"], ["rsync", "b"]])
+        self.assertIn("Copy mapped files mapping: a", argv[1][2])
+        self.assertEqual(argv[1][-2:], ["rsync", "a"])
+        self.assertIn("Copy mapped files mapping: b", argv[2][2])
+        self.assertEqual(argv[2][-2:], ["rsync", "b"])
 
     def test_pre_build_sync_commands_turn_mapping_failure_into_log_command(self) -> None:
         def failing_rsync(mapping: dict[str, str]) -> list[str]:
@@ -1004,8 +1024,9 @@ class SyncCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(len(argv), 3)
-        self.assertEqual(argv[1], ["rsync", "ok"])
-        self.assertIn("Pre-build sync failed: bad", argv[2][2])
+        self.assertIn("Copy mapped files mapping: ok", argv[1][2])
+        self.assertEqual(argv[1][-2:], ["rsync", "ok"])
+        self.assertIn("Copy mapped files failed: bad", argv[2][2])
         self.assertIn("cannot push", argv[2][2])
 
     def test_pre_build_sync_commands_for_config_reports_missing_local_overlay(self) -> None:
@@ -1033,7 +1054,7 @@ class SyncCommandBehaviorTests(unittest.TestCase):
             )
 
             self.assertEqual(len(argv), 1)
-            self.assertIn("Pre-build sync skipped: local overlay is not ready", argv[0][2])
+            self.assertIn("Copy mapped files skipped: local overlay is not ready", argv[0][2])
             self.assertIn("layer: local path missing:", argv[0][2])
 
     def test_pre_build_sync_commands_for_config_builds_push_commands(self) -> None:
@@ -1065,11 +1086,13 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                 app_dir=app_dir,
             )
 
-            self.assertEqual(len(argv), 2)
-            self.assertIn("Pre-build sync: pushing active mappings to remote", argv[0][2])
+            self.assertEqual(len(argv), 3)
+            self.assertIn("Copy mapped files: pushing active mappings to remote", argv[0][2])
+            self.assertIn("Copy mapped files mapping: layer", argv[1][2])
             self.assertEqual(argv[1][-2:], [str(layer) + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
+            self.assertIn("recorded incremental build baseline", argv[2][2])
 
-    def test_build_command_sequence_for_config_saves_settings_and_prepends_sync(self) -> None:
+    def test_build_command_sequence_for_config_saves_settings_without_prepending_sync(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
             local_base = app_dir / "overlay"
@@ -1106,10 +1129,7 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                 default_config_path=default_config_path,
             )
 
-            self.assertEqual(len(argv), 3)
-            self.assertIn("Pre-build sync: pushing active mappings to remote", argv[0][2])
-            self.assertEqual(argv[1][-2:], [str(layer) + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
-            self.assertEqual(argv[2], ["ninja", "full_ufs.img.gz"])
+            self.assertEqual(argv, [["ninja", "full_ufs.img.gz"]])
             project = config["projects"][0]
             self.assertEqual(project["parameters"], {"ENABLE_ANDROID": "yes"})
             self.assertEqual(project["targets"], "full_ufs.img.gz")
@@ -1122,7 +1142,7 @@ class SyncCommandBehaviorTests(unittest.TestCase):
         argv = commands.build_pre_build_selection_error_command(SystemExit("bad selection"))
 
         self.assertEqual(len(argv), 1)
-        self.assertIn("Pre-build sync failed", argv[0][2])
+        self.assertIn("Copy mapped files failed", argv[0][2])
         self.assertIn("bad selection", argv[0][2])
         self.assertIn("exit 1", argv[0][2])
 

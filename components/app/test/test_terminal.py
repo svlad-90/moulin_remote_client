@@ -30,6 +30,7 @@ class AppTerminalPortAdapterTests(unittest.TestCase):
 
             adapter.setup_colors()
             adapter.configure_escape_delay()
+            adapter.configure_mouse()
             adapter.set_cursor(False)
             self.assertEqual(adapter.read_key(port), 113)
             adapter.unread_key(10)
@@ -46,6 +47,7 @@ class AppTerminalPortAdapterTests(unittest.TestCase):
 
             terminal_port.setup_colors.assert_called_once_with()
             terminal_port.configure_escape_delay.assert_called_once_with()
+            terminal_port.configure_mouse.assert_called_once_with()
             terminal_port.set_cursor.assert_called_once_with(False)
             terminal_port.read_key.assert_called_once_with(port)
             terminal_port.unread_key.assert_called_once_with(10)

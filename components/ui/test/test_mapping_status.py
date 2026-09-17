@@ -54,18 +54,18 @@ class MappingStatusBehaviorTests(unittest.TestCase):
             )
 
     def test_mapping_status_text_matches_current_states(self) -> None:
-        self.assertEqual(mapping_status.mapping_status_text([], [], None, []), "0 active | pre-build push no")
+        self.assertEqual(mapping_status.mapping_status_text([], [], None, []), "0 active | copy no")
         self.assertEqual(
             mapping_status.mapping_status_text(["one", "two"], [], "bad selection", []),
             "2 selected | invalid selection",
         )
         self.assertEqual(
             mapping_status.mapping_status_text(["one"], [{"name": "one"}], None, ["missing"]),
-            "1 active | needs pull before build",
+            "1 active | needs pull before copy",
         )
         self.assertEqual(
             mapping_status.mapping_status_text(["one"], [{"name": "one"}], None, []),
-            "1 active | pre-build push yes",
+            "1 active | copy ready",
         )
 
     def test_mapping_status_snapshot_matches_current_text_and_role_policy(self) -> None:
@@ -77,7 +77,7 @@ class MappingStatusBehaviorTests(unittest.TestCase):
 
             self.assertEqual(
                 mapping_status.mapping_status_snapshot([], [], None, local_base=local_base),
-                {"text": "0 active | pre-build push no", "role": "disabled"},
+                {"text": "0 active | copy no", "role": "disabled"},
             )
             self.assertEqual(
                 mapping_status.mapping_status_snapshot(["one"], [], "bad selection", local_base=local_base),
@@ -90,7 +90,7 @@ class MappingStatusBehaviorTests(unittest.TestCase):
                     None,
                     local_base=local_base,
                 ),
-                {"text": "1 active | needs pull before build", "role": "warn"},
+                {"text": "1 active | needs pull before copy", "role": "warn"},
             )
             self.assertEqual(
                 mapping_status.mapping_status_snapshot(
@@ -99,7 +99,7 @@ class MappingStatusBehaviorTests(unittest.TestCase):
                     None,
                     local_base=local_base,
                 ),
-                {"text": "1 active | pre-build push yes", "role": "ok"},
+                {"text": "1 active | copy ready", "role": "ok"},
             )
 
 

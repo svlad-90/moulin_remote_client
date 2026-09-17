@@ -24,12 +24,12 @@ def mapping_status_text(
     issues: list[str],
 ) -> str:
     if not names:
-        return "0 active | pre-build push no"
+        return "0 active | copy no"
     if error is not None:
         return f"{len(names)} selected | invalid selection"
     if issues:
-        return f"{len(active_mappings)} active | needs pull before build"
-    return f"{len(active_mappings)} active | pre-build push yes"
+        return f"{len(active_mappings)} active | needs pull before copy"
+    return f"{len(active_mappings)} active | copy ready"
 
 
 def mapping_status_snapshot(

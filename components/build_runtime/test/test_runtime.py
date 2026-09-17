@@ -134,6 +134,64 @@ class ConfigRuntimeBehaviorTests(unittest.TestCase):
             self.assertEqual(profiles.active_project(config)["docker_image"], "prod-image")
             self.assertEqual(json.loads(settings_path.read_text(encoding="utf-8"))["targets"], "android_only.img.gz")
 
+    def test_runtime_incremental_components_are_saved_in_state_file_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            config_path = app_dir / "config.json"
+            settings_path = app_dir / "state" / "build-settings.json"
+            config = {
+                "__config_path": str(config_path),
+                "state": {"build_settings": str(settings_path)},
+                "remotes": [{"name": "build", "user": "u", "host": "h"}],
+                "active_remote": "build",
+                "projects": [{"name": "prod", "project_dir": "meta-product"}],
+                "active_project": "prod",
+            }
+            profiles.normalize_remote_profiles(config)
+            profiles.normalize_project_profiles(config)
+            runtime.save_runtime_build_settings(
+                config,
+                {"parameters": {}, "targets": "target", "docker_image": "img"},
+                app_dir,
+                config_path,
+            )
+
+            runtime.save_runtime_incremental_components(config, app_dir, ["doma_kernel", "doma"])
+
+            self.assertEqual(runtime.load_runtime_incremental_components(config, app_dir), ["doma_kernel", "doma"])
+            self.assertNotIn("incremental_components", profiles.active_project(config))
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["targets"], "target")
+            self.assertEqual(saved["incremental_components"], ["doma_kernel", "doma"])
+
+    def test_runtime_mapping_snapshot_tracks_changed_mappings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            layer = local_base / "layers/meta-xt-dom0-gen5"
+            layer.mkdir(parents=True)
+            recipe = layer / "recipe.bbappend"
+            recipe.write_text("old\n", encoding="utf-8")
+            config = {
+                "state": {"build_settings": str(app_dir / "state/build-settings.json")},
+                "exclude": [".git/"],
+                "local": {"project_dir": str(local_base)},
+                "remotes": [{"name": "build", "user": "u", "host": "h"}],
+                "active_remote": "build",
+                "projects": [{"name": "prod", "project_dir": "meta-product"}],
+                "active_project": "prod",
+            }
+            profiles.normalize_remote_profiles(config)
+            profiles.normalize_project_profiles(config)
+            mappings = [{"name": "layers-meta-xt-dom0-gen5", "local": "layers/meta-xt-dom0-gen5"}]
+
+            runtime.save_runtime_mapping_snapshot(config, app_dir, mappings)
+            self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), [])
+
+            recipe.write_text("new\n", encoding="utf-8")
+
+            self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), ["layers-meta-xt-dom0-gen5"])
+
     def test_build_runtime_context_merges_config_settings_and_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)

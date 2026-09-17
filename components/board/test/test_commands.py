@@ -96,14 +96,14 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         board_host = config_accessors.host_spec(config_profiles.active_board_host(config))
         work_dir = config_accessors.board_work_dir(config_profiles.active_board_host(config))
 
-        self.assertEqual(
-            builder.board_deploy_tool_command(board_host, work_dir, tool),
-            [
-                "bash",
-                "-lc",
-                "cat /tmp/flash_bootloaders.py | ssh testrpi5@10.13.64.242 'mkdir -p /srv/tftp/vgon && cat > /srv/tftp/vgon/flash_bootloaders.py && chmod +x /srv/tftp/vgon/flash_bootloaders.py'",
-            ],
-        )
+        command = builder.board_deploy_tool_command(board_host, work_dir, tool)
+
+        self.assertEqual(command[:2], ["bash", "-lc"])
+        self.assertIn("cat /tmp/flash_bootloaders.py | ssh testrpi5@10.13.64.242", command[2])
+        self.assertIn("Deploy board helper", command[2])
+        self.assertIn("from: /tmp/flash_bootloaders.py", command[2])
+        self.assertIn("to:   testrpi5@10.13.64.242:/srv/tftp/vgon/flash_bootloaders.py", command[2])
+        self.assertIn("cat > /srv/tftp/vgon/flash_bootloaders.py", command[2])
         self.assertEqual(
             builder.board_tool_remote_path(work_dir, tool),
             "/srv/tftp/vgon/flash_bootloaders.py",
@@ -120,7 +120,11 @@ class BoardCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(
             builder.board_prepare_work_dir_command(board_host, artifacts_dir),
-            ["ssh", "testrpi5@10.13.64.242", "mkdir -p /srv/tftp/vgon/artifacts"],
+            [
+                "ssh",
+                "testrpi5@10.13.64.242",
+                "printf '%s\\n' 'Prepare board artifacts directory'\nprintf '%s\\n' 'path: /srv/tftp/vgon/artifacts'\nmkdir -p /srv/tftp/vgon/artifacts",
+            ],
         )
 
     def test_artifact_resolver_script_matches_current_shape(self) -> None:
@@ -190,7 +194,8 @@ class BoardCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(len(argv), 3)
         self.assertIn("route: via client machine", argv[0][2])
-        self.assertEqual(argv[1], ["ssh", "board@10.0.0.2", "mkdir -p /srv/tftp/vgon/artifacts"])
+        self.assertIn("Prepare board artifacts directory", argv[1][2])
+        self.assertIn("mkdir -p /srv/tftp/vgon/artifacts", argv[1][2])
         self.assertEqual(argv[2][0:2], ["bash", "-lc"])
         self.assertIn("ssh builder@10.0.0.1", argv[2][2])
         self.assertIn("ssh board@10.0.0.2", argv[2][2])
@@ -274,11 +279,11 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             argv,
             workflow.flash_bootloaders_commands(config),
         )
-        self.assertEqual(len(argv), 7)
-        self.assertIn("x5h_flash", argv[3][-1])
-        self.assertIn("tar -xf \"$archive\" -C \"$artifact_dir\" --strip-components=1", argv[4][-1])
-        self.assertIn("python3 -u ./flash_bootloaders.py --port /dev/GEN5_CONSOLE", argv[6][-1])
-        self.assertIn("x5h_boot", argv[6][-1])
+        self.assertEqual(len(argv), 6)
+        self.assertIn("x5h_flash", argv[2][-1])
+        self.assertIn("tar -xf \"$archive\" -C \"$artifact_dir\" --strip-components=1", argv[3][-1])
+        self.assertIn("python3 -u ./flash_bootloaders.py --port /dev/GEN5_CONSOLE", argv[5][-1])
+        self.assertIn("x5h_boot", argv[5][-1])
 
     def test_flash_ufs_commands_from_config_use_gen5_board_type_helper(self) -> None:
         config = sample_config()
@@ -290,12 +295,10 @@ class BoardCommandBehaviorTests(unittest.TestCase):
 
         argv = workflow.flash_ufs_image_commands(config)
 
-        self.assertEqual(len(argv), 6)
+        self.assertEqual(len(argv), 4)
         self.assertIn("xt-imager.py", argv[1][-1])
-        self.assertIn("xt-imager.py", argv[2][-1])
-        self.assertIn("gen5_x5h_flash_ufs.py", argv[3][-1])
-        self.assertIn("gen5_x5h_flash_ufs.py", argv[4][-1])
-        script = argv[5][-1]
+        self.assertIn("gen5_x5h_flash_ufs.py", argv[2][-1])
+        script = argv[3][-1]
         self.assertIn("x5h_off", script)
         self.assertIn("x5h_on", script)
         self.assertIn("x5h_boot", script)

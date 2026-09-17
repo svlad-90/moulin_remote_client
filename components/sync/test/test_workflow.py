@@ -9,7 +9,7 @@ from components.sync.api import workflow
 
 
 class SyncCommandWorkflowServiceTests(unittest.TestCase):
-    def test_build_command_sequence_saves_settings_and_prepends_sync(self) -> None:
+    def test_build_command_sequence_saves_settings_without_prepending_sync(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
             local_base = app_dir / "overlay"
@@ -48,10 +48,7 @@ class SyncCommandWorkflowServiceTests(unittest.TestCase):
                 docker_image="prod-image",
             )
 
-            self.assertEqual(len(argv), 3)
-            self.assertIn("Pre-build sync: pushing active mappings to remote", argv[0][2])
-            self.assertEqual(argv[1][-2:], [str(layer) + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
-            self.assertEqual(argv[2], ["ninja", "full_ufs.img.gz"])
+            self.assertEqual(argv, [["ninja", "full_ufs.img.gz"]])
             project = config["projects"][0]
             self.assertEqual(project["parameters"], {"ENABLE_ANDROID": "yes"})
             self.assertEqual(project["targets"], "full_ufs.img.gz")
@@ -59,6 +56,15 @@ class SyncCommandWorkflowServiceTests(unittest.TestCase):
             saved_settings = json.loads((app_dir / "state/build-settings.json").read_text(encoding="utf-8"))
             self.assertEqual(saved_settings["targets"], "full_ufs.img.gz")
             self.assertTrue(default_config_path.exists())
+
+            push_argv = service.mapped_files_push_sequence(config)
+
+            self.assertEqual(len(push_argv), 3)
+            self.assertIn("Copy mapped files: pushing active mappings to remote", push_argv[0][2])
+            self.assertIn("Copy mapped files mapping: layer", push_argv[1][2])
+            self.assertEqual(push_argv[1][-2:], [str(layer) + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
+            self.assertEqual(push_argv[2][:2], ["python3", "-c"])
+            self.assertIn("recorded incremental build baseline", push_argv[2][2])
 
     def test_run_cli_command_delegates_to_sync_cli_service_with_workflow_app_dir(self) -> None:
         class FakeCliService:

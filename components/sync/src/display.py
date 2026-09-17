@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import os
 import shlex
 
 
@@ -14,6 +15,8 @@ class SyncCommandDisplayService:
         return shlex.join(safe)
 
     def display_command_lines(self, argv: list[str]) -> list[str]:
+        if os.environ.get("MOULIN_TUI_SHOW_COMMANDS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+            return []
         if not any("\n" in arg or "\r" in arg for arg in argv):
             return [f"command: {self.display_command(argv)}"]
         script_index = next((index for index, arg in enumerate(argv) if "\n" in arg or "\r" in arg), len(argv) - 1)

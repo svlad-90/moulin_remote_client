@@ -333,6 +333,124 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
             ],
         )
 
+    def test_yocto_image_recipes_from_manifest_uses_effective_build_targets(self) -> None:
+        data = {
+            "variables": {"DOM0_IMAGE": "core-image-thin-initramfs", "DOMD_IMAGE": "rcar-image-adas"},
+            "components": {
+                "dom0": {"builder": {"type": "yocto", "build_target": "%{DOM0_IMAGE}"}},
+                "domd": {"builder": {"type": "yocto", "build_target": "%{DOMD_IMAGE}"}},
+                "domu": {"builder": {"type": "yocto", "build_target": "%{DOMD_IMAGE}"}},
+                "boot_artifacts": {"builder": {"type": "tar", "target_images": ["boot.tar"]}},
+            },
+            "parameters": {
+                "MODE": {
+                    "base": {},
+                    "custom": {
+                        "default": "true",
+                        "overrides": {
+                            "components": {
+                                "diagnostic": {"builder": {"type": "yocto", "build_target": "diagnostic-image"}}
+                            }
+                        },
+                    },
+                }
+            },
+        }
+
+        self.assertEqual(
+            manifest.yocto_image_recipes_from_manifest(data),
+            ["core-image-thin-initramfs", "rcar-image-adas", "diagnostic-image"],
+        )
+
+    def test_component_builders_from_manifest_expands_supported_targets(self) -> None:
+        data = {
+            "variables": {
+                "DOMD_IMAGE": "rcar-image-adas",
+                "KERNEL_TARGET": "//common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist",
+            },
+            "components": {
+                "domd": {"builder": {"type": "yocto", "build_target": "%{DOMD_IMAGE}"}},
+                "doma_kernel": {"builder": {"type": "bazel", "target": "%{KERNEL_TARGET}"}},
+                "doma": {"builder": {"type": "android"}},
+                "boot_artifacts": {"builder": {"type": "custom_script"}},
+            },
+        }
+
+        self.assertEqual(
+            manifest.component_builders_from_manifest(data),
+            [
+                {"name": "domd", "builder_type": "yocto", "target": "rcar-image-adas"},
+                {
+                    "name": "doma_kernel",
+                    "builder_type": "bazel",
+                    "target": "//common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist",
+                },
+                {"name": "doma", "builder_type": "android", "target": "doma"},
+                {"name": "boot_artifacts", "builder_type": "custom_script", "target": "boot_artifacts"},
+            ],
+        )
+
+    def test_component_builders_from_manifest_skips_components_disabled_by_parameters(self) -> None:
+        data = {
+            "components": {
+                "dom0": {"builder": {"type": "yocto", "build_target": "core-image-thin-initramfs"}},
+                "domd": {"builder": {"type": "yocto", "build_target": "rcar-image-adas"}},
+                "domu": {"builder": {"type": "yocto", "build_target": "xt-rcar-image"}},
+                "doma_kernel": {"builder": {"type": "bazel", "target": "//kernel:dist"}},
+                "doma": {"builder": {"type": "android"}},
+            },
+        }
+
+        self.assertEqual(
+            manifest.component_builders_from_manifest(
+                data,
+                {
+                    "ENABLE_DOMU": "no",
+                    "ENABLE_DOMA": "no",
+                },
+            ),
+            [
+                {"name": "dom0", "builder_type": "yocto", "target": "core-image-thin-initramfs"},
+                {"name": "domd", "builder_type": "yocto", "target": "rcar-image-adas"},
+            ],
+        )
+
+    @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
+    def test_yocto_image_recipes_for_config_loads_manifest(self) -> None:
+        manifest_text = "\n".join(
+            [
+                "min_ver: '1.0'",
+                "variables:",
+                "  DOM0_IMAGE: core-image-thin-initramfs",
+                "  DOMD_IMAGE: rcar-image-adas",
+                "components:",
+                "  dom0:",
+                "    builder:",
+                "      type: yocto",
+                "      build_target: '%{DOM0_IMAGE}'",
+                "  domd:",
+                "    builder:",
+                "      type: yocto",
+                "      build_target: '%{DOMD_IMAGE}'",
+            ]
+        )
+        config = {
+            "remotes": [{"name": "build", "user": "builder", "host": "10.0.0.1", "projects_dir": "/mnt/projects"}],
+            "active_remote": "build",
+            "projects": [{"name": "prod", "project_dir": "meta-product", "moulin_manifest": "prod.yaml"}],
+            "active_project": "prod",
+        }
+
+        self.assertEqual(
+            manifest.yocto_image_recipes_for_config(
+                config,
+                app_dir=Path("/tmp/app"),
+                remote_read_project_file=lambda _config, _path: manifest_text,
+                cache={},
+            ),
+            ["core-image-thin-initramfs", "rcar-image-adas"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

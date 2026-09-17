@@ -91,7 +91,7 @@ components/
   project_config_ui/                 # project config screens
   project_mapping_ui/                # mapping browser screens
   remote/                            # build-host commands
-  sync/                              # mapping sync and pre-build sync
+  sync/                              # mapping sync and explicit mapped-file copy
   ui/                                # curses rendering/session state
 workspace/                           # local runtime state, ignored by Git
 ```
@@ -189,14 +189,14 @@ hosts, user names, and product settings.
 
 7. Edit files in the local overlay.
 
-8. Run **Run product build**.
+8. If you want local overlay changes on the build host, run **Copy mapped files
+   to build host**.
 
-   Before Docker, Moulin, or Ninja starts, the client pushes active mappings
-   from the local overlay back to the build host with `rsync -az --delete`.
-   If no mappings are active, pre-build push is skipped and the build runs
-   directly on the build host. If a required local mapped path is missing after
-   mappings were activated, the build stops before touching the remote tree and
-   asks you to pull first.
+   The copy action pushes active mappings from the local overlay back to the
+   build host with `rsync -az --delete`. Build actions do not run this copy
+   automatically.
+
+9. Run **Run product build**.
 
 ## Main Menu
 
@@ -224,13 +224,26 @@ type.
 | --- | --- |
 | Prepare remote project | Clone or repair the configured checkout when preflight requires it. |
 | Checkout project Git ref | Checkout the configured Git ref when preflight requires it. |
+| Copy mapped files to build host | Push selected local mapped files to the configured build host. |
 | Build Docker image | Run `docker build` on the build host. |
 | Regenerate Moulin/Ninja | Run `moulin <manifest>` inside the product Docker container. |
 | Run product build | Run `ninja <targets>` inside the product Docker container. |
+| Incremental build | Rebuild configured Moulin components using supported builder-specific incremental flows, regenerate Moulin/Ninja, then run the configured Ninja targets. |
 | Stop running command | Stop the active build/sync command, then force-kill if needed. |
 
 Build commands are multi-step jobs. They stop on the first non-zero step exit.
 The log header remains `RUNNING` until the whole sequence finishes or fails.
+Command logs show compact step labels by default. Set
+`MOULIN_TUI_SHOW_COMMANDS=1` before starting the tool to include full command
+and generated script text in the log.
+
+Set `yocto_image_recipes` on a project, remote, or top-level `yocto` config
+section when the incremental build must force final Yocto image recipes too,
+for example `rcar-image-adas xt-rcar-image`.
+
+When **Incremental build** starts, the TUI opens a component selector. `yocto`,
+`bazel`, and `android` builders are supported. Other builder types are shown
+disabled until a builder-specific incremental flow is added.
 
 ### Board Host Session
 
@@ -322,7 +335,7 @@ Project profiles live under `projects` and the active profile name is stored in
 | `targets` | Ninja targets for **Run product build**. |
 | `board_artifacts` | Artifact labels/targets to copy to the board host. Defaults to `targets` when empty. |
 | `mappings` | Saved source mapping definitions for this project. |
-| `active_mappings` | Active mapping names used by pull, push, and pre-build sync. |
+| `active_mappings` | Active mapping names used by pull, push, and explicit mapped-file copy. |
 
 ## Environment Overrides
 
@@ -385,11 +398,10 @@ directory mapping deletes the corresponding file on the build host during push.
 
 Build commands are run on the build host but driven from the local TUI.
 
-1. If no mappings are active, pre-build sync is skipped.
-2. If mappings are active, the client validates the corresponding local overlay
-   paths.
-3. Active mappings are pushed from local overlay to build host.
-4. The requested build command runs on the build host.
+1. Optional: run **Copy mapped files to build host** when local overlay changes
+   should be pushed to the remote checkout.
+2. The requested build command runs on the build host. Build commands do not
+   copy mapped files automatically.
 
 The command shapes are:
 
@@ -519,6 +531,10 @@ Useful direct commands:
 ./moulin_remote_client.py build-docker
 ./moulin_remote_client.py regen-moulin
 ./moulin_remote_client.py build
+./moulin_remote_client.py yocto-impact
+./moulin_remote_client.py yocto-impact-clean
+./moulin_remote_client.py yocto-impact-rebuild
+./moulin_remote_client.py yocto-impact-clean-rebuild
 ./moulin_remote_client.py mappings
 ./moulin_remote_client.py select-mappings
 ./moulin_remote_client.py pull-selected-map-dry-run
@@ -592,13 +608,13 @@ then restart the client.
 
 ### Build command refuses to start because local paths are missing
 
-This only applies after mappings were selected and activated. Run **Sync mapped
-files** -> **Pull selected apply** first. The client blocks pre-build push when
-active mappings exist but the local overlay does not contain the mapped paths.
+This only applies to **Copy mapped files to build host** after mappings were
+selected and activated. Run **Sync mapped files** -> **Pull selected apply**
+first. The client blocks the copy when active mappings exist but the local
+overlay does not contain the mapped paths.
 
 For a first build with no source mappings yet, there is nothing to pull or push:
-pre-build sync is skipped and the build runs directly in the build-host
-checkout.
+run the build directly in the build-host checkout.
 
 ### Build host can reach board host directly
 
@@ -635,7 +651,7 @@ The component boundary is service-oriented:
 
 - `components.main_menu` decides what actions are visible.
 - `components.jobs` owns command sequence lifecycle and status.
-- `components.sync` owns mapping sync and pre-build source push.
+- `components.sync` owns mapping sync and explicit mapped-file copy.
 - `components.board` owns generic board command services.
 - `components.board_types` owns board-specific action lists and command plans.
 

@@ -39,6 +39,7 @@ class FakePort:
         self.events: list[str] = []
         self.connection_workflow = FakeConnectionWorkflow(self.events)
         self.configure_calls = 0
+        self.configure_mouse_calls = 0
         self.cursor_values: list[bool] = []
         self.draw_calls = 0
         self.poll_calls = 0
@@ -48,6 +49,9 @@ class FakePort:
 
     def configure_escape_delay(self) -> None:
         self.configure_calls += 1
+
+    def configure_mouse(self) -> None:
+        self.configure_mouse_calls += 1
 
     def set_cursor(self, value: bool) -> None:
         self.cursor_values.append(value)
@@ -91,6 +95,7 @@ class MainRunLoopControllerTests(unittest.TestCase):
         controller.run(port)
 
         self.assertEqual(port.configure_calls, 1)
+        self.assertEqual(port.configure_mouse_calls, 1)
         self.assertEqual(port.cursor_values, [False])
         self.assertEqual(port.screen.keypad_values, [True])
         self.assertEqual(port.connection_workflow.auto_connect_calls, 1)

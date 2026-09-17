@@ -56,6 +56,10 @@ class MainMenuBuilder:
             remote_command_workflow=self.remote_command_workflow,
             sync_command_workflow=self.sync_command_workflow,
             board_command_workflow=self.board_command_workflow,
+            app_dir=app_dir,
+            default_moulin_manifest=default_moulin_manifest,
+            remote_read_project_file=remote_read_project_file,
+            manifest_cache=manifest_cache,
         )
         self.setup_items = main_menu_setup_items_service(
             remote_command_workflow=self.remote_command_workflow,

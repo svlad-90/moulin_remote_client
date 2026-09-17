@@ -87,7 +87,13 @@ class CommandLifecycleServiceTests(unittest.TestCase):
         self.assertTrue(port.logs_dirty)
         self.assertEqual(
             jobs.job_output_lines(job),
-            ["Starting step 1/1...", "command: ninja full_ufs.img.gz"],
+            [
+                "====================================",
+                "Starting step 1/1: Run product build",
+                "====================================",
+                "",
+                "command: ninja full_ufs.img.gz",
+            ],
         )
 
     def test_start_next_command_finishes_completed_sequence_and_resets_preflight_when_needed(self) -> None:

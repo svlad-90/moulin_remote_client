@@ -53,6 +53,8 @@ class SyncSelectedPathService:
         argv = ["rsync", "-az", "--relative", "--delete"]
         if dry_run:
             argv.extend(["--dry-run", "--itemize-changes"])
+        else:
+            argv.extend(["--progress", "--stats", "--human-readable"])
         argv.extend(self.rsync_excludes_for_config(config))
         argv.extend(self.build_rsync_path_args(paths, self.remote_base_for_config(config)))
         argv.append(str(local_dir) + "/")
@@ -73,6 +75,8 @@ class SyncSelectedPathService:
         argv = ["rsync", "-az", "--relative", "--delete"]
         if dry_run:
             argv.extend(["--dry-run", "--itemize-changes"])
+        else:
+            argv.extend(["--progress", "--stats", "--human-readable"])
         argv.extend(self.rsync_excludes_for_config(config))
         argv.extend(self.build_rsync_path_args(paths, str(local_dir)))
         argv.append(self.remote_base_for_config(config) + "/")

@@ -7,6 +7,8 @@ from components.moulin.src.manifest import (
     artifact_copy_specs_for_config,
     artifact_copy_specs_from_manifest,
     build_runtime_context_for_config,
+    component_builders_for_config,
+    component_builders_from_manifest,
     default_parameters,
     default_parameters_for_config,
     effective_manifest,
@@ -29,6 +31,8 @@ from components.moulin.src.manifest import (
     validate_manifest_text,
     yaml_available,
     yaml_tags,
+    yocto_image_recipes_for_config,
+    yocto_image_recipes_from_manifest,
 )
 
 __all__ = [
@@ -36,6 +40,8 @@ __all__ = [
     "artifact_copy_specs_for_config",
     "artifact_copy_specs_from_manifest",
     "build_runtime_context_for_config",
+    "component_builders_for_config",
+    "component_builders_from_manifest",
     "default_parameters",
     "default_parameters_for_config",
     "effective_manifest",
@@ -58,4 +64,6 @@ __all__ = [
     "validate_manifest_text",
     "yaml_available",
     "yaml_tags",
+    "yocto_image_recipes_for_config",
+    "yocto_image_recipes_from_manifest",
 ]
