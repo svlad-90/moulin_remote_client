@@ -23,6 +23,14 @@ class ProjectScreenRenderResult:
     editing_cursor_yx: tuple[int, int] | None
 
 
+@dataclass(frozen=True)
+class ProjectFieldDisplayRow:
+    kind: str
+    field: dict[str, Any] | None = None
+    field_index: int | None = None
+    label: str = ""
+
+
 class ProjectScreenRenderer:
     """Render the project configuration screen from controller state."""
 
@@ -178,13 +186,16 @@ class ProjectScreenRenderer:
         if selected_project is None:
             port.add(row, detail_x, "Selected project: <none>"[:detail_w], port.disabled_attr())
             return None
-        port.add(row, detail_x, "Fields:", port.accent_attr())
-        row += 1
+        display_rows = self._field_display_rows(fields)
         visible_fields = max(0, panel_top + panel_height - row - 5)
-        field_scroll = min(max(0, state.field_index - visible_fields + 1), max(0, len(fields) - visible_fields))
+        selected_display_index = self._display_index_for_field(display_rows, state.field_index)
+        field_scroll = min(
+            max(0, selected_display_index - visible_fields + 1),
+            max(0, len(display_rows) - visible_fields),
+        )
         editing_cursor_yx = self._render_field_rows(
             port,
-            fields,
+            display_rows,
             selected_project,
             row,
             field_scroll,
@@ -193,14 +204,14 @@ class ProjectScreenRenderer:
             detail_w,
             state,
         )
-        row += len(fields[field_scroll : field_scroll + visible_fields])
+        row += len(display_rows[field_scroll : field_scroll + visible_fields])
         self._render_field_hint(port, fields, selected_project, row, height, detail_x, detail_w, state)
         return editing_cursor_yx
 
     def _render_field_rows(
         self,
         port: Any,
-        fields: list[dict[str, Any]],
+        display_rows: list[ProjectFieldDisplayRow],
         selected_project: dict[str, Any],
         row: int,
         field_scroll: int,
@@ -210,8 +221,17 @@ class ProjectScreenRenderer:
         state: config_project_screen_state_api.ProjectScreenState,
     ) -> tuple[int, int] | None:
         editing_cursor_yx: tuple[int, int] | None = None
-        for visible_offset, field in enumerate(fields[field_scroll : field_scroll + visible_fields]):
-            item_index = field_scroll + visible_offset
+        for visible_offset, display_row in enumerate(display_rows[field_scroll : field_scroll + visible_fields]):
+            if display_row.kind == "blank":
+                port.add(row, detail_x, "".ljust(detail_w))
+                row += 1
+                continue
+            if display_row.kind == "heading":
+                port.add(row, detail_x, str(display_row.label).upper()[:detail_w], port.accent_attr())
+                row += 1
+                continue
+            field = display_row.field or {}
+            item_index = int(display_row.field_index or 0)
             key = str(field["key"])
             is_editing = state.focus == "fields" and key == state.editing_key
             raw_value = state.editing_value if is_editing else self.project_field_service.field_value(selected_project, field)
@@ -238,6 +258,42 @@ class ProjectScreenRenderer:
                 editing_cursor_yx = (row, cursor_x)
             row += 1
         return editing_cursor_yx
+
+    def _field_display_rows(self, fields: list[dict[str, Any]]) -> list[ProjectFieldDisplayRow]:
+        rows: list[ProjectFieldDisplayRow] = []
+        current_group = ""
+        for index, field in enumerate(fields):
+            group = self._field_group(field)
+            if group != current_group:
+                if rows:
+                    rows.append(ProjectFieldDisplayRow(kind="blank"))
+                rows.append(ProjectFieldDisplayRow(kind="heading", label=group))
+                current_group = group
+            rows.append(ProjectFieldDisplayRow(kind="field", field=field, field_index=index))
+        return rows
+
+    @staticmethod
+    def _display_index_for_field(display_rows: list[ProjectFieldDisplayRow], field_index: int) -> int:
+        for index, row in enumerate(display_rows):
+            if row.field_index == field_index:
+                return index
+        return 0
+
+    @staticmethod
+    def _field_group(field: dict[str, Any]) -> str:
+        key = str(field.get("key", ""))
+        kind = str(field.get("kind", ""))
+        if key in ("name", "label"):
+            return "Profile"
+        if key in ("project_dir", "local_project_dir"):
+            return "Directories"
+        if key in ("git_url", "git_ref"):
+            return "Git"
+        if key in ("moulin_manifest", "dockerfile", "docker_image") or kind in ("param", "targets"):
+            return "Build"
+        if key == "board_artifacts":
+            return "Artifacts"
+        return "Other"
 
     def _render_field_hint(
         self,

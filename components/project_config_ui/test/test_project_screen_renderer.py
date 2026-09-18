@@ -94,6 +94,39 @@ class ProjectScreenRendererTests(unittest.TestCase):
         self.assertIsNotNone(result.editing_cursor_yx)
         self.assertTrue(any("Enter: save" in row[2] for row in port.rows))
 
+    def test_render_groups_project_fields(self) -> None:
+        cfg = config()
+        port = FakeRenderPort()
+        state = project_screen_state.ProjectScreenStateController(cfg)
+        renderer = project_screen_renderer.ProjectScreenRenderer(
+            cfg,
+            app_dir=Path("/app"),
+            project_fields_factory=lambda _params: [
+                {"label": "Profile name", "key": "name", "kind": "text"},
+                {"label": "Project dir", "key": "project_dir", "kind": "text"},
+                {"label": "Git URL", "key": "git_url", "kind": "text"},
+                {"label": "ENABLE_ANDROID", "key": "param:ENABLE_ANDROID", "kind": "param", "param": {"default": "yes"}},
+                {"label": "Board artifacts", "key": "board_artifacts", "kind": "text"},
+            ],
+        )
+
+        renderer.render(port, height=30, width=120, params=[], screen_state=state)
+
+        rendered = [row[2].strip() for row in port.rows]
+        self.assertIn("PROFILE", rendered)
+        self.assertIn("DIRECTORIES", rendered)
+        self.assertIn("GIT", rendered)
+        self.assertIn("BUILD", rendered)
+        self.assertIn("ARTIFACTS", rendered)
+        directories_row = rendered.index("DIRECTORIES")
+        git_row = rendered.index("GIT")
+        build_row = rendered.index("BUILD")
+        artifacts_row = rendered.index("ARTIFACTS")
+        self.assertEqual(rendered[directories_row - 1], "")
+        self.assertEqual(rendered[git_row - 1], "")
+        self.assertEqual(rendered[build_row - 1], "")
+        self.assertEqual(rendered[artifacts_row - 1], "")
+
 
 if __name__ == "__main__":
     unittest.main()

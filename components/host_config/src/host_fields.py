@@ -83,6 +83,11 @@ class BoardHostFieldService:
             "console_device",
             "ufs_loadaddr",
             "ufs_buffersize",
+            "tftp_root",
+            "nfs_root",
+            "deploy_subdir",
+            "server_ip",
+            "board_ip",
             "direct_copy",
         ):
             return True
@@ -106,6 +111,11 @@ class BoardHostFieldService:
             "console_device": "Serial console device. Leave empty to auto-detect the first /dev/GEN5_CONSOLE* on the board host.",
             "ufs_loadaddr": "Optional xt-imager --loadaddr override. Leave empty to use xt-imager default.",
             "ufs_buffersize": "Optional xt-imager --buffersize override. Leave empty to use xt-imager default.",
+            "tftp_root": "Board-host TFTP server root directory.",
+            "nfs_root": "Board-host NFS export root directory.",
+            "deploy_subdir": "Subdirectory under TFTP/NFS roots used by this client, for example vgoncharuk/projects.",
+            "server_ip": "TFTP/NFS server IP address visible from U-Boot.",
+            "board_ip": "Board IP address used by U-Boot network boot commands.",
             "direct_copy": "Enter/Space toggles yes when the build host can SSH to this board host directly.",
         }
         return hints.get(key, "")

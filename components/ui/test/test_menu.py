@@ -86,7 +86,11 @@ class MenuModelBehaviorTests(unittest.TestCase):
         self.assertEqual(menu.item_job_slot(MenuItem("Connect build host", "build host session", "", lambda app: "", lambda app: None)), "build")
         self.assertEqual(menu.item_job_slot(MenuItem("Flash UFS image", "board commands", "", lambda app: "", lambda app: None)), "board")
         self.assertEqual(menu.item_job_slot(MenuItem("Connect board host", "board host session", "", lambda app: "", lambda app: None)), "board")
-        self.assertIsNone(menu.item_job_slot(MenuItem("Project configurations", "setup", "", lambda app: "", lambda app: None)))
+        self.assertIsNone(menu.item_job_slot(MenuItem("Open local NFS workspace", "tftp/nfs / open local workspaces", "", lambda app: "", lambda app: None)))
+        self.assertIsNone(menu.item_job_slot(MenuItem("Open board serial console", "flashing / board host", "", lambda app: "", lambda app: None)))
+        self.assertIsNone(menu.item_job_slot(MenuItem("Open U-Boot console", "flashing / board host", "", lambda app: "", lambda app: None)))
+        self.assertIsNone(menu.item_job_slot(MenuItem("Open remote TFTP root", "tftp/nfs / open remote roots", "", lambda app: "", lambda app: None)))
+        self.assertIsNone(menu.item_job_slot(MenuItem("Project configuration", "setup", "", lambda app: "", lambda app: None)))
 
     def test_job_lookup_helpers_match_current_shape(self) -> None:
         active = {"item_label": "Run product build"}
@@ -100,6 +104,17 @@ class MenuModelBehaviorTests(unittest.TestCase):
         self.assertIs(
             menu.display_job_for_item(item, active_job=active, board_job=board, last_board_job=None, last_job=None),
             board,
+        )
+        self.assertEqual(
+            menu.display_job_for_item(
+                MenuItem("Regenerate Moulin/Ninja", "build commands", "", lambda app: "", lambda app: None),
+                active_job=active,
+                board_job=board,
+                last_board_job=None,
+                last_job=active,
+                last_jobs_by_label={"Regenerate Moulin/Ninja": {"item_label": "Regenerate Moulin/Ninja"}},
+            )["item_label"],
+            "Regenerate Moulin/Ninja",
         )
         self.assertIs(
             menu.display_job_for_item(item, active_job=None, board_job=None, last_board_job=board, last_job=active),
@@ -154,14 +169,14 @@ class MenuModelBehaviorTests(unittest.TestCase):
                 ("BUILD COMMANDS", None),
                 ("1. Run product build", 0),
                 ("", None),
-                ("Yocto incremental build", None),
+                ("YOCTO INCREMENTAL BUILD", None),
                 ("2. Clean impacted Yocto recipes + run product build", 1),
             ],
         )
 
     def test_wrapped_menu_rows_indent_continuation_under_item_text(self) -> None:
         rows = [
-            ("Yocto incremental build", None),
+            ("YOCTO INCREMENTAL BUILD", None),
             ("10. Clean impacted Yocto recipes + run product build", 9),
         ]
 
@@ -170,7 +185,7 @@ class MenuModelBehaviorTests(unittest.TestCase):
         self.assertEqual(
             wrapped,
             [
-                ("Yocto incremental build", None),
+                ("YOCTO INCREMENTAL BUILD", None),
                 ("10. Clean impacted Yocto", 9),
                 ("    recipes + run product", 9),
                 ("    build", 9),
@@ -193,7 +208,7 @@ class MenuModelBehaviorTests(unittest.TestCase):
                 ("BUILD COMMANDS", None),
                 ("1. Run product build", 0),
                 ("", None),
-                ("Yocto incremental build", None),
+                ("YOCTO INCREMENTAL BUILD", None),
                 ("2. Clean impacted Yocto recipes + run product build", 1),
                 ("", None),
                 ("3. Stop running command", 2),
@@ -201,6 +216,43 @@ class MenuModelBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(menu.clamp_menu_scroll(rows, selected=0, scroll=3, visible_rows=4), 1)
         self.assertEqual(menu.clamp_menu_scroll(rows, selected=1, scroll=3, visible_rows=4), 3)
+
+    def test_menu_tabs_filter_visible_items_with_local_display_numbers(self) -> None:
+        items = [
+            MenuItem("Build host configuration", "configuration", "", lambda app: "", lambda app: None),
+            MenuItem("Run product build", "build", "", lambda app: "", lambda app: None),
+            MenuItem("Open board host shell", "sessions / board host", "", lambda app: "", lambda app: None),
+            MenuItem("Flash UFS image", "flashing", "", lambda app: "", lambda app: None),
+            MenuItem("Deploy full TFTP/NFS set", "tftp/nfs", "", lambda app: "", lambda app: None),
+        ]
+
+        self.assertEqual(menu.menu_tabs(items), ["configuration", "sessions", "build", "flashing", "tftp/nfs"])
+        self.assertEqual(menu.visible_item_indices(items, "tftp/nfs"), [4])
+        self.assertEqual(menu.normalize_active_tab("", items, selected=3), "flashing")
+        rows = menu.menu_rows_for_indices(items, [item.label for item in items], [4])
+
+        self.assertEqual(rows, [("TFTP/NFS", None), ("1. Deploy full TFTP/NFS set", 4)])
+
+    def test_build_tab_rows_render_command_and_mapping_subgroups(self) -> None:
+        items = [
+            MenuItem("Copy mapped files to build host", "build / files mapping", "", lambda app: "", lambda app: None),
+            MenuItem("Build Docker image", "build / commands", "", lambda app: "", lambda app: None),
+            MenuItem("Sync mapped files", "build / files mapping", "", lambda app: "", lambda app: None),
+        ]
+
+        rows = menu.menu_rows_for_indices(items, [item.label for item in items], [1, 0, 2])
+
+        self.assertEqual(
+            rows,
+            [
+                ("COMMANDS", None),
+                ("1. Build Docker image", 1),
+                ("", None),
+                ("FILES MAPPING", None),
+                ("2. Copy mapped files to build host", 0),
+                ("3. Sync mapped files", 2),
+            ],
+        )
 
     def test_command_preview_matches_current_menu_preview_shape(self) -> None:
         self.assertEqual(menu.command_preview([]), "no commands")
@@ -227,7 +279,24 @@ class MenuModelBehaviorTests(unittest.TestCase):
                 enabled=True,
                 disabled_status="disabled",
             ),
-            {"allowed": False, "status": "Another action is already running"},
+            {"allowed": False, "status": "Another interactive action is already running"},
+        )
+        self.assertEqual(
+            menu.selected_action_guard(
+                MenuItem(
+                    "Open board host shell",
+                    "sessions / board host",
+                    "",
+                    lambda app: "",
+                    lambda app: None,
+                    allow_during_job=True,
+                ),
+                action_running=True,
+                item_running=False,
+                enabled=True,
+                disabled_status="disabled",
+            ),
+            {"allowed": True, "status": ""},
         )
         self.assertEqual(
             menu.selected_action_guard(
@@ -322,9 +391,15 @@ class MenuModelBehaviorTests(unittest.TestCase):
         self.assertFalse(_item_enabled(copy_item, board_connected=False))
         self.assertFalse(_item_enabled(copy_item, build_connected=False))
         self.assertTrue(_item_enabled(copy_item))
+        local_workspace_item = MenuItem("Open local NFS workspace", "tftp/nfs / open local workspaces", "", lambda app: "", lambda app: None, requires_project=True)
+        board_serial_item = MenuItem("Open board serial console", "flashing / board host", "", lambda app: "", lambda app: None, allow_during_job=True)
+        build_directory_item = MenuItem("Open build directory", "build / workspace", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True, allow_during_job=True)
+        self.assertTrue(_item_enabled(local_workspace_item, board_connected=False))
+        self.assertTrue(_item_enabled(board_serial_item, board_job={"item_label": "Flash UFS image"}))
+        self.assertTrue(_item_enabled(build_directory_item, active_job={"item_label": "Run product build"}))
 
     def test_item_enabled_stops_only_stoppable_board_commands(self) -> None:
-        stop_item = MenuItem("Stop board command", "board commands", "", lambda app: "", lambda app: None)
+        stop_item = MenuItem("Stop current board command", "board commands", "", lambda app: "", lambda app: None)
         board_connect_job = {"item_label": "Connect board host", "kind": "board-connect"}
         board_command_job = {"item_label": "Flash UFS image"}
 
@@ -364,7 +439,7 @@ class MenuModelBehaviorTests(unittest.TestCase):
 
     def test_disabled_reason_treats_connect_jobs_as_no_stoppable_command(self) -> None:
         build_stop = MenuItem("Stop running command", "build commands", "", lambda app: "", lambda app: None)
-        board_stop = MenuItem("Stop board command", "board commands", "", lambda app: "", lambda app: None)
+        board_stop = MenuItem("Stop current board command", "board commands", "", lambda app: "", lambda app: None)
 
         self.assertEqual(
             _disabled_reason(build_stop, active_job={"item_label": "Connect build host", "kind": "connect"}),

@@ -85,6 +85,23 @@ class CommandRunnerServiceTests(unittest.TestCase):
         self.assertEqual(port.status, "Another build action is already running")
         self.assertEqual(started, [])
 
+    def test_start_commands_allows_parallel_different_job_slots(self) -> None:
+        port = FakeRunnerPort(MenuItem("Flash UFS image", "board commands", "", _preview, _handler))
+        port.active_job = {"title": "Run product build"}
+        started: list[dict[str, Any]] = []
+
+        rc = command_runner.command_runner_service().start_commands(
+            port,
+            "Flash UFS image",
+            [["ssh", "board", "flash"]],
+            start_next_command=started.append,
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertIs(port.board_job, started[0])
+        self.assertEqual(port.active_job, {"title": "Run product build"})
+        self.assertEqual(port.status, "Running: Flash UFS image")
+
 
 if __name__ == "__main__":
     unittest.main()

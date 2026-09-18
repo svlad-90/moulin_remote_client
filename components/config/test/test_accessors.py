@@ -41,11 +41,19 @@ class ConfigAccessorBehaviorTests(unittest.TestCase):
                     "console_device": "/dev/GEN5_CONSOLE",
                     "ufs_loadaddr": "0x50000000",
                     "ufs_buffersize": "0x4000000",
+                    "tftp_root": "/srv/tftp/",
+                    "nfs_root": "/srv/nfs/",
+                    "deploy_subdir": "vgon/projects/",
+                    "server_ip": "10.0.0.10",
+                    "board_ip": "10.0.0.20",
                 }
             ],
             "active_board_host": "board",
+            "projects": [{"name": "prod", "project_dir": "meta-product"}],
+            "active_project": "prod",
         }
         profiles.normalize_board_host_profiles(config)
+        profiles.normalize_project_profiles(config)
         host = profiles.active_board_host(config)
 
         self.assertEqual(accessors.board_work_dir_for_config(config), accessors.board_work_dir(host))
@@ -58,6 +66,18 @@ class ConfigAccessorBehaviorTests(unittest.TestCase):
         self.assertEqual(accessors.board_console_device_for_config(config), accessors.board_console_device(host))
         self.assertEqual(accessors.board_ufs_loadaddr_for_config(config), accessors.board_ufs_loadaddr(host))
         self.assertEqual(accessors.board_ufs_buffersize_for_config(config), accessors.board_ufs_buffersize(host))
+        self.assertEqual(accessors.board_tftp_root_for_config(config), "/srv/tftp")
+        self.assertEqual(accessors.board_nfs_root_for_config(config), "/srv/nfs")
+        self.assertEqual(accessors.board_deploy_subdir_for_config(config), "vgon/projects")
+        self.assertEqual(accessors.board_server_ip_for_config(config), "10.0.0.10")
+        self.assertEqual(accessors.board_ipaddr_for_config(config), "10.0.0.20")
+        self.assertEqual(accessors.network_deploy_project_name_for_config(config), "prod")
+        self.assertEqual(accessors.board_tftp_project_dir_for_config(config), "/srv/tftp/vgon/projects/prod")
+        self.assertEqual(accessors.board_nfs_current_dir_for_config(config), "/srv/nfs/vgon/projects/current")
+        self.assertEqual(
+            accessors.local_board_network_dir(config, Path("/tmp/app"), "tftp"),
+            Path("/tmp/app/workspace/board-network/prod/tftp"),
+        )
 
     def test_project_and_remote_accessors_for_config_match_profile_accessors(self) -> None:
         config = {

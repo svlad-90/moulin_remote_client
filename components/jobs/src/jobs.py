@@ -319,17 +319,18 @@ def build_command_start_plan(
     active_job: dict[str, Any] | None,
     board_job: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    normalized_slot = "board" if slot == "board" else "build"
+    if active_job_for_slot(normalized_slot, active_job=active_job, board_job=board_job) is not None:
+        return {"rc": 1, "status": f"Another {normalized_slot} action is already running"}
     if action_running:
-        return {"rc": 1, "status": "Another action is already running"}
-    if active_job_for_slot(slot, active_job=active_job, board_job=board_job) is not None:
-        return {"rc": 1, "status": f"Another {slot or 'command'} action is already running"}
+        return {"rc": 1, "status": "Another interactive action is already running"}
     return {
         "rc": 0,
-        "slot": "board" if slot == "board" else "build",
+        "slot": normalized_slot,
         "job": create_command_job(
             title=title,
             item_label=item_label,
-            slot=slot,
+            slot=normalized_slot,
             commands=commands,
         ),
         "state": command_started_state(title),

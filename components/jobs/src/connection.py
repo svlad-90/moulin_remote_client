@@ -42,8 +42,11 @@ class ConnectionJobController:
         *,
         start_next_command: Callable[[dict[str, Any]], Any],
     ) -> None:
-        if port.action_running or port.active_job is not None:
-            port.status = "Another action is already running"
+        if port.active_job is not None:
+            port.status = "Another build action is already running"
+            return
+        if port.action_running:
+            port.status = "Another interactive action is already running"
             return
         item_label = menu_item_label(port, "Connect build host")
         ui_session_api.apply_state(port, ui_session_api.build_host_connect_start_state())
@@ -62,8 +65,11 @@ class ConnectionJobController:
         *,
         start_next_command: Callable[[dict[str, Any]], Any],
     ) -> None:
-        if port.action_running or port.board_job is not None:
+        if port.board_job is not None:
             port.status = "Another board action is already running"
+            return
+        if port.action_running:
+            port.status = "Another interactive action is already running"
             return
         item_label = menu_item_label(port, "Connect board host")
         ui_session_api.apply_state(port, ui_session_api.board_host_connect_start_state())

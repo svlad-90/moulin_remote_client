@@ -28,6 +28,8 @@ class FakePort:
         self.board_job: dict[str, Any] | None = None
         self.last_job: dict[str, Any] | None = None
         self.last_board_job: dict[str, Any] | None = None
+        self.last_jobs_by_label: dict[str, dict[str, Any]] = {}
+        self.last_board_jobs_by_label: dict[str, dict[str, Any]] = {}
         self.preflight = "not run"
         self.preflight_values: dict[str, str] = {}
         self.connection_state = "disconnected"
@@ -110,6 +112,7 @@ class CommandLifecycleServiceTests(unittest.TestCase):
 
         self.assertIsNone(port.active_job)
         self.assertIs(port.last_job, job)
+        self.assertIs(port.last_jobs_by_label["Prepare remote project"], job)
         self.assertEqual(port.status, "Prepare remote project: done; reconnect to refresh preflight")
         self.assertEqual(port.preflight, "not run")
         self.assertNotIn("header", port.render_cache)
@@ -147,6 +150,7 @@ class CommandLifecycleServiceTests(unittest.TestCase):
 
         self.assertIsNone(port.active_job)
         self.assertIs(port.last_job, job)
+        self.assertIs(port.last_jobs_by_label["Run product build"], job)
         self.assertEqual(port.last_exit, 2)
         self.assertEqual(port.status, "Build: exit 2")
 

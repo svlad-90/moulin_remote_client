@@ -68,6 +68,31 @@ class BoardScreenRendererTests(unittest.TestCase):
         self.assertEqual(result.fields, [("Display label", "label")])
         self.assertEqual(port.boxes, [(3, 0, 24, 120, "Board hosts")])
         self.assertTrue(any("Active: board-a" in row[2] for row in port.rows))
+        self.assertFalse(any(row[2].strip() == "Fields:" for row in port.rows))
+
+    def test_render_groups_board_host_fields(self) -> None:
+        cfg = config()
+        port = FakeRenderPort()
+        state = board_screen_state.BoardScreenStateController(cfg)
+        renderer = board_screen_renderer.BoardScreenRenderer(
+            cfg,
+            board_host_fields_factory=lambda: [
+                ("Profile name", "name"),
+                ("SSH user", "user"),
+                ("Console device", "console_device"),
+                ("TFTP root", "tftp_root"),
+                ("Target board IP", "board_ip"),
+            ],
+        )
+
+        renderer.render(port, height=30, width=120, screen_state=state)
+
+        rendered = [row[2].strip() for row in port.rows]
+        self.assertIn("PROFILE", rendered)
+        self.assertIn("SSH", rendered)
+        self.assertIn("FLASHING", rendered)
+        self.assertIn("NETWORK BOOT", rendered)
+        self.assertTrue(any("Target board IP" in row[2] for row in port.rows))
 
     def test_render_reports_inline_edit_cursor_position(self) -> None:
         cfg = config()
@@ -85,6 +110,23 @@ class BoardScreenRendererTests(unittest.TestCase):
 
         self.assertIsNotNone(result.editing_cursor_yx)
         self.assertTrue(any("Enter: save" in row[2] for row in port.rows))
+        self.assertTrue(any(row[0] == 25 and "Enter: save" in row[2] for row in port.rows))
+
+    def test_render_reserves_bottom_panel_row_for_field_hint(self) -> None:
+        cfg = config()
+        port = FakeRenderPort()
+        state = board_screen_state.BoardScreenStateController(cfg)
+        state.state.host_index_initialized = True
+        state.state.focus = "fields"
+        state.state.field_index = 0
+        renderer = board_screen_renderer.BoardScreenRenderer(
+            cfg,
+            board_host_fields_factory=lambda: [("Display label", "label")],
+        )
+
+        renderer.render(port, height=30, width=120, screen_state=state)
+
+        self.assertTrue(any(row[0] == 25 and "shown in the main client header" in row[2] for row in port.rows))
 
 
 if __name__ == "__main__":

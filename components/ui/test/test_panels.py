@@ -13,6 +13,7 @@ from components.ui.api import panels
 class FakeMenuItem:
     label: str
     description: str
+    group: str = "build / commands"
 
 
 class FakeScreen:
@@ -53,6 +54,8 @@ class FakePanelPort:
         self.board_job: dict[str, Any] | None = None
         self.last_job: dict[str, Any] | None = None
         self.last_board_job: dict[str, Any] | None = None
+        self.last_jobs_by_label: dict[str, dict[str, Any]] = {}
+        self.last_board_jobs_by_label: dict[str, dict[str, Any]] = {}
         self.logs_expanded = False
         self.log_follow = True
         self.log_scroll = 0
@@ -96,8 +99,14 @@ class FakePanelPort:
     def accent_attr(self) -> int:
         return 4
 
+    def warn_attr(self) -> int:
+        return 9
+
     def selected_attr(self) -> int:
         return 6
+
+    def selected_active_attr(self) -> int:
+        return 8
 
     def connection_attr_for(self, _state: str) -> int:
         return 7
@@ -115,10 +124,15 @@ class FakePanelPort:
         return {"text": "active", "role": "ok"}
 
 
-def _job(*, output: list[str] | None = None) -> dict[str, Any]:
+def _job(
+    *,
+    title: str = "Run product build",
+    item_label: str = "Run product build",
+    output: list[str] | None = None,
+) -> dict[str, Any]:
     return {
-        "title": "Run product build",
-        "item_label": "Run product build",
+        "title": title,
+        "item_label": item_label,
         "output": deque(output or [], maxlen=1000),
         "process": None,
         "finished": True,
@@ -145,19 +159,45 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertIn("line 2", rendered)
         self.assertTrue(any("lines 1-2/2 follow" in text for text in rendered))
 
-    def test_draw_details_panel_renders_mapping_and_last_exit(self) -> None:
+    def test_draw_logs_panel_uses_last_job_for_selected_action_label(self) -> None:
         port = FakePanelPort()
-        port.items[0] = FakeMenuItem("Copy mapped files to build host", "Push selected mappings.")
+        port.items = [
+            FakeMenuItem("Regenerate Moulin/Ninja", "Regenerate."),
+            FakeMenuItem("Run product build", "Build selected targets."),
+        ]
+        port.selected = 0
+        port.active_job = _job(title="Run product build", item_label="Run product build", output=["new build"])
+        port.last_job = port.active_job
+        port.last_jobs_by_label = {
+            "Regenerate Moulin/Ninja": _job(
+                title="Regenerate Moulin/Ninja",
+                item_label="Regenerate Moulin/Ninja",
+                output=["regen log"],
+            ),
+            "Run product build": port.active_job,
+        }
+
+        panels.main_panels_controller().draw_logs_panel(port, 0, 0, 10, 80, port.items[0])
+
+        rendered = [row[2] for row in port.rows]
+        self.assertIn("Regenerate Moulin/Ninja [DONE]", rendered)
+        self.assertIn("regen log", rendered)
+        self.assertNotIn("new build", rendered)
+
+    def test_draw_details_panel_renders_mapping_context(self) -> None:
+        port = FakePanelPort()
+        port.items[0] = FakeMenuItem("Copy mapped files to build host", "Push selected mappings.", "build / files mapping")
 
         panels.main_panels_controller().draw_details_panel(port, 0, 0, 12, 100, port.items[0])
 
         rendered = [row[2] for row in port.rows]
         self.assertTrue(any("Selected mappings: meta" in text for text in rendered))
         self.assertTrue(any("Copy status: active" in text for text in rendered))
-        self.assertTrue(any("Last exit: 0" in text for text in rendered))
+        self.assertFalse(any("Last exit:" in text for text in rendered))
 
     def test_draw_details_panel_wraps_long_mapping_selection(self) -> None:
         port = FakePanelPort()
+        port.items[0] = FakeMenuItem("Copy mapped files to build host", "Push selected mappings.", "build / files mapping")
         port.mapping_selection_cache = [
             "prod-devel-rcar-gen5.yaml",
             "yocto-meta-xt-common",
@@ -172,6 +212,34 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertGreaterEqual(len(mapping_lines), 2)
         self.assertTrue(all(len(text) <= 60 for text in rendered))
 
+    def test_draw_details_panel_uses_build_context_for_build_commands(self) -> None:
+        port = FakePanelPort()
+        port.items[0] = FakeMenuItem("Run product build", "Build selected targets.", "build / commands")
+
+        panels.main_panels_controller().draw_details_panel(port, 0, 0, 16, 100, port.items[0])
+
+        rendered = [row[2] for row in port.rows]
+        self.assertFalse(any("Selected mappings:" in text for text in rendered))
+        self.assertTrue(any("Targets:      full_ufs.img.gz" in text for text in rendered))
+        self.assertTrue(any("Docker image: image" in text for text in rendered))
+        self.assertTrue(any("Build params: ENABLE_ANDROID=yes" in text for text in rendered))
+
+    def test_draw_details_panel_uses_network_context_for_tftp_nfs_items(self) -> None:
+        port = FakePanelPort()
+        port.items[0] = FakeMenuItem(
+            "Deploy TFTP boot artifacts",
+            "Deploy network boot artifacts.",
+            "tftp/nfs / deploy artifacts",
+        )
+
+        panels.main_panels_controller().draw_details_panel(port, 0, 0, 16, 100, port.items[0])
+
+        rendered = [row[2] for row in port.rows]
+        self.assertFalse(any("Selected mappings:" in text for text in rendered))
+        self.assertTrue(any("Network project: prod" in text for text in rendered))
+        self.assertTrue(any("TFTP project:    /srv/tftp/prod" in text for text in rendered))
+        self.assertTrue(any("NFS project:     /srv/nfs/prod" in text for text in rendered))
+
     def test_draw_header_renders_configured_state(self) -> None:
         port = FakePanelPort()
 
@@ -185,6 +253,7 @@ class MainPanelsControllerTests(unittest.TestCase):
 
     def test_draw_actions_panel_renders_selected_item(self) -> None:
         port = FakePanelPort()
+        port.focus_panel = "actions"
         menu_rows = [("BUILD COMMANDS", None), ("1. Run product build", 0)]
 
         panels.main_panels_controller().draw_actions_panel(
@@ -198,16 +267,63 @@ class MainPanelsControllerTests(unittest.TestCase):
         )
 
         self.assertTrue(any(row[2].strip() == "1. Run product build" for row in port.rows))
+        self.assertTrue(any(row[2].strip() == "1. Run product build" and row[3] == 6 for row in port.rows))
+
+    def test_draw_actions_panel_scrolls_tabs_to_active_tab(self) -> None:
+        port = FakePanelPort()
+        port.focus_panel = "actions"
+
+        panels.main_panels_controller().draw_actions_panel(
+            port,
+            3,
+            10,
+            30,
+            menu_rows=[("16. Flash UFS image", 0)],
+            menu_visible_rows=6,
+            running_jobs=[],
+            menu_tabs=["configuration", "build", "sessions", "flashing", "tftp/nfs"],
+            active_menu_tab="sessions",
+            menu_focus="tabs",
+        )
+
+        rendered = "".join(row[2] for row in port.rows if row[0] == 4)
+        self.assertIn("[Sessions]", rendered)
+        self.assertNotIn("<", rendered)
+        self.assertNotIn(">", rendered)
+        self.assertTrue(any(row[2] == "[Sessions]" and row[3] == 9 for row in port.rows))
+        self.assertTrue(any(row[2].strip() == "16. Flash UFS image" and row[3] == 0 for row in port.rows))
+
+    def test_draw_actions_panel_marks_active_tab_even_when_items_are_focused(self) -> None:
+        port = FakePanelPort()
+        port.focus_panel = "actions"
+
+        panels.main_panels_controller().draw_actions_panel(
+            port,
+            3,
+            10,
+            50,
+            menu_rows=[("1. Build host configuration", 0)],
+            menu_visible_rows=6,
+            running_jobs=[],
+            menu_tabs=["configuration", "build", "sessions"],
+            active_menu_tab="configuration",
+            menu_focus="items",
+        )
+
+        rendered = "".join(row[2] for row in port.rows if row[0] == 4)
+        self.assertIn("[Configuration]", rendered)
+        self.assertTrue(any(row[2] == "[Configuration]" and row[3] == 9 for row in port.rows))
 
     def test_draw_footer_renders_status(self) -> None:
         port = FakePanelPort()
+        port.focus_panel = "actions"
         port.status = "Ready"
 
         footer = panels.main_panels_controller().draw_footer(port, 20, 100, active_job_exists=False)
 
         rendered = [row[2] for row in port.rows]
         self.assertIn("Ready".ljust(100), rendered)
-        self.assertTrue(footer.startswith("Left/Right panel"))
+        self.assertIn("Left/Right tabs", footer)
 
 
 if __name__ == "__main__":

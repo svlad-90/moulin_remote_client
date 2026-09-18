@@ -7,8 +7,27 @@ import textwrap
 from dataclasses import dataclass
 from typing import Any, Callable
 
-BOARD_COMMAND_LABELS = {"Copy build artifacts", "Flash bootloaders", "Flash UFS image"}
+BOARD_COMMAND_LABELS = {
+    "Copy build artifacts",
+    "Flash bootloaders",
+    "Flash UFS image",
+    "Deploy TFTP boot artifacts",
+    "Deploy DomD NFS rootfs",
+    "Deploy Android image to NFS",
+    "Deploy full TFTP/NFS set",
+    "Pull TFTP/NFS workspace",
+    "Push TFTP/NFS workspace",
+    "Apply U-Boot network env",
+}
 GROUP_SEPARATOR = " / "
+TAB_ORDER = ["configuration", "sessions", "build", "flashing", "tftp/nfs"]
+TAB_LABELS = {
+    "configuration": "Configuration",
+    "build": "Build",
+    "sessions": "Sessions",
+    "flashing": "Board",
+    "tftp/nfs": "TFTP/NFS",
+}
 
 
 @dataclass(frozen=True)
@@ -26,11 +45,31 @@ class MenuItem:
 
 
 def item_job_slot(item: MenuItem) -> str | None:
-    if item.group == "board commands" or item.label == "Connect board host":
+    if is_open_item(item):
+        return None
+    if is_board_command_item(item) or item.label == "Connect board host":
         return "board"
-    if item.group == "build commands" or item.group.startswith("build commands / ") or item.group == "sync" or item.label == "Connect build host":
+    if is_build_command_group(item.group) or item.group == "sync" or item.label == "Connect build host":
         return "build"
     return None
+
+
+def is_build_command_group(group: str) -> bool:
+    parent, _child = split_group(group)
+    return parent in {"build", "build commands"}
+
+
+def is_board_command_item(item: MenuItem) -> bool:
+    if is_open_item(item):
+        return False
+    parent, _child = split_group(item.group)
+    if parent == "tftp/nfs" and item.label.startswith("Open local "):
+        return False
+    return parent in {"board commands", "flashing", "tftp/nfs"} or item.label in BOARD_COMMAND_LABELS
+
+
+def is_open_item(item: MenuItem) -> bool:
+    return item.label.startswith("Open ")
 
 
 def split_group(group: str) -> tuple[str, str]:
@@ -38,6 +77,92 @@ def split_group(group: str) -> tuple[str, str]:
         return group, ""
     parent, child = group.split(GROUP_SEPARATOR, 1)
     return parent, child
+
+
+def tab_for_group(group: str) -> str:
+    parent, _child = split_group(group)
+    if parent in TAB_ORDER:
+        return parent
+    if parent in {"setup"}:
+        return "configuration"
+    if parent in {"build commands", "sync"}:
+        return "build"
+    if parent in {"build host session", "board host session"}:
+        return "sessions"
+    if parent == "board commands":
+        return "flashing"
+    return parent or "build"
+
+
+def item_tab(item: MenuItem) -> str:
+    return tab_for_group(item.group)
+
+
+def menu_tabs(items: list[MenuItem]) -> list[str]:
+    present = {item_tab(item) for item in items}
+    ordered = [tab for tab in TAB_ORDER if tab in present]
+    ordered.extend(sorted(present - set(ordered)))
+    return ordered
+
+
+def tab_label(tab: str) -> str:
+    return TAB_LABELS.get(tab, tab.capitalize())
+
+
+def normalize_active_tab(active_tab: str, items: list[MenuItem], selected: int) -> str:
+    tabs = menu_tabs(items)
+    if not tabs:
+        return ""
+    if active_tab in tabs:
+        return active_tab
+    if 0 <= selected < len(items):
+        selected_tab = item_tab(items[selected])
+        if selected_tab in tabs:
+            return selected_tab
+    return tabs[0]
+
+
+def visible_item_indices(items: list[MenuItem], active_tab: str) -> list[int]:
+    return [index for index, item in enumerate(items) if item_tab(item) == active_tab]
+
+
+def selected_in_indices(selected: int, indices: list[int]) -> bool:
+    return selected in set(indices)
+
+
+def nearest_visible_selection(selected: int, indices: list[int], enabled: list[bool]) -> int:
+    candidates = [index for index in indices if 0 <= index < len(enabled) and enabled[index]]
+    if not candidates:
+        return indices[0] if indices else 0
+    if selected in candidates:
+        return selected
+    return min(candidates, key=lambda index: abs(index - selected))
+
+
+def move_visible_selection(selected: int, indices: list[int], enabled: list[bool], delta: int) -> int:
+    candidates = [index for index in indices if 0 <= index < len(enabled) and enabled[index]]
+    if not candidates:
+        return selected
+    if selected not in candidates:
+        return candidates[0]
+    pos = candidates.index(selected)
+    return candidates[(pos + delta) % len(candidates)]
+
+
+def menu_rows_for_indices(items: list[MenuItem], labels: list[str], indices: list[int]) -> list[tuple[str, int | None]]:
+    rows: list[tuple[str, int | None]] = []
+    last_group = ""
+    for display_index, index in enumerate(indices, start=1):
+        item = items[index]
+        parent, child = split_group(item.group)
+        group_label = child or tab_label(parent)
+        if group_label != last_group:
+            if rows and rows[-1][0]:
+                rows.append(("", None))
+            rows.append((group_label.upper(), None))
+            last_group = group_label
+        rows.append((f"{display_index}. {labels[index]}", index))
+    return rows
 
 
 def job_for_item(item: MenuItem, jobs: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -54,10 +179,17 @@ def display_job_for_item(
     board_job: dict[str, Any] | None,
     last_board_job: dict[str, Any] | None,
     last_job: dict[str, Any] | None,
+    last_board_jobs_by_label: dict[str, dict[str, Any]] | None = None,
+    last_jobs_by_label: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     active_item_job = job_for_item(item, [job for job in (active_job, board_job) if job is not None])
     if active_item_job is not None:
         return active_item_job
+    label = item.label
+    if last_board_jobs_by_label is not None and label in last_board_jobs_by_label:
+        return last_board_jobs_by_label[label]
+    if last_jobs_by_label is not None and label in last_jobs_by_label:
+        return last_jobs_by_label[label]
     if last_board_job is not None and item.label == last_board_job.get("item_label"):
         return last_board_job
     if last_job is not None and item.label == last_job.get("item_label"):
@@ -80,7 +212,7 @@ def menu_rows(items: list[MenuItem], labels: list[str]) -> list[tuple[str, int |
         if child and child != last_child:
             if rows and rows[-1][0]:
                 rows.append(("", None))
-            rows.append((child.capitalize(), None))
+            rows.append((child.upper(), None))
             last_child = child
         elif not child:
             if last_child and rows and rows[-1][0]:
@@ -243,9 +375,9 @@ def item_enabled(
         return False
     if item.label == "Stop running command":
         return True
-    if item.label == "Stop board command" and stoppable_command_job(board_job) is None:
+    if item.label == "Stop current board command" and stoppable_command_job(board_job) is None:
         return False
-    if item.label == "Stop board command":
+    if item.label == "Stop current board command":
         return True
     jobs = [job for job in (active_job, board_job) if job is not None]
     if job_for_item(item, jobs) is not None:
@@ -257,7 +389,7 @@ def item_enabled(
         return False
     if item.label == "Open board host shell" and not board_connected:
         return False
-    if item.group == "board commands":
+    if is_board_command_item(item):
         if not board_host_has_ssh or not board_connected:
             return False
     if item.requires_ssh and not remote_has_ssh:
@@ -292,21 +424,21 @@ def disabled_reason(
         return "no build or sync command is running"
     if item.label == "Stop running command":
         return ""
-    if item.label == "Stop board command" and stoppable_command_job(board_job) is None:
+    if item.label == "Stop current board command" and stoppable_command_job(board_job) is None:
         return "no board command is running"
-    if item.label == "Stop board command":
+    if item.label == "Stop current board command":
         return ""
     jobs = [job for job in (active_job, board_job) if job is not None]
     slot = item_job_slot(item)
     slot_job = active_job_for_slot(slot, active_job=active_job, board_job=board_job)
     if slot is not None and slot_job is not None and job_for_item(item, jobs) is None:
         return f"{slot} command is already running"
-    is_board_item = item.label in {"Connect board host", "Open board host shell"} or item.group == "board commands"
+    is_board_item = item.label in {"Connect board host", "Open board host shell"} or is_board_command_item(item)
     if is_board_item and not board_host_user:
         return "set board SSH user first"
     if is_board_item and not board_host_host:
         return "set board SSH host first"
-    if item.group == "board commands" and not board_connected:
+    if is_board_command_item(item) and not board_connected:
         return "connect to the board host first"
     if item.label == "Open board host shell" and not board_connected:
         return "connect to the board host first"
@@ -333,8 +465,8 @@ def selected_action_guard(
     enabled: bool,
     disabled_status: str,
 ) -> dict[str, str | bool]:
-    if action_running:
-        return {"allowed": False, "status": "Another action is already running"}
+    if action_running and not item.allow_during_job:
+        return {"allowed": False, "status": "Another interactive action is already running"}
     if item_running:
         return {"allowed": False, "status": "Command is already running; live log is shown in Logs"}
     if not enabled:
@@ -353,7 +485,7 @@ def selected_action_plan(
     item_running = job_for_item(item, running_jobs) is not None
     enabled = True
     disabled_status = ""
-    if not action_running and not item_running:
+    if (not action_running or item.allow_during_job) and not item_running:
         enabled = enabled_for_item(item)
         if not enabled:
             disabled_status = disabled_reason_for_item(item)

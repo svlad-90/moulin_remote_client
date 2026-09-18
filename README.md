@@ -313,7 +313,18 @@ stored in `active_board_host`.
 | `console_device` | Serial console path. Empty means auto-detect `/dev/GEN5_CONSOLE*`. |
 | `ufs_loadaddr` | Optional `xt-imager.py --loadaddr` override. |
 | `ufs_buffersize` | Optional `xt-imager.py --buffersize` override. |
+| `tftp_root` | Board-host TFTP server root. Defaults to `/srv/tftp`. |
+| `nfs_root` | Board-host NFS export root. Defaults to `/srv/nfs`. |
+| `deploy_subdir` | Shared subdirectory below TFTP/NFS roots, for example `vgoncharuk/projects`. |
+| `server_ip` | TFTP/NFS server IP visible from U-Boot. |
+| `board_ip` | Board IP assigned in U-Boot before network boot. |
 | `direct_copy` | `yes` allows build host to SSH directly to board host for artifact copy. |
+
+Network deploy commands place files under
+`<tftp_root>/<deploy_subdir>/<project-name>` and
+`<nfs_root>/<deploy_subdir>/<project-name>`, then update matching `current`
+symlinks. Keep U-Boot pointed at the `current` paths to switch projects without
+rewriting U-Boot for every deploy.
 
 ### Project Profile
 

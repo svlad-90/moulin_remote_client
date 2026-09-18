@@ -141,13 +141,13 @@ sys.exit(ssh_rc)
         if not clean_targets:
             return [builder.local_log_command("No board artifacts configured", exit_code=1)]
         route = "direct build-host -> board-host" if direct_copy else "via client machine"
-        describe = builder.local_log_command(
-            "Copy build artifacts",
-            f"route: {route}",
-            f"from: {build_host}:{source_dir}",
-            f"to:   {board_host}:{destination_dir}",
-            "artifacts:",
-            *[f"  {spec['label']}: {spec['path']} ({spec['source']})" for spec in artifact_specs],
+        describe_script = (
+            "echo 'Copy build artifacts' >&2\n"
+            f"echo 'route: {route}' >&2\n"
+            f"echo 'from: {build_host}:{source_dir}' >&2\n"
+            f"echo 'to:   {board_host}:{destination_dir}' >&2\n"
+            "echo 'artifacts:' >&2\n"
+            + "".join(f"echo '  {spec['label']}: {spec['path']} ({spec['source']})' >&2\n" for spec in artifact_specs)
         )
         destination_script = (
             f"mkdir -p {builder.quote_remote_shell_path(destination_dir)} && "
@@ -158,7 +158,8 @@ sys.exit(ssh_rc)
             board_destination_command = shlex.quote(destination_script)
             python_progress_command = self.tar_progress_command(board_host, destination_script)
             direct_script = (
-                resolver_script
+                describe_script
+                + resolver_script
                 + "echo 'transfer: tar stream build-host -> board-host' >&2\n"
                 + "if command -v pv >/dev/null 2>&1; then\n"
                 + f"  tar -cf - \"${{resolved_tar_args[@]}}\" | pv -n -s \"$total_bytes\" 2> >(while read -r pct; do printf 'progress: %s%%\\n' \"$pct\" >&2; done) | ssh -o StrictHostKeyChecking=accept-new {shlex.quote(board_host)} {board_destination_command}\n"
@@ -169,7 +170,6 @@ sys.exit(ssh_rc)
                 + "echo 'transfer: done' >&2\n"
             )
             return [
-                describe,
                 [
                     "ssh",
                     build_host,
@@ -177,7 +177,8 @@ sys.exit(ssh_rc)
                 ],
             ]
         source_script = (
-            resolver_script
+            describe_script
+            + resolver_script
             + "echo 'transfer: tar stream build-host -> client -> board-host' >&2\n"
             + "if command -v pv >/dev/null 2>&1; then\n"
             + "  tar -cf - \"${resolved_tar_args[@]}\" | pv -n -s \"$total_bytes\" 2> >(while read -r pct; do printf 'progress: %s%%\\n' \"$pct\" >&2; done)\n"
@@ -193,7 +194,6 @@ sys.exit(ssh_rc)
             f"ssh {shlex.quote(board_host)} {shlex.quote(destination_script)}"
         )
         return [
-            describe,
             builder.board_prepare_work_dir_command(board_host, destination_dir),
             ["bash", "-lc", copy_script],
         ]

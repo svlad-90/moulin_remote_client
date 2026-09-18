@@ -104,6 +104,50 @@ def board_console_device(board_host: dict[str, Any]) -> str:
     return str(board_host.get("console_device", "")).strip()
 
 
+def board_tftp_root(board_host: dict[str, Any]) -> str:
+    return str(board_host.get("tftp_root", "/srv/tftp")).strip().rstrip("/") or "/srv/tftp"
+
+
+def board_nfs_root(board_host: dict[str, Any]) -> str:
+    return str(board_host.get("nfs_root", "/srv/nfs")).strip().rstrip("/") or "/srv/nfs"
+
+
+def board_deploy_subdir(board_host: dict[str, Any]) -> str:
+    return str(board_host.get("deploy_subdir", "")).strip().strip("/")
+
+
+def board_server_ip(board_host: dict[str, Any]) -> str:
+    return str(board_host.get("server_ip", "")).strip()
+
+
+def board_ipaddr(board_host: dict[str, Any]) -> str:
+    return str(board_host.get("board_ip", "")).strip()
+
+
+def network_deploy_project_name(project: dict[str, Any]) -> str:
+    return str(project.get("name", project_dir_name(project) or "project")).strip().strip("/") or "project"
+
+
+def board_network_base_dir(root: str, subdir: str) -> str:
+    clean_root = root.rstrip("/") or "/"
+    clean_subdir = subdir.strip("/")
+    if not clean_subdir:
+        return clean_root
+    return str(PurePosixPath(clean_root) / clean_subdir)
+
+
+def board_network_project_dir(root: str, subdir: str, project_name: str) -> str:
+    return str(PurePosixPath(board_network_base_dir(root, subdir)) / project_name.strip("/"))
+
+
+def board_network_current_dir(root: str, subdir: str) -> str:
+    return str(PurePosixPath(board_network_base_dir(root, subdir)) / "current")
+
+
+def local_board_network_dir(config: dict[str, Any], app_dir: Path, tree: str) -> Path:
+    return app_dir / "workspace" / "board-network" / network_deploy_project_name_for_config(config) / tree
+
+
 def project_git_url(project: dict[str, Any], remote: dict[str, Any]) -> str:
     project_value = str(project.get("git_url", "")).strip()
     if project_value:
@@ -244,6 +288,54 @@ def board_ufs_buffersize_for_config(config: dict[str, Any]) -> str:
 
 def board_console_device_for_config(config: dict[str, Any]) -> str:
     return board_console_device(config_profiles.active_board_host(config))
+
+
+def board_tftp_root_for_config(config: dict[str, Any]) -> str:
+    return board_tftp_root(config_profiles.active_board_host(config))
+
+
+def board_nfs_root_for_config(config: dict[str, Any]) -> str:
+    return board_nfs_root(config_profiles.active_board_host(config))
+
+
+def board_deploy_subdir_for_config(config: dict[str, Any]) -> str:
+    return board_deploy_subdir(config_profiles.active_board_host(config))
+
+
+def board_server_ip_for_config(config: dict[str, Any]) -> str:
+    return board_server_ip(config_profiles.active_board_host(config))
+
+
+def board_ipaddr_for_config(config: dict[str, Any]) -> str:
+    return board_ipaddr(config_profiles.active_board_host(config))
+
+
+def network_deploy_project_name_for_config(config: dict[str, Any]) -> str:
+    return network_deploy_project_name(config_profiles.active_project(config))
+
+
+def board_tftp_project_dir_for_config(config: dict[str, Any]) -> str:
+    return board_network_project_dir(
+        board_tftp_root_for_config(config),
+        board_deploy_subdir_for_config(config),
+        network_deploy_project_name_for_config(config),
+    )
+
+
+def board_nfs_project_dir_for_config(config: dict[str, Any]) -> str:
+    return board_network_project_dir(
+        board_nfs_root_for_config(config),
+        board_deploy_subdir_for_config(config),
+        network_deploy_project_name_for_config(config),
+    )
+
+
+def board_tftp_current_dir_for_config(config: dict[str, Any]) -> str:
+    return board_network_current_dir(board_tftp_root_for_config(config), board_deploy_subdir_for_config(config))
+
+
+def board_nfs_current_dir_for_config(config: dict[str, Any]) -> str:
+    return board_network_current_dir(board_nfs_root_for_config(config), board_deploy_subdir_for_config(config))
 
 
 def project_git_url_for_config(config: dict[str, Any]) -> str:

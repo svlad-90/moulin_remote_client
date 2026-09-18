@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from typing import Any
 
 from components.process.api import terminal_session
@@ -31,6 +32,7 @@ class Harness:
         self.events: list[str] = []
         self.lines: list[str] = []
         self.prompts: list[str] = []
+        self.commands: list[list[str]] = []
         self.controller = terminal_session.terminal_session_controller(
             config(),
             suspend_tui=lambda: self.events.append("suspend"),
@@ -39,6 +41,7 @@ class Harness:
             write_line=self.write_line,
             run_remote_shell=lambda: self.run_shell("remote", remote_rc),
             run_board_shell=lambda: self.run_shell("board", board_rc),
+            run_command=self.run_command,
         )
 
     def write_line(self, *values: Any) -> None:
@@ -51,6 +54,11 @@ class Harness:
     def run_shell(self, name: str, rc: int) -> int:
         self.events.append(f"run:{name}")
         return rc
+
+    def run_command(self, command: list[str]) -> int:
+        self.events.append("run:command")
+        self.commands.append(command)
+        return 0
 
 
 class TerminalSessionControllerTests(unittest.TestCase):
@@ -87,6 +95,19 @@ class TerminalSessionControllerTests(unittest.TestCase):
         self.assertEqual(port.last_exit, 1)
         self.assertEqual(port.status, "Local task: failed")
         self.assertIn("failed", harness.lines)
+
+    def test_open_directory_shells_run_explicit_commands(self) -> None:
+        port = FakePort()
+        harness = Harness()
+
+        harness.controller.open_local_directory_shell(port, "Open local workspace", Path("/tmp/ws"))
+        harness.controller.open_build_host_directory_shell(port, "Open build directory", "/mnt/projects/prod")
+        harness.controller.open_board_host_directory_shell(port, "Open TFTP root", "/srv/tftp")
+
+        self.assertEqual(harness.events, ["suspend", "run:command", "restore"] * 3)
+        self.assertEqual(harness.commands[0][:2], ["bash", "-lc"])
+        self.assertEqual(harness.commands[1], ["ssh", "-t", "builder@10.0.0.1", "cd /mnt/projects/prod && exec bash -l"])
+        self.assertEqual(harness.commands[2], ["ssh", "-t", "tester@10.0.0.2", "cd /srv/tftp && exec bash -l"])
 
 
 if __name__ == "__main__":

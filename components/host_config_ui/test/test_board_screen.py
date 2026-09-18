@@ -289,7 +289,7 @@ class BoardHostConfigurationScreenControllerTests(unittest.TestCase):
         self.assertEqual(port.status, "Board type selection cancelled")
 
     def test_run_board_host_configurations_screen_toggles_direct_copy(self) -> None:
-        port = FakeBoardConfigPort([ord("l"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord(" "), ord("q")])
+        port = FakeBoardConfigPort([ord("l"), *[ord("j")] * 14, ord(" "), ord("q")])
 
         board_screen.run_board_host_configurations_screen(
             port,
@@ -300,7 +300,7 @@ class BoardHostConfigurationScreenControllerTests(unittest.TestCase):
         self.assertEqual(port.toggle_calls, ["board-a"])
 
     def test_run_board_host_configurations_screen_uses_field_action_controller_for_direct_copy(self) -> None:
-        port = FakeBoardConfigPort([ord("l"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord("j"), ord(" "), ord("q")])
+        port = FakeBoardConfigPort([ord("l"), *[ord("j")] * 14, ord(" "), ord("q")])
         controller = FakeFieldActionController()
 
         board_screen.run_board_host_configurations_screen(

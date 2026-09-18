@@ -41,11 +41,11 @@ class MainDrawController:
         right_width = metrics.right_width
         panel_top = metrics.panel_top
         panel_height = metrics.panel_height
-        menu_visible_rows = max(1, panel_height - 2)
+        menu_visible_rows = max(1, panel_height - 4)
         details_height = metrics.details_height
         logs_height = metrics.logs_height
         logs_top = metrics.logs_top
-        if port.render_cache.get("layout") != metrics.signature():
+        if port.main_full_redraw or port.render_cache.get("layout") != metrics.signature():
             port.screen.erase()
             port.render_cache.clear()
             port.render_cache["layout"] = metrics.signature()
@@ -67,8 +67,18 @@ class MainDrawController:
             port.render_cache.pop("details", None)
             port.render_cache.pop("logs", None)
 
+        if not hasattr(port, "menu_focus"):
+            port.menu_focus = "items"
+        if not hasattr(port, "active_menu_tab"):
+            port.active_menu_tab = ""
+        item_enabled_values = [port.item_enabled(item) for item in port.items]
+        port.active_menu_tab = ui_menu_api.normalize_active_tab(port.active_menu_tab, port.items, port.selected)
+        visible_indices = ui_menu_api.visible_item_indices(port.items, port.active_menu_tab)
+        if visible_indices and not ui_menu_api.selected_in_indices(port.selected, visible_indices):
+            port.selected = ui_menu_api.nearest_visible_selection(port.selected, visible_indices, item_enabled_values)
+
         menu_rows = ui_menu_api.wrapped_menu_rows(
-            ui_menu_api.menu_rows(
+            ui_menu_api.menu_rows_for_indices(
                 port.items,
                 [
                     ui_session_api.connection_menu_label(
@@ -78,6 +88,7 @@ class MainDrawController:
                     )
                     for item in port.items
                 ],
+                visible_indices,
             ),
             max(1, left_width - 4),
         )
@@ -93,7 +104,8 @@ class MainDrawController:
         active_job_exists = job_api.has_active_job(port.active_job, port.board_job)
         active_labels = tuple(str(job.get("item_label", "")) for job in running_jobs)
         item_labels = tuple(item.label for item in port.items)
-        item_enabled = tuple(port.item_enabled(item) for item in port.items)
+        item_enabled = tuple(item_enabled_values)
+        menu_tabs = tuple(ui_menu_api.menu_tabs(port.items))
         selection = tuple(port.mapping_selection_cache)
         mapping_status = port.mapping_status_snapshot()
 
@@ -120,6 +132,7 @@ class MainDrawController:
             active_labels,
             item_labels,
             item_enabled,
+            menu_tabs,
             rendered,
         )
         self._draw_details(
@@ -185,6 +198,8 @@ class MainDrawController:
             board_job=port.board_job,
             last_board_job=port.last_board_job,
             last_job=port.last_job,
+            last_board_jobs_by_label=getattr(port, "last_board_jobs_by_label", {}),
+            last_jobs_by_label=getattr(port, "last_jobs_by_label", {}),
         )
         job_output = tuple(job_api.job_output_lines(job)[-20:]) if job is not None else ()
         expanded_sig += (
@@ -243,6 +258,7 @@ class MainDrawController:
         active_labels: tuple[str, ...],
         item_labels: tuple[str, ...],
         item_enabled: tuple[bool, ...],
+        menu_tabs: tuple[str, ...],
         rendered: list[str],
     ) -> None:
         actions_sig = (
@@ -251,6 +267,9 @@ class MainDrawController:
             port.selected,
             port.menu_scroll,
             port.focus_panel,
+            getattr(port, "menu_focus", "items"),
+            getattr(port, "active_menu_tab", ""),
+            menu_tabs,
             active_labels,
             item_labels,
             item_enabled,
@@ -265,6 +284,9 @@ class MainDrawController:
                 menu_rows=menu_rows,
                 menu_visible_rows=menu_visible_rows,
                 running_jobs=running_jobs,
+                menu_tabs=list(menu_tabs),
+                active_menu_tab=getattr(port, "active_menu_tab", ""),
+                menu_focus=getattr(port, "menu_focus", "items"),
             )
             port.render_cache["actions"] = actions_sig
             port.ui_profile_slow("panel-actions-slow", started, threshold_ms=5.0, rows=len(menu_rows))
@@ -289,11 +311,25 @@ class MainDrawController:
             details_height,
             port.selected,
             item.label,
+            item.group,
             item.description,
             active_labels,
             job_api.any_job_running(running_jobs),
-            port.last_exit,
             selection,
+            tuple(sorted(getattr(port, "build_params", {}).items())),
+            getattr(port, "build_targets", ""),
+            getattr(port, "docker_image", ""),
+            getattr(port, "connection_state", ""),
+            getattr(port, "board_connection_state", ""),
+            config_accessor_api.network_deploy_project_name_for_config(port.config),
+            config_accessor_api.board_tftp_project_dir_for_config(port.config),
+            config_accessor_api.board_tftp_current_dir_for_config(port.config),
+            config_accessor_api.board_nfs_project_dir_for_config(port.config),
+            config_accessor_api.board_nfs_current_dir_for_config(port.config),
+            config_accessor_api.remote_project_dir_for_config(port.config),
+            config_accessor_api.board_artifacts_dir_for_config(port.config),
+            config_accessor_api.board_console_device_for_config(port.config),
+            config_accessor_api.board_ufs_loadaddr_for_config(port.config),
             mapping_status["text"],
             mapping_status["role"],
             port.item_enabled(item),
@@ -325,6 +361,8 @@ class MainDrawController:
             board_job=port.board_job,
             last_board_job=port.last_board_job,
             last_job=port.last_job,
+            last_board_jobs_by_label=getattr(port, "last_board_jobs_by_label", {}),
+            last_jobs_by_label=getattr(port, "last_jobs_by_label", {}),
         )
         job_output = tuple(job_api.job_output_lines(job)[-5:]) if job is not None else ()
         logs_sig = (

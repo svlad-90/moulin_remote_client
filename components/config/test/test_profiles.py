@@ -51,6 +51,11 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
                 "console_device": "",
                 "ufs_loadaddr": "",
                 "ufs_buffersize": "",
+                "tftp_root": "/srv/tftp",
+                "nfs_root": "/srv/nfs",
+                "deploy_subdir": "",
+                "server_ip": "",
+                "board_ip": "",
             },
         )
 

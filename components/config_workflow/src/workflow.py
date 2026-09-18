@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import curses
 from pathlib import Path
 from typing import Any, Callable
 
 from components.config.api import accessors as config_accessor_api
+from components.config.api import profiles as config_profile_api
 from components.host_config_ui.api import board_screen as config_board_screen_api
 from components.config_workflow.api import field_actions as config_field_actions_api
 from components.config_workflow.api import profile_actions as config_profile_actions_api
@@ -18,6 +20,9 @@ from components.host_config_ui.api import remote_location as config_remote_locat
 from components.host_config_ui.api import remote_screen as config_remote_screen_api
 from components.project_config_ui.api import target_selection as config_target_selection_api
 from components.remote.api import discovery as remote_discovery_api
+from components.ui.api import input as ui_input_api
+from components.ui.api import menu as ui_menu_api
+from components.ui.api import text as ui_text_api
 
 
 class ConfigWorkflowController:
@@ -65,6 +70,14 @@ class ConfigWorkflowController:
             field_action_controller=self._field_action_controller(),
         )
 
+    def select_active_board_host(self, port: Any) -> None:
+        hosts = [host for host in self.config.get("board_hosts", []) if isinstance(host, dict)]
+        current = str(config_profile_api.active_board_host(self.config).get("name", ""))
+        host = self._select_profile_from_list(port, "Select board host", hosts, current)
+        if host is None:
+            return
+        self._profile_action_controller().set_active_board_host(port, host)
+
     def run_remote_configurations_screen(self, port: Any) -> None:
         config_remote_screen_api.run_remote_configurations_screen(
             port,
@@ -74,6 +87,77 @@ class ConfigWorkflowController:
             profile_action_controller=self._profile_action_controller(),
             field_action_controller=self._field_action_controller(),
         )
+
+    def select_active_remote(self, port: Any) -> None:
+        remotes = [remote for remote in self.config.get("remotes", []) if isinstance(remote, dict)]
+        current = str(config_profile_api.active_remote(self.config).get("name", ""))
+        remote = self._select_profile_from_list(port, "Select build host", remotes, current)
+        if remote is None:
+            return
+        self._profile_action_controller().set_active_remote(port, remote)
+
+    def _select_profile_from_list(
+        self,
+        port: Any,
+        title: str,
+        profiles: list[dict[str, Any]],
+        current: str,
+    ) -> dict[str, Any] | None:
+        if not profiles:
+            port.status = f"{title}: no profiles configured"
+            return None
+        names = [str(profile.get("name", "")) for profile in profiles]
+        index = names.index(current) if current in names else 0
+        port.screen.timeout(-1)
+        while True:
+            port.screen.erase()
+            height, width = port.screen.getmaxyx()
+            if height < 12 or width < 60:
+                port.add(0, 0, "Terminal is too small. Need at least 60x12.", port.warn_attr())
+                port.screen.refresh()
+                ch = port.read_key()
+                if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                    port.status = f"{title} cancelled"
+                    return None
+                continue
+            port.add(0, 0, title[:width], curses.A_BOLD)
+            port.add(1, 0, "Up/Down: select | Enter: choose | q/Esc: cancel"[:width], port.accent_attr())
+            port.draw_box(3, 0, height - 6, width, "Profiles")
+            visible = max(1, height - 8)
+            index = ui_menu_api.clamp_index(index, len(profiles))
+            scroll = ui_menu_api.list_scroll(index, len(profiles), visible)
+            for offset, profile in enumerate(profiles[scroll : scroll + visible]):
+                item_index = scroll + offset
+                marker = "*" if names[item_index] == current else " "
+                label = self._profile_picker_label(profile, marker)
+                attr = port.selected_attr() if item_index == index else 0
+                port.add(4 + offset, 2, ui_text_api.fit_text(label, width - 4).ljust(width - 4), attr)
+            port.add(height - 1, 0, port.status[:width].ljust(width), curses.A_REVERSE)
+            port.screen.refresh()
+            ch = port.read_key()
+            if ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+                index = ui_menu_api.move_index(index, len(profiles), -1)
+            elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j") or ch == ord("\t"):
+                index = ui_menu_api.move_index(index, len(profiles), 1)
+            elif ch in (10, 13):
+                return profiles[index]
+            elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                port.status = f"{title} cancelled"
+                return None
+
+    @staticmethod
+    def _profile_picker_label(profile: dict[str, Any], marker: str) -> str:
+        name = str(profile.get("name", ""))
+        label = str(profile.get("label", ""))
+        user = str(profile.get("user", ""))
+        host = str(profile.get("host", ""))
+        endpoint = f"{user}@{host}" if user and host else host or user
+        parts = [f"{marker} {name}"]
+        if label and label != name:
+            parts.append(label)
+        if endpoint:
+            parts.append(endpoint)
+        return "  ".join(parts)
 
     def run_edit_remote_screen(self, port: Any, remote: dict[str, Any]) -> None:
         config_remote_screen_api.run_edit_remote_screen(

@@ -171,12 +171,11 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             direct_copy=True,
         )
 
-        self.assertEqual(argv[0][:2], ["bash", "-lc"])
+        self.assertEqual(argv[0][0:2], ["ssh", "builder@10.0.0.1"])
         self.assertIn("route: direct build-host -> board-host", argv[0][2])
-        self.assertEqual(argv[1][0:2], ["ssh", "builder@10.0.0.1"])
-        self.assertIn("transfer: tar stream build-host -> board-host", argv[1][2])
-        self.assertIn("StrictHostKeyChecking=accept-new board@10.0.0.2", argv[1][2])
-        self.assertIn("progress: pv not found on build host; using python byte progress", argv[1][2])
+        self.assertIn("transfer: tar stream build-host -> board-host", argv[0][2])
+        self.assertIn("StrictHostKeyChecking=accept-new board@10.0.0.2", argv[0][2])
+        self.assertIn("progress: pv not found on build host; using python byte progress", argv[0][2])
 
     def test_copy_build_artifacts_via_client_route_uses_prepare_and_pipe(self) -> None:
         specs = [{"label": "full_ufs.img.gz", "path": "full_ufs.img.gz", "source": "manifest image output"}]
@@ -192,13 +191,13 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             direct_copy=False,
         )
 
-        self.assertEqual(len(argv), 3)
-        self.assertIn("route: via client machine", argv[0][2])
-        self.assertIn("Prepare board artifacts directory", argv[1][2])
-        self.assertIn("mkdir -p /srv/tftp/vgon/artifacts", argv[1][2])
-        self.assertEqual(argv[2][0:2], ["bash", "-lc"])
-        self.assertIn("ssh builder@10.0.0.1", argv[2][2])
-        self.assertIn("ssh board@10.0.0.2", argv[2][2])
+        self.assertEqual(len(argv), 2)
+        self.assertIn("Prepare board artifacts directory", argv[0][2])
+        self.assertIn("mkdir -p /srv/tftp/vgon/artifacts", argv[0][2])
+        self.assertEqual(argv[1][0:2], ["bash", "-lc"])
+        self.assertIn("route: via client machine", argv[1][2])
+        self.assertIn("ssh builder@10.0.0.1", argv[1][2])
+        self.assertIn("ssh board@10.0.0.2", argv[1][2])
 
     def test_copy_build_artifacts_reports_missing_artifact_configuration(self) -> None:
         argv = self._transfer_service().copy_build_artifacts_command_plan(
@@ -257,10 +256,10 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             build_params={},
         )
 
-        self.assertIn("from: builder@10.0.0.1:/mnt/projects/meta-product", argv[0][2])
-        self.assertIn("to:   testrpi5@10.13.64.242:/srv/tftp/vgon/artifacts", argv[0][2])
-        self.assertIn("boot_artifacts: artifacts/boot.tar (manifest component target_images)", argv[0][2])
-        self.assertIn("full_ufs.img.gz: full_ufs.img.gz (manifest image output)", argv[0][2])
+        self.assertIn("from: builder@10.0.0.1:/mnt/projects/meta-product", argv[1][2])
+        self.assertIn("to:   testrpi5@10.13.64.242:/srv/tftp/vgon/artifacts", argv[1][2])
+        self.assertIn("boot_artifacts: artifacts/boot.tar (manifest component target_images)", argv[1][2])
+        self.assertIn("full_ufs.img.gz: full_ufs.img.gz (manifest image output)", argv[1][2])
 
     def test_flash_bootloaders_commands_from_config_match_low_level_builder(self) -> None:
         config = sample_config()

@@ -268,6 +268,29 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
             parameters.assert_not_called()
             remote_read.assert_not_called()
 
+    def test_run_project_configurations_screen_draws_before_loading_connected_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            port = FakeProjectConfigPort([ord("q")])
+            port.connection_state = "connected"
+
+            with patch(
+                "components.project_config_ui.src.project_screen.moulin_manifest_api.parameters_for_config",
+                return_value=[{"name": "ENABLE_ANDROID"}],
+            ) as parameters:
+                project_screen.run_project_configurations_screen(
+                    port,
+                    config_with_projects(),
+                    Path(tmpdir),
+                    remote_read_project_file=lambda _config, _path: "",
+                    manifest_cache={},
+                    default_moulin_manifest="missing.yaml",
+                    default_config_path=Path(tmpdir) / "config.json",
+                    save_config=lambda _config: None,
+                )
+
+            self.assertEqual(parameters.call_count, 1)
+            self.assertTrue(any("Loading Moulin parameters..." in row[2] for row in port.rows))
+
     def test_run_project_configurations_screen_add_action_uses_port(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             port = FakeProjectConfigPort([ord("a"), ord("q")])

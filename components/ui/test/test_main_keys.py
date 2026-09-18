@@ -42,6 +42,8 @@ class FakePort:
             MenuItem("Two", "group", "Second", lambda _app: "", lambda _app: None),
         ]
         self.selected = 0
+        self.active_menu_tab = ""
+        self.menu_focus = "items"
         self.focus_panel = "actions"
         self.focus_before_logs_expanded = "actions"
         self.logs_expanded = False
@@ -81,16 +83,66 @@ class MainKeyControllerTests(unittest.TestCase):
         self.assertEqual(port.selected, 1)
         self.assertTrue(port.log_follow)
 
-    def test_log_focus_scrolls_logs_instead_of_moving_selection(self) -> None:
+    def test_up_from_first_item_wraps_to_last_item(self) -> None:
+        port = FakePort()
+        port.items = [
+            MenuItem("Configure", "configuration", "Setup", lambda _app: "", lambda _app: None),
+            MenuItem("Edit", "configuration", "Edit setup", lambda _app: "", lambda _app: None),
+            MenuItem("Build", "build", "Build", lambda _app: "", lambda _app: None),
+            MenuItem("Rebuild", "build", "Rebuild", lambda _app: "", lambda _app: None),
+            MenuItem("Flash", "flashing", "Flash", lambda _app: "", lambda _app: None),
+        ]
+
+        main_keys.main_key_controller().handle_key(port, curses.KEY_UP)
+
+        self.assertEqual(port.menu_focus, "items")
+        self.assertEqual(port.active_menu_tab, "configuration")
+        self.assertEqual(port.selected, 1)
+
+    def test_down_from_last_item_wraps_to_first_item(self) -> None:
+        port = FakePort()
+        port.selected = len(port.items) - 1
+
+        main_keys.main_key_controller().handle_key(port, curses.KEY_DOWN)
+
+        self.assertEqual(port.selected, 0)
+        self.assertEqual(port.menu_focus, "items")
+
+    def test_stale_log_focus_moves_action_selection_instead_of_scrolling_logs(self) -> None:
         port = FakePort()
         port.focus_panel = "logs"
         panels = FakePanels()
 
         with patch("components.ui.src.main_keys.ui_panels_api.main_panels_controller", return_value=panels):
-            main_keys.main_key_controller().handle_key(port, curses.KEY_UP)
+            main_keys.main_key_controller().handle_key(port, curses.KEY_DOWN)
 
-        self.assertEqual(port.selected, 0)
-        self.assertEqual(panels.scrolls, [-1])
+        self.assertEqual(port.focus_panel, "actions")
+        self.assertEqual(port.selected, 1)
+        self.assertEqual(panels.scrolls, [])
+
+    def test_left_right_switch_tabs_and_restore_last_tab_selection(self) -> None:
+        port = FakePort()
+        port.items = [
+            MenuItem("Configure", "configuration", "Setup", lambda _app: "", lambda _app: None),
+            MenuItem("Edit", "configuration", "Edit setup", lambda _app: "", lambda _app: None),
+            MenuItem("Build", "build", "Build", lambda _app: "", lambda _app: None),
+            MenuItem("Rebuild", "build", "Rebuild", lambda _app: "", lambda _app: None),
+        ]
+        port.active_menu_tab = "configuration"
+        port.selected = 1
+
+        controller = main_keys.main_key_controller()
+        controller.handle_key(port, curses.KEY_RIGHT)
+        self.assertEqual(port.active_menu_tab, "build")
+        self.assertEqual(port.selected, 2)
+
+        controller.handle_key(port, curses.KEY_DOWN)
+        self.assertEqual(port.selected, 3)
+
+        controller.handle_key(port, curses.KEY_LEFT)
+        self.assertEqual(port.focus_panel, "actions")
+        self.assertEqual(port.active_menu_tab, "configuration")
+        self.assertEqual(port.selected, 1)
 
     def test_mouse_wheel_moves_action_selection_one_item(self) -> None:
         port = FakePort()
@@ -102,20 +154,21 @@ class MainKeyControllerTests(unittest.TestCase):
         self.assertEqual(port.selected, 1)
         self.assertTrue(port.log_follow)
 
-    def test_mouse_wheel_scrolls_logs_one_line_when_logs_are_focused(self) -> None:
+    def test_mouse_wheel_does_not_scroll_collapsed_logs_when_logs_were_focused(self) -> None:
         port = FakePort()
         port.focus_panel = "logs"
         panels = FakePanels()
-        button_up = getattr(curses, "BUTTON4_PRESSED", 0x100000)
+        button_down = getattr(curses, "BUTTON5_PRESSED", 0x200000)
 
         with (
-            patch("components.ui.src.main_keys.curses.getmouse", return_value=(0, 0, 0, 0, button_up)),
+            patch("components.ui.src.main_keys.curses.getmouse", return_value=(0, 0, 0, 0, button_down)),
             patch("components.ui.src.main_keys.ui_panels_api.main_panels_controller", return_value=panels),
         ):
             main_keys.main_key_controller().handle_key(port, curses.KEY_MOUSE)
 
-        self.assertEqual(port.selected, 0)
-        self.assertEqual(panels.scrolls, [-1])
+        self.assertEqual(port.focus_panel, "actions")
+        self.assertEqual(port.selected, 1)
+        self.assertEqual(panels.scrolls, [])
 
     def test_expanded_logs_escape_restores_previous_focus_and_clears_cache(self) -> None:
         port = FakePort()

@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from components.board.api import workflow as board_workflow_api
 from components.build_runtime.api import runtime as config_runtime_api
+from components.config.api import accessors as config_accessors
 from components.moulin.api import manifest as moulin_manifest_api
 from components.project.api import selection as project_selection_api
 from components.remote.api import workflow as remote_workflow_api
@@ -46,20 +47,18 @@ class MainMenuCommandItemsService:
     def build_items(self, app: Any) -> list[MenuItem]:
         items = [
             MenuItem(
-                "Copy mapped files to build host",
-                "build commands",
-                "Push selected local mapped files to the configured build host.",
-                lambda app: ui_menu_api.command_preview(
-                    self.sync_command_workflow.mapped_files_push_sequence(app.config)
-                ),
-                lambda app: self.run_sync_mapping_push(app),
-                confirm=True,
+                "Open build host shell",
+                "build / build host",
+                "Open SSH shell in the remote product directory on the build host; exit returns to this TUI.",
+                lambda app: shlex.join(self.remote_command_workflow.interactive_shell_command(app.config)),
+                lambda app: app.terminal_session_controller().open_remote_shell(app),
                 requires_remote=True,
                 requires_project=True,
+                allow_during_job=True,
             ),
             MenuItem(
                 "Build Docker image",
-                "build commands",
+                "build / commands",
                 "Rebuild the configured Docker image on the remote target.",
                 lambda app: shlex.join(
                     self.remote_command_workflow.docker_image_command(
@@ -81,7 +80,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Regenerate Moulin/Ninja",
-                "build commands",
+                "build / commands",
                 "Run Moulin on the remote target and refresh Ninja files.",
                 lambda app: shlex.join(
                     self.remote_command_workflow.moulin_regen_command(
@@ -105,7 +104,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Run product build",
-                "build commands",
+                "build / commands",
                 "Run configured Ninja targets on the remote target.",
                 lambda app: shlex.join(
                     self.remote_command_workflow.product_build_command(
@@ -129,7 +128,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Incremental build",
-                "build commands",
+                "build / commands",
                 "Rebuild configured Moulin components incrementally, regenerate Moulin/Ninja, then run configured Ninja targets.",
                 lambda app: ui_menu_api.command_preview(
                     self.incremental_product_build_commands(app)
@@ -140,7 +139,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Stop running command",
-                "build commands",
+                "build / commands",
                 "Gracefully stop the currently running build or sync command, then force-kill it if it does not exit.",
                 lambda app: app.stop_running_preview("build"),
                 lambda app: app.stop_running_command("build"),
@@ -148,8 +147,27 @@ class MainMenuCommandItemsService:
                 allow_during_job=True,
             ),
             MenuItem(
+                "Open build directory",
+                "build / workspace",
+                "Open a build-host shell in the active remote project directory.",
+                lambda app: shlex.join(
+                    self.build_host_directory_shell_command(
+                        app.config,
+                        config_accessors.remote_project_dir_for_config(app.config),
+                    )
+                ),
+                lambda app: app.terminal_session_controller().open_build_host_directory_shell(
+                    app,
+                    "Open build directory",
+                    config_accessors.remote_project_dir_for_config(app.config),
+                ),
+                requires_remote=True,
+                requires_project=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
                 "Connect board host",
-                "board host session",
+                "sessions / board host",
                 "Check SSH access to the configured board host or mark it disconnected.",
                 lambda app: ui_session_api.board_host_connection_preview(
                     app.board_connection_state,
@@ -160,7 +178,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Open board host shell",
-                "board host session",
+                "sessions / board host",
                 "Open SSH shell on the board host; exit returns to this TUI.",
                 lambda app: shlex.join(self.board_command_workflow.interactive_shell_command(app.config)),
                 lambda app: app.terminal_session_controller().open_board_shell(app),
@@ -170,8 +188,17 @@ class MainMenuCommandItemsService:
         items.extend(self.board_action_items(app))
         items.extend([
             MenuItem(
-                "Stop board command",
-                "board commands",
+                "Stop current board command",
+                "flashing / commands",
+                "Gracefully stop the currently running board command, then force-kill it if it does not exit.",
+                lambda app: app.stop_running_preview("board"),
+                lambda app: app.stop_running_command("board"),
+                confirm=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
+                "Stop current board command",
+                "tftp/nfs / board control",
                 "Gracefully stop the currently running board command, then force-kill it if it does not exit.",
                 lambda app: app.stop_running_preview("board"),
                 lambda app: app.stop_running_command("board"),
@@ -180,15 +207,189 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Sync mapped files",
-                "sync",
+                "build / files mapping",
                 "Pull or push the configured local/remote source mappings used for patch development.",
                 lambda app: "Open the sync workflow for configured mappings.",
                 lambda app: app.sync_screen(),
                 requires_remote=True,
                 requires_project=True,
             ),
+            MenuItem(
+                "Copy mapped files to build host",
+                "build / files mapping",
+                "Push selected local mapped files to the configured build host.",
+                lambda app: ui_menu_api.command_preview(
+                    self.sync_command_workflow.mapped_files_push_sequence(app.config)
+                ),
+                lambda app: self.run_sync_mapping_push(app),
+                confirm=True,
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Open mapped workspace",
+                "build / files mapping",
+                "Open a local shell in the mapped-file workspace after mappings have been pulled.",
+                lambda app: shlex.join(
+                    self.local_directory_shell_command(
+                        config_accessors.local_project_dir_for_config(app.config, self.app_dir)
+                    )
+                ),
+                lambda app: app.terminal_session_controller().open_local_directory_shell(
+                    app,
+                    "Open mapped workspace",
+                    config_accessors.local_project_dir_for_config(app.config, self.app_dir),
+                ),
+                requires_project=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
+                "Open remote TFTP root",
+                "tftp/nfs / open remote roots",
+                "Open a board-host shell in the configured TFTP project directory.",
+                lambda app: shlex.join(
+                    self.board_host_directory_shell_command(
+                        app.config,
+                        config_accessors.board_tftp_project_dir_for_config(app.config),
+                    )
+                ),
+                lambda app: app.terminal_session_controller().open_board_host_directory_shell(
+                    app,
+                    "Open remote TFTP root",
+                    config_accessors.board_tftp_project_dir_for_config(app.config),
+                ),
+                requires_project=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
+                "Open remote NFS root",
+                "tftp/nfs / open remote roots",
+                "Open a board-host shell in the configured NFS project directory.",
+                lambda app: shlex.join(
+                    self.board_host_directory_shell_command(
+                        app.config,
+                        config_accessors.board_nfs_project_dir_for_config(app.config),
+                    )
+                ),
+                lambda app: app.terminal_session_controller().open_board_host_directory_shell(
+                    app,
+                    "Open remote NFS root",
+                    config_accessors.board_nfs_project_dir_for_config(app.config),
+                ),
+                requires_project=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
+                "Open local TFTP workspace",
+                "tftp/nfs / tftp/nfs workspace",
+                "Open a local shell in the pulled TFTP workspace.",
+                lambda app: shlex.join(
+                    self.local_directory_shell_command(
+                        config_accessors.local_board_network_dir(app.config, self.app_dir, "tftp")
+                    )
+                ),
+                lambda app: app.terminal_session_controller().open_local_directory_shell(
+                    app,
+                    "Open local TFTP workspace",
+                    config_accessors.local_board_network_dir(app.config, self.app_dir, "tftp"),
+                ),
+                requires_project=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
+                "Open local NFS workspace",
+                "tftp/nfs / tftp/nfs workspace",
+                "Open a local shell in the pulled NFS workspace.",
+                lambda app: shlex.join(
+                    self.local_directory_shell_command(
+                        config_accessors.local_board_network_dir(app.config, self.app_dir, "nfs")
+                    )
+                ),
+                lambda app: app.terminal_session_controller().open_local_directory_shell(
+                    app,
+                    "Open local NFS workspace",
+                    config_accessors.local_board_network_dir(app.config, self.app_dir, "nfs"),
+                ),
+                requires_project=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
+                "Open local Dom0 initramfs workspace",
+                "tftp/nfs / dom0 initramfs workspace",
+                "Open a local shell in the unpacked Dom0 initramfs workspace.",
+                lambda app: shlex.join(
+                    self.local_directory_shell_command(
+                        config_accessors.local_board_network_dir(app.config, self.app_dir, "dom0-initramfs") / "rootfs"
+                    )
+                ),
+                lambda app: app.terminal_session_controller().open_local_directory_shell(
+                    app,
+                    "Open local Dom0 initramfs workspace",
+                    config_accessors.local_board_network_dir(app.config, self.app_dir, "dom0-initramfs") / "rootfs",
+                ),
+                requires_project=True,
+                allow_during_job=True,
+            ),
         ])
-        return items
+        return self.order_items(items)
+
+    def order_items(self, items: list[MenuItem]) -> list[MenuItem]:
+        tftp_group_order = {
+            "deploy artifacts": 0,
+            "tftp/nfs workspace": 1,
+            "dom0 initramfs workspace": 2,
+            "board setup": 3,
+            "board control": 4,
+            "open remote roots": 5,
+        }
+        tftp_items = [(index, item) for index, item in enumerate(items) if self.item_parent_group(item) == "tftp/nfs"]
+        if not tftp_items:
+            return items
+
+        ordered_tftp_items = [
+            item
+            for _index, item in sorted(
+                tftp_items,
+                key=lambda pair: (
+                    tftp_group_order.get(self.item_child_group(pair[1]), len(tftp_group_order)),
+                    pair[0],
+                ),
+            )
+        ]
+        tftp_item_ids = {id(item) for _index, item in tftp_items}
+        ordered_items: list[MenuItem] = []
+        inserted_tftp_items = False
+        for item in items:
+            if id(item) in tftp_item_ids:
+                if not inserted_tftp_items:
+                    ordered_items.extend(ordered_tftp_items)
+                    inserted_tftp_items = True
+                continue
+            ordered_items.append(item)
+        return ordered_items
+
+    def item_parent_group(self, item: MenuItem) -> str:
+        return item.group.split(" / ", 1)[0]
+
+    def item_child_group(self, item: MenuItem) -> str:
+        parts = item.group.split(" / ", 1)
+        if len(parts) == 1:
+            return ""
+        return parts[1]
+
+    def local_directory_shell_command(self, path: Path) -> list[str]:
+        script = (
+            f"dir={shlex.quote(str(path))}\n"
+            "[ -d \"$dir\" ] || { echo \"directory not found: $dir\"; echo 'Pull or create the workspace first.'; exit 2; }\n"
+            "cd \"$dir\" && exec bash -l\n"
+        )
+        return ["bash", "-lc", script]
+
+    def build_host_directory_shell_command(self, config: dict[str, Any], path: str) -> list[str]:
+        return ["ssh", "-t", config_accessors.remote_spec_for_config(config), f"cd {shlex.quote(path)} && exec bash -l"]
+
+    def board_host_directory_shell_command(self, config: dict[str, Any], path: str) -> list[str]:
+        return ["ssh", "-t", config_accessors.board_host_spec_for_config(config), f"cd {shlex.quote(path)} && exec bash -l"]
 
     def run_incremental_build(self, app: Any) -> Any:
         components = self.incremental_components(app)
@@ -499,12 +700,16 @@ class MainMenuCommandItemsService:
         return [
             MenuItem(
                 action.label,
-                "board commands",
+                self.board_action_group(action.action_id),
                 action.description,
                 lambda app, action_id=action.action_id: ui_menu_api.command_preview(
                     self.board_action_commands(app, action_id)
                 ),
-                lambda app, action_id=action.action_id: self.run_board_action(app, action_id),
+                lambda app, action_id=action.action_id, interactive=action.interactive, label=action.label: (
+                    self.run_interactive_board_action(app, action_id, label)
+                    if interactive
+                    else self.run_board_action(app, action_id)
+                ),
                 confirm=action.confirm,
                 requires_remote=action.requires_remote,
                 requires_project=action.requires_project,
@@ -512,6 +717,41 @@ class MainMenuCommandItemsService:
             )
             for action in self.board_command_workflow.board_actions(app.config)
         ]
+
+    def board_action_group(self, action_id: str) -> str:
+        if action_id in {
+            "deploy_network_boot",
+            "deploy_network_domd_rootfs",
+            "deploy_network_android",
+            "deploy_network_full",
+        }:
+            return "tftp/nfs / deploy artifacts"
+        if action_id in {
+            "pull_network_workspace",
+            "push_network_workspace",
+        }:
+            return "tftp/nfs / tftp/nfs workspace"
+        if action_id in {
+            "pull_dom0_initramfs_workspace",
+            "push_dom0_initramfs_workspace",
+        }:
+            return "tftp/nfs / dom0 initramfs workspace"
+        if action_id in {
+            "apply_uboot_network_env",
+            "apply_uboot_ufs_env",
+            "install_nfs_deploy_helper",
+        }:
+            return "tftp/nfs / board setup"
+        if action_id in {"copy_build_artifacts", "flash_bootloaders", "flash_ufs_image"}:
+            return "flashing / commands"
+        if action_id in {
+            "open_board_host_shell",
+            "restart_board",
+            "open_board_serial_console",
+            "open_uboot_console",
+        }:
+            return "flashing / board host"
+        return "build"
 
     def board_action_commands(self, app: Any, action_id: str) -> list[list[str]]:
         return self.board_command_workflow.board_action_commands(
@@ -528,6 +768,23 @@ class MainMenuCommandItemsService:
             artifact_targets=getattr(app, "board_artifacts", "") or app.build_targets,
             build_params=app.build_params,
             runner=lambda title, commands: app.command_workflow_service().run_commands(app, title, commands),
+        )
+
+    def run_interactive_board_action(self, app: Any, action_id: str, title: str) -> None:
+        if action_id == "open_board_host_shell":
+            app.terminal_session_controller().open_board_shell(app)
+            return
+        commands = self.board_action_commands(app, action_id)
+        if not commands:
+            return
+        app.terminal_session_controller().open_command_shell(
+            app,
+            title,
+            [
+                "Interactive board-host setup.",
+                "sudo may ask for the board-host password once.",
+            ],
+            commands[-1],
         )
 
 

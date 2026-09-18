@@ -170,6 +170,7 @@ class BoardCommandWorkflowService:
             config=config,
             artifact_targets=artifact_targets,
             build_params=build_params or {},
+            app_dir=self.app_dir,
             flash_bootloaders_tool=self.flash_bootloaders_tool,
             xt_imager_tool=self.xt_imager_tool,
             command_builder=self.command_builder,

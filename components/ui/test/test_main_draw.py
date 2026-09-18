@@ -143,6 +143,17 @@ class MainDrawControllerTests(unittest.TestCase):
         self.assertFalse(port.logs_dirty)
         self.assertEqual(port.screen.refresh_count, 1)
 
+    def test_full_redraw_erases_screen_even_when_layout_is_cached(self) -> None:
+        port = FakePort()
+        port.render_cache["layout"] = "30x120:60/59:3/24:12/12/15"
+        panels = FakePanels()
+
+        with patch("components.ui.src.main_draw.ui_panels_api.main_panels_controller", return_value=panels):
+            main_draw.main_draw_controller(app_dir=Path("/app")).draw(port)
+
+        self.assertEqual(port.screen.erase_count, 1)
+        self.assertFalse(port.main_full_redraw)
+
     def test_full_draw_wraps_long_action_labels_before_scroll_and_render(self) -> None:
         port = FakePort(width=82)
         port.items = [

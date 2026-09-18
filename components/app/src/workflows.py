@@ -96,6 +96,7 @@ class AppWorkflowController:
             write_line=self.write_line,
             run_remote_shell=lambda: self.remote_command_workflow.run_interactive_shell(port.config, self.subprocess_call),
             run_board_shell=lambda: self.board_session_service.run_interactive_shell(port.config, self.subprocess_call),
+            run_command=self.subprocess_call,
         )
 
     def run_sync_screen(self, port: Any) -> None:

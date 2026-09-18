@@ -20,6 +20,11 @@ def board_host_fields() -> list[tuple[str, str]]:
         ("Console device", "console_device"),
         ("UFS load addr", "ufs_loadaddr"),
         ("UFS buffer size", "ufs_buffersize"),
+        ("TFTP root", "tftp_root"),
+        ("NFS root", "nfs_root"),
+        ("Deploy subdir", "deploy_subdir"),
+        ("TFTP server IP", "server_ip"),
+        ("Target board IP", "board_ip"),
         ("Direct copy", "direct_copy"),
     ]
 

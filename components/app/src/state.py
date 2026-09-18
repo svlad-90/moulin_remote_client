@@ -60,13 +60,17 @@ class AppStateController:
         port.action_running = False
         port.active_job = None
         port.last_job = None
+        port.last_jobs_by_label = {}
         port.board_job = None
         port.last_board_job = None
+        port.last_board_jobs_by_label = {}
         port.preflight_values = {}
         port.status = "Disconnected"
         reset_preflight(port)
         port.selected = 0
         port.menu_scroll = 0
+        port.menu_focus = "items"
+        port.active_menu_tab = ""
         port.focus_panel = "actions"
         port.log_scroll = 0
         port.log_follow = True

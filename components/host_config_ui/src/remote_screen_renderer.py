@@ -20,6 +20,14 @@ class RemoteScreenRenderResult:
     editing_cursor_yx: tuple[int, int] | None
 
 
+@dataclass(frozen=True)
+class RemoteFieldDisplayRow:
+    kind: str
+    field: tuple[str, str] | None = None
+    field_index: int | None = None
+    label: str = ""
+
+
 class RemoteScreenRenderer:
     """Render the build host configuration screen from controller state."""
 
@@ -156,12 +164,12 @@ class RemoteScreenRenderer:
         if selected_remote is None:
             port.add(row, detail_x, "Selected build host: <none>"[:detail_w], port.disabled_attr())
             return None
-        port.add(row, detail_x, "Fields:", port.accent_attr())
-        row += 1
-        visible_fields = max(0, panel_top + panel_height - row - 5)
+        display_rows = self._field_display_rows(fields)
+        hint_row = panel_top + panel_height - 2
+        visible_fields = max(0, hint_row - row)
         editing_cursor_yx = self._render_field_rows(
             port,
-            fields,
+            display_rows,
             selected_remote,
             row,
             visible_fields,
@@ -169,14 +177,13 @@ class RemoteScreenRenderer:
             detail_w,
             state,
         )
-        row += len(fields[:visible_fields])
-        self._render_field_hint(port, fields, selected_remote, row, height, detail_x, detail_w, state)
+        self._render_field_hint(port, fields, selected_remote, hint_row, detail_x, detail_w, state)
         return editing_cursor_yx
 
     def _render_field_rows(
         self,
         port: Any,
-        fields: list[tuple[str, str]],
+        display_rows: list[RemoteFieldDisplayRow],
         selected_remote: dict[str, Any],
         row: int,
         visible_fields: int,
@@ -185,7 +192,17 @@ class RemoteScreenRenderer:
         state: config_remote_screen_state_api.RemoteScreenState,
     ) -> tuple[int, int] | None:
         editing_cursor_yx: tuple[int, int] | None = None
-        for offset, (label, key) in enumerate(fields[:visible_fields]):
+        for display_row in display_rows[:visible_fields]:
+            if display_row.kind == "blank":
+                port.add(row, detail_x, "".ljust(detail_w))
+                row += 1
+                continue
+            if display_row.kind == "heading":
+                port.add(row, detail_x, str(display_row.label).upper()[:detail_w], port.accent_attr())
+                row += 1
+                continue
+            label, key = display_row.field or ("", "")
+            offset = int(display_row.field_index or 0)
             is_editing = state.focus == "fields" and key == state.editing_key
             raw_value = state.editing_value if is_editing else str(selected_remote.get(key, ""))
             enabled = self.build_field_service.field_enabled_for_config(
@@ -211,18 +228,41 @@ class RemoteScreenRenderer:
             row += 1
         return editing_cursor_yx
 
+    def _field_display_rows(self, fields: list[tuple[str, str]]) -> list[RemoteFieldDisplayRow]:
+        rows: list[RemoteFieldDisplayRow] = []
+        current_group = ""
+        for index, field in enumerate(fields):
+            _label, key = field
+            group = self._field_group(key)
+            if group != current_group:
+                if rows:
+                    rows.append(RemoteFieldDisplayRow(kind="blank"))
+                rows.append(RemoteFieldDisplayRow(kind="heading", label=group))
+                current_group = group
+            rows.append(RemoteFieldDisplayRow(kind="field", field=field, field_index=index))
+        return rows
+
+    @staticmethod
+    def _field_group(key: str) -> str:
+        if key in ("name", "label"):
+            return "Profile"
+        if key in ("user", "host"):
+            return "SSH"
+        if key == "projects_dir":
+            return "Remote workspace"
+        return "Other"
+
     def _render_field_hint(
         self,
         port: Any,
         fields: list[tuple[str, str]],
         selected_remote: dict[str, Any],
         row: int,
-        height: int,
         detail_x: int,
         detail_w: int,
         state: config_remote_screen_state_api.RemoteScreenState,
     ) -> None:
-        if row >= height - 3 or not fields or state.focus != "fields":
+        if not fields or state.focus != "fields":
             return
         _label, selected_key = fields[state.field_index]
         if state.editing_key:

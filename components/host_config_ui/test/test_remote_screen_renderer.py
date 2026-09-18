@@ -85,6 +85,47 @@ class RemoteScreenRendererTests(unittest.TestCase):
 
         self.assertIsNotNone(result.editing_cursor_yx)
         self.assertTrue(any("Enter: save" in row[2] for row in port.rows))
+        self.assertTrue(any(row[0] == 25 and "Enter: save" in row[2] for row in port.rows))
+
+    def test_render_reserves_bottom_panel_row_for_field_hint(self) -> None:
+        cfg = config()
+        port = FakeRenderPort()
+        state = remote_screen_state.RemoteScreenStateController(cfg)
+        state.state.remote_index_initialized = True
+        state.state.focus = "fields"
+        state.state.field_index = 0
+        renderer = remote_screen_renderer.RemoteScreenRenderer(
+            cfg,
+            remote_fields_factory=lambda: [("Display label", "label")],
+        )
+
+        renderer.render(port, height=30, width=120, screen_state=state)
+
+        self.assertTrue(any(row[0] == 25 and "shown in the main client header" in row[2] for row in port.rows))
+
+    def test_render_groups_build_host_fields(self) -> None:
+        cfg = config()
+        port = FakeRenderPort()
+        state = remote_screen_state.RemoteScreenStateController(cfg)
+        renderer = remote_screen_renderer.RemoteScreenRenderer(
+            cfg,
+            remote_fields_factory=lambda: [
+                ("Profile name", "name"),
+                ("SSH user", "user"),
+                ("Projects dir", "projects_dir"),
+            ],
+        )
+
+        renderer.render(port, height=30, width=120, screen_state=state)
+
+        rendered = [row[2].strip() for row in port.rows]
+        self.assertIn("PROFILE", rendered)
+        self.assertIn("SSH", rendered)
+        self.assertIn("REMOTE WORKSPACE", rendered)
+        ssh_row = rendered.index("SSH")
+        workspace_row = rendered.index("REMOTE WORKSPACE")
+        self.assertEqual(rendered[ssh_row - 1], "")
+        self.assertEqual(rendered[workspace_row - 1], "")
 
 
 if __name__ == "__main__":

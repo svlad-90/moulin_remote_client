@@ -33,23 +33,23 @@ class MainMenuSetupItemsService:
         return [
             MenuItem(
                 "Build host configuration",
-                "setup",
-                "Add, delete, select, and edit build-machine SSH profiles used for Moulin and Ninja.",
+                "configuration",
+                "Add, delete, and edit build-machine SSH profiles used for Moulin and Ninja.",
                 lambda app: "Open build host profile setup.",
                 lambda app: app.config_workflow_controller().run_remote_configurations_screen(app),
                 allow_during_job=True,
             ),
             MenuItem(
                 "Board host configuration",
-                "setup",
-                "Add, delete, select, and edit board-access SSH profiles used for runtime checks.",
+                "configuration",
+                "Add, delete, and edit board-access SSH profiles used for runtime checks.",
                 lambda app: "Open board host profile setup.",
                 lambda app: app.config_workflow_controller().run_board_host_configurations_screen(app),
                 allow_during_job=True,
             ),
             MenuItem(
-                "Project configurations",
-                "setup",
+                "Project configuration",
+                "configuration",
                 "Add, delete, select, and edit project profiles plus product-specific build settings, artifacts, and mappings.",
                 lambda app: f"Active project: {config_profile_api.active_project(app.config).get('label') or config_profile_api.active_project(app.config).get('name')}",
                 lambda app: app.config_workflow_controller().run_project_configurations_screen(app),
@@ -60,8 +60,16 @@ class MainMenuSetupItemsService:
     def build_host_session_items(self) -> list[MenuItem]:
         return [
             MenuItem(
+                "Select build host",
+                "sessions / build host",
+                "Choose the active build host profile used by Moulin, Ninja, and source sync commands.",
+                lambda app: self._host_selection_preview(app.config, "active_remote", "remotes"),
+                lambda app: app.config_workflow_controller().select_active_remote(app),
+                allow_during_job=True,
+            ),
+            MenuItem(
                 "Connect build host",
-                "build host session",
+                "sessions / build host",
                 "Check SSH access and project preflight for the configured build host or mark it disconnected.",
                 lambda app: ui_session_api.build_host_connection_preview(
                     app.connection_state,
@@ -73,7 +81,7 @@ class MainMenuSetupItemsService:
             ),
             MenuItem(
                 "Open build host shell",
-                "build host session",
+                "sessions / build host",
                 "Open SSH shell in the remote product directory on the build host; exit returns to this TUI.",
                 lambda app: shlex.join(self.remote_command_workflow.interactive_shell_command(app.config)),
                 lambda app: app.terminal_session_controller().open_remote_shell(app),
@@ -81,7 +89,20 @@ class MainMenuSetupItemsService:
                 requires_project=True,
                 allow_during_job=True,
             ),
+            MenuItem(
+                "Select board host",
+                "sessions / board host",
+                "Choose the active board host profile used by flashing, TFTP/NFS deploy, and board shell commands.",
+                lambda app: self._host_selection_preview(app.config, "active_board_host", "board_hosts"),
+                lambda app: app.config_workflow_controller().select_active_board_host(app),
+                allow_during_job=True,
+            ),
         ]
+
+    def _host_selection_preview(self, config: dict[str, Any], active_key: str, list_key: str) -> str:
+        active = str(config.get(active_key, ""))
+        names = [str(profile.get("name", "")) for profile in config.get(list_key, []) if isinstance(profile, dict)]
+        return f"Active: {active or '<none>'} | Available: {', '.join(names) or '<none>'}"
 
     def preflight_action_items(self, app: Any) -> list[MenuItem]:
         preflight_actions = ui_preflight_api.project_action_requirements(
@@ -94,7 +115,7 @@ class MainMenuSetupItemsService:
             items.append(
                 MenuItem(
                     "Prepare remote project",
-                    "build commands",
+                    "build",
                     "Create or repair the configured target checkout when preflight detects a missing project, non-git directory, or Git origin mismatch.",
                     lambda app: shlex.join(self.remote_command_workflow.prepare_project_command(app.config)),
                     lambda app: app.command_workflow_service().run_commands(
@@ -111,7 +132,7 @@ class MainMenuSetupItemsService:
             items.append(
                 MenuItem(
                     "Checkout project Git ref",
-                    "build commands",
+                    "build",
                     "Switch the existing remote checkout to the configured project Git branch/ref when the working tree has no tracked local changes.",
                     lambda app: shlex.join(self.remote_command_workflow.checkout_git_ref_command(app.config)),
                     lambda app: app.command_workflow_service().run_commands(

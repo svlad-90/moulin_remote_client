@@ -20,6 +20,14 @@ class BoardScreenRenderResult:
     editing_cursor_yx: tuple[int, int] | None
 
 
+@dataclass(frozen=True)
+class BoardFieldDisplayRow:
+    label: str
+    key: str
+    field_index: int | None
+    group: bool = False
+
+
 class BoardScreenRenderer:
     """Render the board host configuration screen from controller state."""
 
@@ -149,12 +157,12 @@ class BoardScreenRenderer:
         if selected_host is None:
             port.add(row, detail_x, "Selected board host: <none>"[:detail_w], port.disabled_attr())
             return None
-        port.add(row, detail_x, "Fields:", port.accent_attr())
-        row += 1
-        visible_fields = max(0, panel_top + panel_height - row - 5)
+        display_rows = self._field_display_rows(fields)
+        hint_row = panel_top + panel_height - 2
+        visible_fields = max(0, hint_row - row)
         editing_cursor_yx = self._render_field_rows(
             port,
-            fields,
+            display_rows,
             selected_host,
             row,
             visible_fields,
@@ -162,14 +170,37 @@ class BoardScreenRenderer:
             detail_w,
             state,
         )
-        row += len(fields[:visible_fields])
-        self._render_field_hint(port, fields, row, height, detail_x, detail_w, state)
+        self._render_field_hint(port, fields, hint_row, detail_x, detail_w, state)
         return editing_cursor_yx
+
+    def _field_display_rows(self, fields: list[tuple[str, str]]) -> list[BoardFieldDisplayRow]:
+        rows: list[BoardFieldDisplayRow] = []
+        last_group = ""
+        for field_index, (label, key) in enumerate(fields):
+            group = self._field_group_for_key(key)
+            if group != last_group:
+                if rows and not rows[-1].group:
+                    rows.append(BoardFieldDisplayRow("", "", None, group=True))
+                rows.append(BoardFieldDisplayRow(group, "", None, group=True))
+                last_group = group
+            rows.append(BoardFieldDisplayRow(label, key, field_index))
+        return rows
+
+    def _field_group_for_key(self, key: str) -> str:
+        if key in {"name", "label", "type"}:
+            return "PROFILE"
+        if key in {"user", "host", "work_dir"}:
+            return "SSH"
+        if key in {"console_device", "ufs_loadaddr", "ufs_buffersize", "direct_copy"}:
+            return "FLASHING"
+        if key in {"tftp_root", "nfs_root", "deploy_subdir", "server_ip", "board_ip"}:
+            return "NETWORK BOOT"
+        return "OTHER"
 
     def _render_field_rows(
         self,
         port: Any,
-        fields: list[tuple[str, str]],
+        display_rows: list[BoardFieldDisplayRow],
         selected_host: dict[str, Any],
         row: int,
         visible_fields: int,
@@ -178,7 +209,14 @@ class BoardScreenRenderer:
         state: config_board_screen_state_api.BoardScreenState,
     ) -> tuple[int, int] | None:
         editing_cursor_yx: tuple[int, int] | None = None
-        for offset, (label, key) in enumerate(fields[:visible_fields]):
+        for display_row in display_rows[:visible_fields]:
+            if display_row.group:
+                attr = port.accent_attr() if display_row.label else 0
+                port.add(row, detail_x, ui_text_api.fit_text(display_row.label, detail_w).ljust(detail_w), attr)
+                row += 1
+                continue
+            label = display_row.label
+            key = display_row.key
             is_editing = state.focus == "fields" and key == state.editing_key
             raw_value = state.editing_value if is_editing else str(selected_host.get(key, ""))
             enabled = self.board_field_service.field_enabled(key, selected_host)
@@ -188,7 +226,7 @@ class BoardScreenRenderer:
                 profile=selected_host,
                 value=raw_value,
                 enabled=enabled,
-                selected=state.focus == "fields" and offset == state.field_index,
+                selected=state.focus == "fields" and display_row.field_index == state.field_index,
                 editing=is_editing,
             )
             attr = self._field_row_attr(port, str(row_model["state"]))
@@ -204,12 +242,11 @@ class BoardScreenRenderer:
         port: Any,
         fields: list[tuple[str, str]],
         row: int,
-        height: int,
         detail_x: int,
         detail_w: int,
         state: config_board_screen_state_api.BoardScreenState,
     ) -> None:
-        if row >= height - 3 or state.focus != "fields":
+        if not fields or state.focus != "fields":
             return
         _label, selected_key = fields[state.field_index]
         if state.editing_key:

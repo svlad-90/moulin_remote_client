@@ -39,15 +39,27 @@ class StatusSegmentBehaviorTests(unittest.TestCase):
     def test_main_footer_text_matches_current_draw_policy(self) -> None:
         self.assertEqual(
             status_segments.main_footer_text(active_job=True, focus_panel="logs"),
-            "Running | Left actions | Up/Down logs | f full | s settings | q quit",
+            "Running | Left/Right tabs | Up/Down actions | f full | s settings | q quit",
         )
         self.assertEqual(
             status_segments.main_footer_text(active_job=True, focus_panel="actions"),
-            "Running | Right logs | f full | Up/Down actions | s settings | q quit",
+            "Running | Left/Right tabs | Up/Down actions | f full | s settings | q quit",
+        )
+        self.assertEqual(
+            status_segments.main_footer_text(active_job=True, focus_panel="actions", menu_focus="tabs"),
+            "Running | Left/Right tabs | Up/Down items | f full | s settings | q quit",
+        )
+        self.assertEqual(
+            status_segments.main_footer_text(active_job=False, focus_panel="actions"),
+            "Left/Right tabs | Up/Down select | Enter/r run | f full logs | s settings | q quit | Esc exit",
+        )
+        self.assertEqual(
+            status_segments.main_footer_text(active_job=False, focus_panel="actions", menu_focus="tabs"),
+            "Left/Right tabs | Up/Down items | f full logs | s settings | q quit | Esc exit",
         )
         self.assertEqual(
             status_segments.main_footer_text(active_job=False, focus_panel="logs"),
-            "Left/Right panel | Up/Down select/scroll | f full logs | Enter/r run | s settings | q quit | Esc exit",
+            "Left/Right tabs | Up/Down select | f full logs | Enter/r run | s settings | q quit | Esc exit",
         )
 
 

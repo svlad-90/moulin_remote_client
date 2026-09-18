@@ -111,7 +111,29 @@ class ConnectionJobControllerTests(unittest.TestCase):
         controller.start_build_host_connect(port, start_next_command=lambda _job: None)
 
         self.assertIsNone(port.active_job)
-        self.assertEqual(port.status, "Another action is already running")
+        self.assertEqual(port.status, "Another interactive action is already running")
+
+    def test_start_build_host_connect_reports_busy_build_slot(self) -> None:
+        port = FakeConnectionPort()
+        port.active_job = {"title": "Run product build"}
+        controller = connection.ConnectionJobController(config(), docker_image="builder:latest")
+
+        controller.start_build_host_connect(port, start_next_command=lambda _job: None)
+
+        self.assertEqual(port.active_job, {"title": "Run product build"})
+        self.assertEqual(port.status, "Another build action is already running")
+
+    def test_start_board_host_connect_ignores_busy_build_slot(self) -> None:
+        port = FakeConnectionPort()
+        port.active_job = {"title": "Run product build"}
+        started: list[dict[str, Any]] = []
+        controller = connection.ConnectionJobController(config(), docker_image="builder:latest")
+
+        controller.start_board_host_connect(port, start_next_command=started.append)
+
+        self.assertIs(port.board_job, started[0])
+        self.assertEqual(port.active_job, {"title": "Run product build"})
+        self.assertEqual(port.status, "Connecting board host...")
 
     def test_start_board_host_connect_reports_busy_board_slot(self) -> None:
         port = FakeConnectionPort()

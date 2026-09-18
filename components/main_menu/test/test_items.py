@@ -27,12 +27,26 @@ class FakeWorkflow:
 class FakeTerminalSession:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.commands: list[list[str]] = []
 
     def open_remote_shell(self, _port: Any) -> None:
         self.calls.append("remote")
 
     def open_board_shell(self, _port: Any) -> None:
         self.calls.append("board")
+
+    def open_local_directory_shell(self, _port: Any, title: str, _path: Path) -> None:
+        self.calls.append(f"local:{title}")
+
+    def open_build_host_directory_shell(self, _port: Any, title: str, _path: str) -> None:
+        self.calls.append(f"build-dir:{title}")
+
+    def open_board_host_directory_shell(self, _port: Any, title: str, _path: str) -> None:
+        self.calls.append(f"board-dir:{title}")
+
+    def open_command_shell(self, _port: Any, title: str, _details: list[str], command: list[str]) -> None:
+        self.calls.append(f"command:{title}")
+        self.commands.append(command)
 
 
 class FakeConfigWorkflow:
@@ -42,8 +56,14 @@ class FakeConfigWorkflow:
     def run_remote_configurations_screen(self, _port: Any) -> None:
         self.calls.append("remote")
 
+    def select_active_remote(self, _port: Any) -> None:
+        self.calls.append("select-remote")
+
     def run_board_host_configurations_screen(self, _port: Any) -> None:
         self.calls.append("board")
+
+    def select_active_board_host(self, _port: Any) -> None:
+        self.calls.append("select-board")
 
     def run_project_configurations_screen(self, _port: Any) -> None:
         self.calls.append("project")
@@ -149,23 +169,108 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             labels = [item.label for item in menu_items]
             self.assertIn("Build host configuration", labels)
+            self.assertIn("Select build host", labels)
             self.assertIn("Copy mapped files to build host", labels)
             self.assertIn("Run product build", labels)
             self.assertIn("Incremental build", labels)
+            self.assertIn("Select board host", labels)
             self.assertIn("Copy build artifacts", labels)
             self.assertIn("Sync mapped files", labels)
             self.assertNotIn("Analyze changed Yocto recipes", labels)
             self.assertNotIn("Clean impacted Yocto recipes", labels)
             self.assertNotIn("Rebuild impacted Yocto recipes", labels)
-            build_labels = [item.label for item in menu_items if item.group == "build commands"]
+            build_host_labels = [item.label for item in menu_items if item.group == "build / build host"]
+            build_labels = [item.label for item in menu_items if item.group == "build / commands"]
             self.assertEqual(
-                build_labels[:5],
+                build_host_labels,
                 [
-                    "Copy mapped files to build host",
+                    "Open build host shell",
+                ],
+            )
+            self.assertEqual(
+                build_labels,
+                [
                     "Build Docker image",
                     "Regenerate Moulin/Ninja",
                     "Run product build",
                     "Incremental build",
+                    "Stop running command",
+                ],
+            )
+            self.assertIn("Open build directory", [item.label for item in menu_items if item.group == "build / workspace"])
+            mapping_labels = [item.label for item in menu_items if item.group == "build / files mapping"]
+            self.assertEqual(mapping_labels, ["Sync mapped files", "Copy mapped files to build host", "Open mapped workspace"])
+            self.assertIn("Select build host", [item.label for item in menu_items if item.group == "sessions / build host"])
+            self.assertIn("Select board host", [item.label for item in menu_items if item.group == "sessions / board host"])
+            flashing_labels = [item.label for item in menu_items if item.group == "flashing / commands"]
+            board_host_labels = [item.label for item in menu_items if item.group == "flashing / board host"]
+            self.assertIn("Copy build artifacts", flashing_labels)
+            self.assertIn("Flash UFS image", flashing_labels)
+            self.assertIn("Open board host shell", board_host_labels)
+            self.assertEqual(
+                board_host_labels,
+                [
+                    "Open board host shell",
+                    "Restart board",
+                    "Open board serial console",
+                    "Open U-Boot console",
+                ],
+            )
+            self.assertIn("Open board serial console", board_host_labels)
+            self.assertIn("Open U-Boot console", board_host_labels)
+            self.assertIn("Restart board", board_host_labels)
+            self.assertIn("Stop current board command", flashing_labels)
+            tftp_deploy_labels = [item.label for item in menu_items if item.group == "tftp/nfs / deploy artifacts"]
+            tftp_control_labels = [item.label for item in menu_items if item.group == "tftp/nfs / board control"]
+            tftp_setup_labels = [item.label for item in menu_items if item.group == "tftp/nfs / board setup"]
+            tftp_workspace_labels = [item.label for item in menu_items if item.group == "tftp/nfs / tftp/nfs workspace"]
+            dom0_workspace_labels = [item.label for item in menu_items if item.group == "tftp/nfs / dom0 initramfs workspace"]
+            tftp_remote_labels = [item.label for item in menu_items if item.group == "tftp/nfs / open remote roots"]
+            tftp_labels = [item.label for item in menu_items if item.group.startswith("tftp/nfs / ")]
+            self.assertIn("Deploy full TFTP/NFS set", tftp_deploy_labels)
+            self.assertIn("Stop current board command", tftp_control_labels)
+            self.assertEqual(
+                tftp_workspace_labels,
+                [
+                    "Pull TFTP/NFS workspace",
+                    "Push TFTP/NFS workspace",
+                    "Open local TFTP workspace",
+                    "Open local NFS workspace",
+                ],
+            )
+            self.assertEqual(
+                dom0_workspace_labels,
+                [
+                    "Pull Dom0 initramfs workspace",
+                    "Push Dom0 initramfs workspace",
+                    "Open local Dom0 initramfs workspace",
+                ],
+            )
+            self.assertEqual(tftp_remote_labels, ["Open remote TFTP root", "Open remote NFS root"])
+            self.assertEqual(
+                tftp_setup_labels,
+                ["Install NFS deploy helper", "Apply U-Boot network env", "Apply U-Boot UFS env"],
+            )
+            self.assertEqual(
+                tftp_labels,
+                [
+                    "Deploy TFTP boot artifacts",
+                    "Deploy DomD NFS rootfs",
+                    "Deploy Android image to NFS",
+                    "Deploy full TFTP/NFS set",
+                    "Pull TFTP/NFS workspace",
+                    "Push TFTP/NFS workspace",
+                    "Open local TFTP workspace",
+                    "Open local NFS workspace",
+                    "Pull Dom0 initramfs workspace",
+                    "Push Dom0 initramfs workspace",
+                    "Open local Dom0 initramfs workspace",
+                    "Install NFS deploy helper",
+                    "Apply U-Boot network env",
+                    "Apply U-Boot UFS env",
+                    "Stop current board command",
+                    "Open remote TFTP root",
+                    "Open remote NFS root",
                 ],
             )
 
@@ -395,7 +500,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             copy_item.handler(app)
 
             self.assertEqual(app.workflow.command_calls[0][0], "Copy build artifacts")
-            self.assertIn("Copy build artifacts", app.workflow.command_calls[0][1][0][2])
+            self.assertIn("Copy build artifacts", app.workflow.command_calls[0][1][1][2])
 
     def test_setup_items_service_adds_preflight_action_handlers(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -437,9 +542,34 @@ class MainMenuBuilderTests(unittest.TestCase):
             menu_items = builder.build_items(app)
 
             next(item for item in menu_items if item.label == "Open build host shell").handler(app)
-            next(item for item in menu_items if item.label == "Open board host shell").handler(app)
+            next(item for item in menu_items if item.label == "Open board host shell" and item.group == "sessions / board host").handler(app)
+            next(item for item in menu_items if item.label == "Open board host shell" and item.group == "flashing / board host").handler(app)
+            next(item for item in menu_items if item.label == "Open build directory").handler(app)
+            next(item for item in menu_items if item.label == "Open mapped workspace").handler(app)
+            next(item for item in menu_items if item.label == "Open remote TFTP root").handler(app)
+            next(item for item in menu_items if item.label == "Open local NFS workspace").handler(app)
+            next(item for item in menu_items if item.label == "Open board serial console").handler(app)
+            next(item for item in menu_items if item.label == "Open U-Boot console").handler(app)
 
-            self.assertEqual(app.terminal_session.calls, ["remote", "board"])
+            self.assertEqual(
+                app.terminal_session.calls,
+                [
+                    "remote",
+                    "board",
+                    "board",
+                    "build-dir:Open build directory",
+                    "local:Open mapped workspace",
+                    "board-dir:Open remote TFTP root",
+                    "local:Open local NFS workspace",
+                    "command:Open board serial console",
+                    "command:Open U-Boot console",
+                ],
+            )
+            self.assertEqual(app.terminal_session.commands[0][0:3], ["ssh", "-tt", "tester@10.0.0.2"])
+            self.assertIn("picocom -b 1843200", app.terminal_session.commands[0][-1])
+            self.assertNotIn("x5h_off", app.terminal_session.commands[0][-1])
+            self.assertIn("x5h_off", app.terminal_session.commands[1][-1])
+            self.assertIn("picocom -b 1843200", app.terminal_session.commands[1][-1])
 
 
 if __name__ == "__main__":

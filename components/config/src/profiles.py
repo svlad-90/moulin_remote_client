@@ -19,6 +19,11 @@ def empty_host_profile(name: str = "") -> dict[str, str]:
         "console_device": "",
         "ufs_loadaddr": "",
         "ufs_buffersize": "",
+        "tftp_root": "/srv/tftp",
+        "nfs_root": "/srv/nfs",
+        "deploy_subdir": "",
+        "server_ip": "",
+        "board_ip": "",
     }
 
 

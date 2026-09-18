@@ -50,9 +50,13 @@ def mapping_status_role(names: list[str], error: str | None, issues: list[str]) 
     return "ok"
 
 
-def main_footer_text(*, active_job: bool, focus_panel: str) -> str:
-    if active_job and focus_panel == "logs":
-        return "Running | Left actions | Up/Down logs | f full | s settings | q quit"
+def main_footer_text(*, active_job: bool, focus_panel: str, menu_focus: str = "items") -> str:
     if active_job:
-        return "Running | Right logs | f full | Up/Down actions | s settings | q quit"
-    return "Left/Right panel | Up/Down select/scroll | f full logs | Enter/r run | s settings | q quit | Esc exit"
+        if focus_panel == "actions" and menu_focus == "tabs":
+            return "Running | Left/Right tabs | Up/Down items | f full | s settings | q quit"
+        return "Running | Left/Right tabs | Up/Down actions | f full | s settings | q quit"
+    if focus_panel == "actions" and menu_focus == "tabs":
+        return "Left/Right tabs | Up/Down items | f full logs | s settings | q quit | Esc exit"
+    if focus_panel == "actions":
+        return "Left/Right tabs | Up/Down select | Enter/r run | f full logs | s settings | q quit | Esc exit"
+    return "Left/Right tabs | Up/Down select | f full logs | Enter/r run | s settings | q quit | Esc exit"

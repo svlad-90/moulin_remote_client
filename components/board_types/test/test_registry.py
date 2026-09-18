@@ -25,9 +25,24 @@ class BoardTypeRegistryTests(unittest.TestCase):
         self.assertEqual(
             [(action.action_id, action.label) for action in adapter.actions({})],
             [
+                ("open_board_host_shell", "Open board host shell"),
                 ("copy_build_artifacts", "Copy build artifacts"),
                 ("flash_bootloaders", "Flash bootloaders"),
                 ("flash_ufs_image", "Flash UFS image"),
+                ("restart_board", "Restart board"),
+                ("open_board_serial_console", "Open board serial console"),
+                ("open_uboot_console", "Open U-Boot console"),
+                ("deploy_network_boot", "Deploy TFTP boot artifacts"),
+                ("deploy_network_domd_rootfs", "Deploy DomD NFS rootfs"),
+                ("deploy_network_android", "Deploy Android image to NFS"),
+                ("deploy_network_full", "Deploy full TFTP/NFS set"),
+                ("install_nfs_deploy_helper", "Install NFS deploy helper"),
+                ("pull_network_workspace", "Pull TFTP/NFS workspace"),
+                ("push_network_workspace", "Push TFTP/NFS workspace"),
+                ("pull_dom0_initramfs_workspace", "Pull Dom0 initramfs workspace"),
+                ("push_dom0_initramfs_workspace", "Push Dom0 initramfs workspace"),
+                ("apply_uboot_network_env", "Apply U-Boot network env"),
+                ("apply_uboot_ufs_env", "Apply U-Boot UFS env"),
             ],
         )
 

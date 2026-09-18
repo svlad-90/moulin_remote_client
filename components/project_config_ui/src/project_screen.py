@@ -87,19 +87,16 @@ def run_project_configurations_screen(
         project_field_service=project_field_service,
     )
     editing_cursor_yx: tuple[int, int] | None = None
+    params: list[dict[str, Any]] = []
+    params_loaded = getattr(port, "connection_state", "disconnected") != "connected"
     port.screen.timeout(-1)
     while True:
         state = screen_state.state
         editing_cursor_yx = None
-        params = []
-        if getattr(port, "connection_state", "disconnected") == "connected":
-            params = moulin_manifest_api.parameters_for_config(
-                config,
-                app_dir=app_dir,
-                remote_read_project_file=remote_read_project_file,
-                cache=manifest_cache,
-                default_moulin_manifest=default_moulin_manifest,
-            )
+        connected = getattr(port, "connection_state", "disconnected") == "connected"
+        if not connected:
+            params = []
+            params_loaded = True
         port.screen.clear()
         height, width = port.screen.getmaxyx()
         if height < 22 or width < 90:
@@ -131,7 +128,19 @@ def run_project_configurations_screen(
         else:
             port.set_cursor(False)
         port.screen.timeout(-1)
+        if connected and not params_loaded:
+            port.add(height - 1, 0, "Loading Moulin parameters...".ljust(width), curses.A_REVERSE)
         port.screen.refresh()
+        if connected and not params_loaded:
+            params = moulin_manifest_api.parameters_for_config(
+                config,
+                app_dir=app_dir,
+                remote_read_project_file=remote_read_project_file,
+                cache=manifest_cache,
+                default_moulin_manifest=default_moulin_manifest,
+            )
+            params_loaded = True
+            continue
         ch = port.read_key()
         if ch == -1:
             continue

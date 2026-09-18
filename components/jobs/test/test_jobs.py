@@ -409,7 +409,7 @@ class JobsBehaviorTests(unittest.TestCase):
                 active_job=None,
                 board_job=None,
             ),
-            {"rc": 1, "status": "Another action is already running"},
+            {"rc": 1, "status": "Another interactive action is already running"},
         )
         self.assertEqual(
             jobs.build_command_start_plan(
@@ -435,6 +435,31 @@ class JobsBehaviorTests(unittest.TestCase):
             ),
             {"rc": 1, "status": "Another board action is already running"},
         )
+
+    def test_build_command_start_plan_allows_parallel_different_slots(self) -> None:
+        build_plan = jobs.build_command_start_plan(
+            title="Build",
+            item_label="Run product build",
+            slot="build",
+            commands=[["ninja"]],
+            action_running=False,
+            active_job=None,
+            board_job={"title": "Flash UFS image"},
+        )
+        board_plan = jobs.build_command_start_plan(
+            title="Flash",
+            item_label="Flash UFS image",
+            slot="board",
+            commands=[["flash"]],
+            action_running=False,
+            active_job={"title": "Run product build"},
+            board_job=None,
+        )
+
+        self.assertEqual(build_plan["rc"], 0)
+        self.assertEqual(build_plan["slot"], "build")
+        self.assertEqual(board_plan["rc"], 0)
+        self.assertEqual(board_plan["slot"], "board")
 
     def test_build_command_start_plan_creates_target_slot_job_and_started_state(self) -> None:
         plan = jobs.build_command_start_plan(

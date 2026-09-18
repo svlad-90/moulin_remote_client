@@ -16,7 +16,7 @@ class DialogBehaviorTests(unittest.TestCase):
         self.assertEqual(content.footer, "Enter/y: run | n/q/Esc: cancel")
 
     def test_action_confirm_content_matches_current_stop_text(self) -> None:
-        content = dialogs.action_confirm_content("Stop board command", "Ignored.")
+        content = dialogs.action_confirm_content("Stop current board command", "Ignored.")
 
         self.assertEqual(content.warning, "Stop the active command?")
         self.assertEqual(

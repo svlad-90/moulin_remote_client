@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from components.ui.src import input as ui_input
 
 
-STOP_ACTION_LABELS = {"Stop running command", "Stop board command"}
+STOP_ACTION_LABELS = {"Stop running command", "Stop current board command"}
 
 
 @dataclass(frozen=True)

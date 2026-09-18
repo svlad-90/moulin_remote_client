@@ -18,6 +18,7 @@ class BoardAction:
     requires_remote: bool = False
     requires_project: bool = False
     allow_during_job: bool = False
+    interactive: bool = False
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class BoardActionContext:
     config: dict[str, Any]
     artifact_targets: str = ""
     build_params: dict[str, str] | None = None
+    app_dir: Path | None = None
     flash_bootloaders_tool: Path | None = None
     xt_imager_tool: Path | None = None
     command_builder: Any = None

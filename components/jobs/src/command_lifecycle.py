@@ -37,6 +37,13 @@ class CommandLifecycleService:
     def finish_job(self, port: Any, job: dict[str, Any] | None = None) -> None:
         if job is None:
             job = port.active_job
+        if job is not None:
+            label = str(job.get("item_label", ""))
+            if label:
+                attr = "last_board_jobs_by_label" if job is port.board_job else "last_jobs_by_label"
+                history = dict(getattr(port, attr, {}) or {})
+                history[label] = job
+                setattr(port, attr, history)
         ui_session_api.apply_state(
             port,
             job_api.finish_job_state(
