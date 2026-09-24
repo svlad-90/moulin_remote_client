@@ -214,6 +214,12 @@ class ConfigWorkflowController:
     def run_settings_action(self, port: Any, action: dict[str, Any]) -> bool:
         return self._project_settings_action_controller().run_action(port, action)
 
+    def select_build_targets(self, port: Any) -> None:
+        self._target_selection_controller().select_build_targets(
+            port,
+            reload_runtime=self.reload_runtime,
+        )
+
     def _profile_action_controller(self) -> Any:
         return config_profile_actions_api.profile_action_controller(
             self.config,

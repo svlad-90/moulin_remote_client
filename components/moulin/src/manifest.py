@@ -530,10 +530,16 @@ def component_enabled_by_params(name: str, build_params: dict[str, str] | None) 
     return True
 
 
+def expanded_string_list(value: Any, variables: dict[str, str]) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [expand_value(str(item), variables).strip() for item in value if str(item).strip()]
+
+
 def component_builders_from_manifest(
     data: dict[str, Any],
     build_params: dict[str, str] | None = None,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     effective = effective_manifest(data, build_params)
     variables = effective_variables(effective)
     components = effective.get("components", {}) if isinstance(effective.get("components", {}), dict) else {}
@@ -549,13 +555,23 @@ def component_builders_from_manifest(
             continue
         target = str(builder.get("build_target") or builder.get("target") or name).strip()
         expanded_target = expand_value(target, variables).strip()
-        result.append(
-            {
-                "name": str(name),
-                "builder_type": builder_type,
-                "target": expanded_target,
-            }
-        )
+        item: dict[str, Any] = {
+            "name": str(name),
+            "builder_type": builder_type,
+            "target": expanded_target,
+        }
+        if builder_type == "bazel":
+            item.update(
+                {
+                    "build_dir": expand_value(str(raw.get("build-dir", "")), variables).strip(),
+                    "tool": expand_value(str(builder.get("tool", "tools/bazel")), variables).strip(),
+                    "command": expand_value(str(builder.get("command", "build")), variables).strip(),
+                    "args": expanded_string_list(builder.get("args", []), variables),
+                    "target_patterns": expanded_string_list(builder.get("target-patterns", []), variables),
+                    "target_images": expanded_string_list(builder.get("target_images", []), variables),
+                }
+            )
+        result.append(item)
     return result
 
 
@@ -567,7 +583,7 @@ def component_builders_for_config(
     cache: dict[tuple[str, str, str], dict[str, Any]],
     default_moulin_manifest: str = "product.yaml",
     build_params: dict[str, str] | None = None,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     data = load_manifest_for_config(
         config,
         app_dir=app_dir,

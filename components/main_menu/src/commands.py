@@ -57,6 +57,14 @@ class MainMenuCommandItemsService:
                 allow_during_job=True,
             ),
             MenuItem(
+                "Select build targets",
+                "build / configuration",
+                "Choose the Ninja targets used by product and incremental builds.",
+                lambda app: f"Current build targets: {app.build_targets or '<not set>'}",
+                lambda app: app.config_workflow_controller().select_build_targets(app),
+                requires_project=True,
+            ),
+            MenuItem(
                 "Build Docker image",
                 "build / commands",
                 "Rebuild the configured Docker image on the remote target.",
@@ -425,6 +433,8 @@ class MainMenuCommandItemsService:
             for component in selected
             if component["builder_type"] in {"bazel", "android"}
         ]
+        bazel_components = [component for component in selected if component["builder_type"] == "bazel"]
+        bazel_config_targets = self.bazel_config_targets_for_components(selected)
 
         commands: list[list[str]] = []
         commands.append(
@@ -444,6 +454,22 @@ class MainMenuCommandItemsService:
                 build_params=app.build_params,
             )
         )
+        if bazel_config_targets:
+            commands.append(
+                self.remote_command_workflow.bazel_config_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                    targets=" ".join(bazel_config_targets),
+                )
+            )
+        for component in bazel_components:
+            commands.append(
+                self.remote_command_workflow.bazel_component_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                    component=component,
+                )
+            )
         if ninja_components:
             commands.append(
                 self.remote_command_workflow.product_build_command(
@@ -460,6 +486,25 @@ class MainMenuCommandItemsService:
             )
         )
         return commands
+
+    def bazel_config_targets_for_components(self, selected_components: list[dict[str, Any]]) -> list[str]:
+        bazel_targets = [
+            self.bazel_config_target_for_component(component)
+            for component in selected_components
+            if component["builder_type"] == "bazel"
+        ]
+        return [target for target in bazel_targets if target]
+
+    @staticmethod
+    def bazel_config_target_for_component(component: dict[str, Any]) -> str:
+        target = str(component.get("target", "")).strip()
+        if not target.startswith("//"):
+            return ""
+        if target.endswith("/.config"):
+            return target
+        if target.endswith("_dist"):
+            target = target[: -len("_dist")]
+        return f"{target}/.config"
 
     def incremental_components(self, app: Any) -> list[dict[str, Any]]:
         components = moulin_manifest_api.component_builders_for_config(
@@ -529,13 +574,16 @@ class MainMenuCommandItemsService:
         return [str(component["name"]) for component in supported if str(component["name"]) in selected]
 
     def incremental_change_state(self, app: Any, components: list[dict[str, Any]]) -> dict[str, list[str]]:
-        mappings = self.active_incremental_mappings(app)
-        changed_names = config_runtime_api.changed_runtime_mappings(app.config, self.app_dir, mappings) if mappings else []
-        changed = [mapping for mapping in mappings if str(mapping.get("name", "")) in set(changed_names)]
+        changed = self.changed_incremental_mappings(app)
         return {
             "mappings": [str(mapping["name"]) for mapping in changed],
             "components": self.auto_incremental_component_names(components, changed),
         }
+
+    def changed_incremental_mappings(self, app: Any) -> list[dict[str, Any]]:
+        mappings = self.active_incremental_mappings(app)
+        changed_names = config_runtime_api.changed_runtime_mappings(app.config, self.app_dir, mappings) if mappings else []
+        return [mapping for mapping in mappings if str(mapping.get("name", "")) in set(changed_names)]
 
     def select_incremental_component_names(self, app: Any, components: list[dict[str, Any]]) -> list[str] | None:
         supported = [component for component in components if component["supported"]]
