@@ -100,6 +100,7 @@ class AppBootstrapController:
                 xt_imager_tool=self.settings.xt_imager_tool,
                 remote_read_project_file=self.remote_project_file_reader,
                 manifest_cache=self.manifest_cache,
+                load_config=self.load_config,
                 save_config=self.save_config,
                 env=self.env,
                 read_input=self.read_input,

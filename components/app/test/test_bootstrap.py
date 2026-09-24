@@ -86,6 +86,7 @@ class AppBootstrapControllerTests(unittest.TestCase):
             self.assertEqual(deps.app_dir, app_dir)
             self.assertEqual(deps.default_config_path, app_dir / "config.json")
             self.assertIs(deps.remote_read_project_file, controller.remote_project_file_reader)
+            self.assertIs(deps.load_config, controller.load_config)
             self.assertIs(deps.save_config, controller.save_config)
             self.assertEqual(deps.profile_slow_ms, 20.0)
 

@@ -302,11 +302,16 @@ esac
 
 [ -f "$tarball" ] || { echo "rootfs tarball not found: $tarball" >&2; exit 2; }
 
+echo "rootfs deploy: cleaning old NFS rootfs under $dest" >&2
 find "$dest" -mindepth 1 -maxdepth 1 ! -name '.moulin-domd-rootfs.tar.bz2' ! -name 'android_only.img' -exec rm -rf {} +
+echo "rootfs deploy: extracting $tarball into $dest" >&2
 tar --numeric-owner --same-owner -xjf "$tarball" -C "$dest"
+echo "rootfs deploy: preparing Xen log directories" >&2
 mkdir -p "$dest/var/volatile/log/xen"
 chmod 755 "$dest/var/volatile" "$dest/var/volatile/log" "$dest/var/volatile/log/xen"
+echo "rootfs deploy: removing uploaded tarball" >&2
 rm -f "$tarball"
+echo "rootfs deploy: done" >&2
 """
 
     def install_nfs_deploy_helper_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
@@ -434,7 +439,9 @@ rm -f "$tarball"
             "set -euo pipefail\n"
             f"dest={builder.quote_remote_shell_path(nfs_project)}\n"
             f"tarball={builder.quote_remote_shell_path(remote_tarball)}\n"
+            "echo 'Installing DomD rootfs on board host...' >&2\n"
             f"sudo -n {shlex.quote(helper)} \"$dest\" \"$tarball\"\n"
+            "echo 'Refreshing NFS current symlinks...' >&2\n"
             f"{self.refresh_current_symlinks_script(ctx)}"
         )
         rootfs_lookup_script = (
@@ -461,6 +468,7 @@ rm -f "$tarball"
             "rsync -az --info=progress2 --stats --human-readable "
             "-e 'ssh -o StrictHostKeyChecking=accept-new' "
             f"\"$rootfs\" {shlex.quote(rsync_target)}\n"
+            "echo 'Rootfs tarball uploaded; starting board-host install...' >&2\n"
             f"ssh -o StrictHostKeyChecking=accept-new {board_host} {shlex.quote(extract_board_script)}\n"
         )
         return [

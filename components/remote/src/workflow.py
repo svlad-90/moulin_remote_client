@@ -139,6 +139,32 @@ class RemoteCommandWorkflowService:
             args=args,
         )
 
+    def bazel_config_command(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        targets: str,
+    ) -> list[str]:
+        return self.build_service.bazel_config_command_for_config(
+            config,
+            docker_image=docker_image,
+            targets=targets,
+        )
+
+    def bazel_component_command(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        component: dict[str, Any],
+    ) -> list[str]:
+        return self.build_service.bazel_component_command_for_config(
+            config,
+            docker_image=docker_image,
+            component=component,
+        )
+
     def yocto_impact_command(
         self,
         config: dict[str, Any],

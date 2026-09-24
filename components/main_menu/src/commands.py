@@ -57,6 +57,26 @@ class MainMenuCommandItemsService:
                 allow_during_job=True,
             ),
             MenuItem(
+                "Select build targets",
+                "build / configuration",
+                "Choose the Ninja targets used by product and incremental builds.",
+                lambda app: f"Current build targets: {app.build_targets or '<not set>'}",
+                lambda app: app.config_workflow_controller().select_build_targets(app),
+                requires_project=True,
+            ),
+            MenuItem(
+                "Copy mapped files to build host",
+                "build / commands",
+                "Push selected local mapped files to the configured build host.",
+                lambda app: ui_menu_api.command_preview(
+                    self.sync_command_workflow.mapped_files_push_sequence(app.config)
+                ),
+                lambda app: self.run_sync_mapping_push(app),
+                confirm=True,
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
                 "Build Docker image",
                 "build / commands",
                 "Rebuild the configured Docker image on the remote target.",
@@ -147,20 +167,11 @@ class MainMenuCommandItemsService:
                 allow_during_job=True,
             ),
             MenuItem(
-                "Open build directory",
-                "build / workspace",
-                "Open a build-host shell in the active remote project directory.",
-                lambda app: shlex.join(
-                    self.build_host_directory_shell_command(
-                        app.config,
-                        config_accessors.remote_project_dir_for_config(app.config),
-                    )
-                ),
-                lambda app: app.terminal_session_controller().open_build_host_directory_shell(
-                    app,
-                    "Open build directory",
-                    config_accessors.remote_project_dir_for_config(app.config),
-                ),
+                "Open build host shell",
+                "flashing / hosts",
+                "Open SSH shell in the remote product workspace on the build host; exit returns to this TUI.",
+                lambda app: shlex.join(self.remote_command_workflow.interactive_shell_command(app.config)),
+                lambda app: app.terminal_session_controller().open_remote_shell(app),
                 requires_remote=True,
                 requires_project=True,
                 allow_during_job=True,
@@ -211,18 +222,6 @@ class MainMenuCommandItemsService:
                 "Pull or push the configured local/remote source mappings used for patch development.",
                 lambda app: "Open the sync workflow for configured mappings.",
                 lambda app: app.sync_screen(),
-                requires_remote=True,
-                requires_project=True,
-            ),
-            MenuItem(
-                "Copy mapped files to build host",
-                "build / files mapping",
-                "Push selected local mapped files to the configured build host.",
-                lambda app: ui_menu_api.command_preview(
-                    self.sync_command_workflow.mapped_files_push_sequence(app.config)
-                ),
-                lambda app: self.run_sync_mapping_push(app),
-                confirm=True,
                 requires_remote=True,
                 requires_project=True,
             ),
@@ -385,13 +384,11 @@ class MainMenuCommandItemsService:
         )
         return ["bash", "-lc", script]
 
-    def build_host_directory_shell_command(self, config: dict[str, Any], path: str) -> list[str]:
-        return ["ssh", "-t", config_accessors.remote_spec_for_config(config), f"cd {shlex.quote(path)} && exec bash -l"]
-
     def board_host_directory_shell_command(self, config: dict[str, Any], path: str) -> list[str]:
         return ["ssh", "-t", config_accessors.board_host_spec_for_config(config), f"cd {shlex.quote(path)} && exec bash -l"]
 
     def run_incremental_build(self, app: Any) -> Any:
+        app.reload_config_from_disk()
         components = self.incremental_components(app)
         selected_names = self.select_incremental_component_names(app, components)
         if selected_names is None:
@@ -424,6 +421,8 @@ class MainMenuCommandItemsService:
             for component in selected
             if component["builder_type"] in {"bazel", "android"}
         ]
+        bazel_components = [component for component in selected if component["builder_type"] == "bazel"]
+        bazel_config_targets = self.bazel_config_targets_for_components(selected)
 
         commands: list[list[str]] = []
         commands.append(
@@ -443,6 +442,22 @@ class MainMenuCommandItemsService:
                 build_params=app.build_params,
             )
         )
+        if bazel_config_targets:
+            commands.append(
+                self.remote_command_workflow.bazel_config_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                    targets=" ".join(bazel_config_targets),
+                )
+            )
+        for component in bazel_components:
+            commands.append(
+                self.remote_command_workflow.bazel_component_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                    component=component,
+                )
+            )
         if ninja_components:
             commands.append(
                 self.remote_command_workflow.product_build_command(
@@ -459,6 +474,25 @@ class MainMenuCommandItemsService:
             )
         )
         return commands
+
+    def bazel_config_targets_for_components(self, selected_components: list[dict[str, Any]]) -> list[str]:
+        bazel_targets = [
+            self.bazel_config_target_for_component(component)
+            for component in selected_components
+            if component["builder_type"] == "bazel"
+        ]
+        return [target for target in bazel_targets if target]
+
+    @staticmethod
+    def bazel_config_target_for_component(component: dict[str, Any]) -> str:
+        target = str(component.get("target", "")).strip()
+        if not target.startswith("//"):
+            return ""
+        if target.endswith("/.config"):
+            return target
+        if target.endswith("_dist"):
+            target = target[: -len("_dist")]
+        return f"{target}/.config"
 
     def incremental_components(self, app: Any) -> list[dict[str, Any]]:
         components = moulin_manifest_api.component_builders_for_config(
@@ -528,13 +562,16 @@ class MainMenuCommandItemsService:
         return [str(component["name"]) for component in supported if str(component["name"]) in selected]
 
     def incremental_change_state(self, app: Any, components: list[dict[str, Any]]) -> dict[str, list[str]]:
-        mappings = self.active_incremental_mappings(app)
-        changed_names = config_runtime_api.changed_runtime_mappings(app.config, self.app_dir, mappings) if mappings else []
-        changed = [mapping for mapping in mappings if str(mapping.get("name", "")) in set(changed_names)]
+        changed = self.changed_incremental_mappings(app)
         return {
             "mappings": [str(mapping["name"]) for mapping in changed],
             "components": self.auto_incremental_component_names(components, changed),
         }
+
+    def changed_incremental_mappings(self, app: Any) -> list[dict[str, Any]]:
+        mappings = self.active_incremental_mappings(app)
+        changed_names = config_runtime_api.changed_runtime_mappings(app.config, self.app_dir, mappings) if mappings else []
+        return [mapping for mapping in mappings if str(mapping.get("name", "")) in set(changed_names)]
 
     def select_incremental_component_names(self, app: Any, components: list[dict[str, Any]]) -> list[str] | None:
         supported = [component for component in components if component["supported"]]
@@ -621,6 +658,7 @@ class MainMenuCommandItemsService:
             app.screen.timeout(250)
 
     def run_build_command(self, app: Any, title: str, command: list[str]) -> int:
+        app.reload_config_from_disk()
         return app.command_workflow_service().run_build_command(
             app,
             title,
@@ -683,6 +721,7 @@ class MainMenuCommandItemsService:
         )
 
     def run_sync_mapping_push(self, app: Any) -> int:
+        app.reload_config_from_disk()
         return app.command_workflow_service().run_commands(
             app,
             "Copy mapped files to build host",
@@ -744,12 +783,9 @@ class MainMenuCommandItemsService:
             return "tftp/nfs / board setup"
         if action_id in {"copy_build_artifacts", "flash_bootloaders", "flash_ufs_image"}:
             return "flashing / commands"
-        if action_id in {
-            "open_board_host_shell",
-            "restart_board",
-            "open_board_serial_console",
-            "open_uboot_console",
-        }:
+        if action_id == "open_board_host_shell":
+            return "flashing / hosts"
+        if action_id in {"restart_board", "open_board_serial_console", "open_uboot_console"}:
             return "flashing / board host"
         return "build"
 

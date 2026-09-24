@@ -389,6 +389,60 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         self.assertIn("-v /mnt/projects/meta-product:/home/builder/workspace", command)
         self.assertIn(shlex.quote("cd /home/builder/workspace && ninja boot_artifacts full_ufs.img.gz"), command)
 
+    def test_bazel_config_command_builds_requested_config_targets(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+
+        argv = commands.build_remote_bazel_config_command_for_config(
+            config,
+            docker_image="prod_img",
+            targets="//common-modules/xen-virtual-device:xen_virtual_device_aarch64/.config",
+        )
+
+        self.assertEqual(argv[0:2], ["ssh", "builder@10.0.0.1"])
+        self.assertIn("cd /mnt/projects/meta-product && docker run", argv[2])
+        self.assertIn(
+            "cd android_kernel && tools/bazel --max_idle_secs=1 build //common-modules/xen-virtual-device:xen_virtual_device_aarch64/.config",
+            argv[2],
+        )
+        self.assertIn("tools/bazel shutdown", argv[2])
+        self.assertIn("exit ${BUILD_RESULT}", argv[2])
+
+    def test_bazel_component_command_runs_manifest_builder_and_touches_outputs(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+
+        argv = commands.build_remote_bazel_component_command_for_config(
+            config,
+            docker_image="prod_img",
+            component={
+                "build_dir": "android_kernel",
+                "tool": "tools/bazel",
+                "command": "run",
+                "args": ["--verbose_failures"],
+                "target": "//common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist",
+                "target_patterns": [
+                    "--destdir=../android/out/android_kernel/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64"
+                ],
+                "target_images": [
+                    "../android/out/android_kernel/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64/Image"
+                ],
+            },
+        )
+
+        self.assertEqual(argv[0:2], ["ssh", "builder@10.0.0.1"])
+        self.assertIn(
+            "cd android_kernel && tools/bazel --max_idle_secs=1 run --verbose_failures //common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist -- --destdir=../android/out/android_kernel/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64",
+            argv[2],
+        )
+        self.assertIn(
+            "for p in ../android/out/android_kernel/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64/Image",
+            argv[2],
+        )
+        self.assertIn("touch \"$p\"", argv[2])
+        self.assertIn("tools/bazel shutdown", argv[2])
+        self.assertIn("exit ${BUILD_RESULT}", argv[2])
+
     def test_structured_script_api_is_used_directly(self) -> None:
         steps = [
             ("Project directory", "pwd"),

@@ -151,6 +151,50 @@ class RemoteBuildCommandService:
             self.product_docker_command(project_dir, docker_image, f"ninja {quoted_args}"),
         )
 
+    def bazel_config_command(self, remote: str, project_dir: str, docker_image: str, targets: str) -> list[str]:
+        quoted_targets = " ".join(shlex.quote(target) for target in shlex.split(targets))
+        inner = f"cd android_kernel && tools/bazel --max_idle_secs=1 build {quoted_targets}; BUILD_RESULT=$?; tools/bazel shutdown; exit ${{BUILD_RESULT}}"
+        return self.session_service.remote_shell_command(
+            remote,
+            project_dir,
+            self.product_docker_command(project_dir, docker_image, inner),
+        )
+
+    def bazel_component_command(
+        self,
+        remote: str,
+        project_dir: str,
+        docker_image: str,
+        component: dict[str, Any],
+    ) -> list[str]:
+        build_dir = str(component.get("build_dir") or ".").strip() or "."
+        tool = str(component.get("tool") or "tools/bazel").strip() or "tools/bazel"
+        command = str(component.get("command") or "build").strip() or "build"
+        args = [str(arg) for arg in component.get("args", []) if str(arg).strip()]
+        target = str(component.get("target", "")).strip()
+        target_patterns = [str(arg) for arg in component.get("target_patterns", []) if str(arg).strip()]
+        target_images = [str(path) for path in component.get("target_images", []) if str(path).strip()]
+
+        command_parts = [shlex.quote(tool), "--max_idle_secs=1", shlex.quote(command)]
+        command_parts.extend(shlex.quote(arg) for arg in args)
+        if target:
+            command_parts.append(shlex.quote(target))
+        if target_patterns:
+            command_parts.append("--")
+            command_parts.extend(shlex.quote(arg) for arg in target_patterns)
+        bazel = " ".join(command_parts)
+
+        touch = ""
+        if target_images:
+            touch_parts = " ".join(shlex.quote(path) for path in target_images)
+            touch = f"; if [ $BUILD_RESULT -eq 0 ]; then for p in {touch_parts}; do [ -e \"$p\" ] && touch \"$p\"; done; fi"
+        inner = f"cd {shlex.quote(build_dir)} && {bazel}; BUILD_RESULT=$?{touch}; {shlex.quote(tool)} shutdown; exit ${{BUILD_RESULT}}"
+        return self.session_service.remote_shell_command(
+            remote,
+            project_dir,
+            self.product_docker_command(project_dir, docker_image, inner),
+        )
+
     def build_command_for_config(
         self,
         config: dict[str, Any],
@@ -177,6 +221,34 @@ class RemoteBuildCommandService:
             config_accessors.remote_project_dir_for_config(config),
             docker_image,
             args,
+        )
+
+    def bazel_config_command_for_config(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        targets: str,
+    ) -> list[str]:
+        return self.bazel_config_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            docker_image,
+            targets,
+        )
+
+    def bazel_component_command_for_config(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        component: dict[str, Any],
+    ) -> list[str]:
+        return self.bazel_component_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            docker_image,
+            component,
         )
 
     def run_build_for_config(
