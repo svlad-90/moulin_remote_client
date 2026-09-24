@@ -65,6 +65,18 @@ class MainMenuCommandItemsService:
                 requires_project=True,
             ),
             MenuItem(
+                "Copy mapped files to build host",
+                "build / commands",
+                "Push selected local mapped files to the configured build host.",
+                lambda app: ui_menu_api.command_preview(
+                    self.sync_command_workflow.mapped_files_push_sequence(app.config)
+                ),
+                lambda app: self.run_sync_mapping_push(app),
+                confirm=True,
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
                 "Build Docker image",
                 "build / commands",
                 "Rebuild the configured Docker image on the remote target.",
@@ -155,20 +167,11 @@ class MainMenuCommandItemsService:
                 allow_during_job=True,
             ),
             MenuItem(
-                "Open build directory",
-                "build / workspace",
-                "Open a build-host shell in the active remote project directory.",
-                lambda app: shlex.join(
-                    self.build_host_directory_shell_command(
-                        app.config,
-                        config_accessors.remote_project_dir_for_config(app.config),
-                    )
-                ),
-                lambda app: app.terminal_session_controller().open_build_host_directory_shell(
-                    app,
-                    "Open build directory",
-                    config_accessors.remote_project_dir_for_config(app.config),
-                ),
+                "Open build host shell",
+                "flashing / hosts",
+                "Open SSH shell in the remote product workspace on the build host; exit returns to this TUI.",
+                lambda app: shlex.join(self.remote_command_workflow.interactive_shell_command(app.config)),
+                lambda app: app.terminal_session_controller().open_remote_shell(app),
                 requires_remote=True,
                 requires_project=True,
                 allow_during_job=True,
@@ -219,18 +222,6 @@ class MainMenuCommandItemsService:
                 "Pull or push the configured local/remote source mappings used for patch development.",
                 lambda app: "Open the sync workflow for configured mappings.",
                 lambda app: app.sync_screen(),
-                requires_remote=True,
-                requires_project=True,
-            ),
-            MenuItem(
-                "Copy mapped files to build host",
-                "build / files mapping",
-                "Push selected local mapped files to the configured build host.",
-                lambda app: ui_menu_api.command_preview(
-                    self.sync_command_workflow.mapped_files_push_sequence(app.config)
-                ),
-                lambda app: self.run_sync_mapping_push(app),
-                confirm=True,
                 requires_remote=True,
                 requires_project=True,
             ),
@@ -392,9 +383,6 @@ class MainMenuCommandItemsService:
             "cd \"$dir\" && exec bash -l\n"
         )
         return ["bash", "-lc", script]
-
-    def build_host_directory_shell_command(self, config: dict[str, Any], path: str) -> list[str]:
-        return ["ssh", "-t", config_accessors.remote_spec_for_config(config), f"cd {shlex.quote(path)} && exec bash -l"]
 
     def board_host_directory_shell_command(self, config: dict[str, Any], path: str) -> list[str]:
         return ["ssh", "-t", config_accessors.board_host_spec_for_config(config), f"cd {shlex.quote(path)} && exec bash -l"]
@@ -795,12 +783,9 @@ class MainMenuCommandItemsService:
             return "tftp/nfs / board setup"
         if action_id in {"copy_build_artifacts", "flash_bootloaders", "flash_ufs_image"}:
             return "flashing / commands"
-        if action_id in {
-            "open_board_host_shell",
-            "restart_board",
-            "open_board_serial_console",
-            "open_uboot_console",
-        }:
+        if action_id == "open_board_host_shell":
+            return "flashing / hosts"
+        if action_id in {"restart_board", "open_board_serial_console", "open_uboot_console"}:
             return "flashing / board host"
         return "build"
 

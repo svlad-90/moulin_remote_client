@@ -189,6 +189,11 @@ class MainMenuBuilderTests(unittest.TestCase):
             build_host_labels = [item.label for item in menu_items if item.group == "build / build host"]
             build_configuration_labels = [item.label for item in menu_items if item.group == "build / configuration"]
             build_labels = [item.label for item in menu_items if item.group == "build / commands"]
+            command_labels = [item.label for item in builder.command_items.build_items(FakeApp(_config(app_dir)))]
+            self.assertEqual(
+                command_labels[:3],
+                ["Open build host shell", "Select build targets", "Copy mapped files to build host"],
+            )
             self.assertEqual(
                 build_host_labels,
                 [
@@ -199,6 +204,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(
                 build_labels,
                 [
+                    "Copy mapped files to build host",
                     "Build Docker image",
                     "Regenerate Moulin/Ninja",
                     "Run product build",
@@ -206,20 +212,19 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Stop running command",
                 ],
             )
-            self.assertIn("Open build directory", [item.label for item in menu_items if item.group == "build / workspace"])
             mapping_labels = [item.label for item in menu_items if item.group == "build / files mapping"]
-            self.assertEqual(mapping_labels, ["Sync mapped files", "Copy mapped files to build host", "Open mapped workspace"])
+            self.assertEqual(mapping_labels, ["Sync mapped files", "Open mapped workspace"])
             self.assertIn("Select build host", [item.label for item in menu_items if item.group == "sessions / build host"])
             self.assertIn("Select board host", [item.label for item in menu_items if item.group == "sessions / board host"])
             flashing_labels = [item.label for item in menu_items if item.group == "flashing / commands"]
+            flashing_host_labels = [item.label for item in menu_items if item.group == "flashing / hosts"]
             board_host_labels = [item.label for item in menu_items if item.group == "flashing / board host"]
             self.assertIn("Copy build artifacts", flashing_labels)
             self.assertIn("Flash UFS image", flashing_labels)
-            self.assertIn("Open board host shell", board_host_labels)
+            self.assertEqual(flashing_host_labels, ["Open build host shell", "Open board host shell"])
             self.assertEqual(
                 board_host_labels,
                 [
-                    "Open board host shell",
                     "Restart board",
                     "Open board serial console",
                     "Open U-Boot console",
@@ -670,8 +675,8 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             next(item for item in menu_items if item.label == "Open build host shell").handler(app)
             next(item for item in menu_items if item.label == "Open board host shell" and item.group == "sessions / board host").handler(app)
-            next(item for item in menu_items if item.label == "Open board host shell" and item.group == "flashing / board host").handler(app)
-            next(item for item in menu_items if item.label == "Open build directory").handler(app)
+            next(item for item in menu_items if item.label == "Open build host shell" and item.group == "flashing / hosts").handler(app)
+            next(item for item in menu_items if item.label == "Open board host shell" and item.group == "flashing / hosts").handler(app)
             next(item for item in menu_items if item.label == "Open mapped workspace").handler(app)
             next(item for item in menu_items if item.label == "Open remote TFTP root").handler(app)
             next(item for item in menu_items if item.label == "Open local NFS workspace").handler(app)
@@ -683,8 +688,8 @@ class MainMenuBuilderTests(unittest.TestCase):
                 [
                     "remote",
                     "board",
+                    "remote",
                     "board",
-                    "build-dir:Open build directory",
                     "local:Open mapped workspace",
                     "board-dir:Open remote TFTP root",
                     "local:Open local NFS workspace",
