@@ -392,6 +392,7 @@ class MainMenuCommandItemsService:
         return ["ssh", "-t", config_accessors.board_host_spec_for_config(config), f"cd {shlex.quote(path)} && exec bash -l"]
 
     def run_incremental_build(self, app: Any) -> Any:
+        app.reload_config_from_disk()
         components = self.incremental_components(app)
         selected_names = self.select_incremental_component_names(app, components)
         if selected_names is None:
@@ -621,6 +622,7 @@ class MainMenuCommandItemsService:
             app.screen.timeout(250)
 
     def run_build_command(self, app: Any, title: str, command: list[str]) -> int:
+        app.reload_config_from_disk()
         return app.command_workflow_service().run_build_command(
             app,
             title,
@@ -683,6 +685,7 @@ class MainMenuCommandItemsService:
         )
 
     def run_sync_mapping_push(self, app: Any) -> int:
+        app.reload_config_from_disk()
         return app.command_workflow_service().run_commands(
             app,
             "Copy mapped files to build host",

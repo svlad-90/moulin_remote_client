@@ -93,6 +93,7 @@ class ClientAppFactoryTests(unittest.TestCase):
             xt_imager_tool=app_dir / "imager.py",
             remote_read_project_file=Mock(),
             manifest_cache={},
+            load_config=Mock(return_value={"reloaded": True}),
             save_config=Mock(),
             env={},
             read_input=Mock(return_value=""),
@@ -140,6 +141,7 @@ class ClientAppFactoryTests(unittest.TestCase):
 
             app.load_active_project_runtime()
             app.refresh_mapping_selection_cache()
+            app.reload_config_from_disk()
             app.ui_profile("event", value="x")
             self.assertEqual(app.ui_profile_slow("slow", 1.0), 12.5)
             app.flush_ui_profile()
@@ -152,8 +154,9 @@ class ClientAppFactoryTests(unittest.TestCase):
             app.add(1, 2, "text", 3)
             app.quit()
 
-            self.assertEqual(fake_state.runtime_calls, [app])
-            self.assertEqual(fake_state.refresh_calls, [app])
+            self.assertEqual(app.config, {"reloaded": True})
+            self.assertEqual(fake_state.runtime_calls, [app, app])
+            self.assertEqual(fake_state.refresh_calls, [app, app])
             self.assertEqual(fake_state.profile_calls, [(app, "event", {"value": "x"})])
             self.assertTrue(app.flushed)
             self.assertEqual(fake_services.calls[-3:], [("run", app, None), ("key", app, 10), ("draw", app, None)])

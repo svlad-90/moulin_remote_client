@@ -34,6 +34,7 @@ class ClientAppDependencies:
     xt_imager_tool: Path
     remote_read_project_file: Callable[..., Any]
     manifest_cache: dict[tuple[str, str, str], dict[str, Any]]
+    load_config: Callable[[Path], dict[str, Any]]
     save_config: Callable[[dict[str, Any]], Any]
     env: dict[str, str]
     read_input: Callable[[str], str]
@@ -99,6 +100,15 @@ class ClientApp:
 
     def refresh_mapping_selection_cache(self) -> None:
         self.app_state.refresh_mapping_selection_cache(self)
+
+    def reload_config_from_disk(self) -> None:
+        self.config = self.dependencies.load_config(self.dependencies.default_config_path)
+        self.load_active_project_runtime()
+        self.refresh_mapping_selection_cache()
+        self.items = self.build_items()
+        self.menu_dirty = True
+        self.main_full_redraw = True
+        self.logs_dirty = True
 
     def ui_profile(self, event: str, **fields: Any) -> None:
         self.app_state.profile(self, event, **fields)
@@ -267,6 +277,7 @@ class ClientApp:
         return self.services.sync_workflow_controller(self)
 
     def sync_screen(self) -> None:
+        self.reload_config_from_disk()
         self.services.run_sync_screen(self)
 
     def confirm_sync_action(self, label: str, description: str) -> bool:

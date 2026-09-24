@@ -82,6 +82,7 @@ class FakeApp:
         self.workflow = FakeWorkflow()
         self.terminal_session = FakeTerminalSession()
         self.config_workflow = FakeConfigWorkflow()
+        self.reload_config_calls = 0
 
     def command_workflow_service(self) -> FakeWorkflow:
         return self.workflow
@@ -91,6 +92,9 @@ class FakeApp:
 
     def config_workflow_controller(self) -> FakeConfigWorkflow:
         return self.config_workflow
+
+    def reload_config_from_disk(self) -> None:
+        self.reload_config_calls += 1
 
     def toggle_connection(self) -> None:
         return None
@@ -293,6 +297,7 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             build_item.handler(app)
 
+            self.assertEqual(app.reload_config_calls, 1)
             self.assertEqual(app.workflow.build_calls[0]["title"], "Run product build")
             self.assertEqual(app.workflow.build_calls[0]["targets"], "full_ufs.img.gz")
             self.assertEqual(app.workflow.command_calls, [])
@@ -349,6 +354,7 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             yocto_item.handler(app)
 
+            self.assertEqual(app.reload_config_calls, 1)
             title, commands = app.workflow.command_calls[0]
             self.assertEqual(title, "Incremental build")
             self.assertEqual(len(commands), 4)
@@ -394,6 +400,7 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             yocto_item.handler(app)
 
+            self.assertEqual(app.reload_config_calls, 1)
             _title, commands = app.workflow.command_calls[0]
             self.assertEqual(len(commands), 4)
             self.assertIn('ACTION = "clean"', commands[0][-1])
@@ -477,6 +484,7 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             copy_item.handler(app)
 
+            self.assertEqual(app.reload_config_calls, 1)
             self.assertEqual(app.workflow.command_calls[0][0], "Copy mapped files to build host")
             self.assertIn("Copy mapped files", app.workflow.command_calls[0][1][0][2])
 
