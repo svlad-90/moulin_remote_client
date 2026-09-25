@@ -6,6 +6,7 @@ import unittest
 import moulin_remote_client as client
 from components.config.api import accessors as config_accessors
 from components.config.api import profiles as config_profiles
+from components.remote.api import transport
 from components.remote.test.command_adapter import commands
 
 
@@ -58,12 +59,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(
             commands.build_interactive_remote_shell_command_for_config(config),
-            [
-                "ssh",
-                "-t",
-                "builder@10.0.0.1",
-                "cd /mnt/projects/meta-product && exec bash -l",
-            ],
+            transport.ssh_command("builder@10.0.0.1", "cd /mnt/projects/meta-product && exec bash -l", tty="-t"),
         )
 
     def test_project_file_read_and_status_probe_commands_match_current_shape(self) -> None:
@@ -72,35 +68,18 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(
             commands.build_remote_project_file_read_command_for_config(config, "prod.yaml"),
-            [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                "builder@10.0.0.1",
-                "cd /mnt/projects/meta-product && cat -- ./prod.yaml",
-            ],
+            transport.ssh_command("builder@10.0.0.1", "cd /mnt/projects/meta-product && cat -- ./prod.yaml"),
         )
         self.assertEqual(
             commands.build_remote_project_file_read_command_for_config(config, "/tmp/prod.yaml"),
-            [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                "builder@10.0.0.1",
-                "cd /mnt/projects/meta-product && cat -- /tmp/prod.yaml",
-            ],
+            transport.ssh_command("builder@10.0.0.1", "cd /mnt/projects/meta-product && cat -- /tmp/prod.yaml"),
         )
         self.assertEqual(
             commands.build_remote_status_probe_command_for_config(config),
-            [
-                "ssh",
+            transport.ssh_command(
                 "builder@10.0.0.1",
                 "cd /mnt/projects/meta-product && pwd && df -h . && git status --short --branch || true",
-            ],
+            ),
         )
 
     def test_inventory_and_tree_commands_match_client_wrappers(self) -> None:
@@ -115,7 +94,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(
             commands.build_inventory_fetch_command_for_config(config),
-            ["ssh", "builder@10.0.0.1", commands.build_inventory_command_for_config(config)],
+            transport.ssh_command("builder@10.0.0.1", commands.build_inventory_command_for_config(config)),
         )
         self.assertEqual(
             commands.build_project_tree_command(config_accessors.remote_project_dir_for_config(config), config["exclude"], 120),
@@ -135,15 +114,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(
             commands.build_project_listing_fetch_command_for_config(config, "layers/meta"),
-            [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                "builder@10.0.0.1",
-                commands.build_project_listing_command_for_config(config, "layers/meta"),
-            ],
+            transport.ssh_command("builder@10.0.0.1", commands.build_project_listing_command_for_config(config, "layers/meta")),
         )
         self.assertIn("find ./layers/meta -mindepth 1 -maxdepth 1", commands.build_project_listing_command_for_config(config, "layers/meta"))
         self.assertIn("-type f -printf 'f\\t%p\\n'", commands.build_project_listing_command_for_config(config, "layers/meta"))
@@ -154,19 +125,17 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(
             commands.build_remote_child_dirs_fetch_command_for_config(config, "~"),
-            [
-                "ssh",
+            transport.ssh_command(
                 "builder@10.0.0.1",
                 "cd $HOME && find . -mindepth 1 -maxdepth 1 -type d -printf '%P\\n' | sort",
-            ],
+            ),
         )
         self.assertEqual(
             commands.build_remote_child_dirs_fetch_command_for_config(config, "/mnt/projects"),
-            [
-                "ssh",
+            transport.ssh_command(
                 "builder@10.0.0.1",
                 "cd /mnt/projects && find . -mindepth 1 -maxdepth 1 -type d -printf '%P\\n' | sort",
-            ],
+            ),
         )
         self.assertEqual(
             commands.parse_remote_child_dirs_output("/mnt/projects", "b\na\n\n"),
@@ -178,7 +147,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(
             commands.build_remote_home_fetch_command_for_config(config),
-            ["ssh", "builder@10.0.0.1", "printf '%s\\n' \"$HOME\""],
+            transport.ssh_command("builder@10.0.0.1", "printf '%s\\n' \"$HOME\""),
         )
         self.assertEqual(commands.remote_home_from_output("/home/builder\n"), "/home/builder")
         self.assertEqual(commands.remote_home_from_output("\n"), "~")
@@ -194,15 +163,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(
             commands.build_project_tree_fetch_command_for_config(config, 2),
-            [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                "builder@10.0.0.1",
-                commands.build_project_tree_command_for_config(config, 2),
-            ],
+            transport.ssh_command("builder@10.0.0.1", commands.build_project_tree_command_for_config(config, 2)),
         )
         self.assertEqual(
             commands.parse_project_tree_output("d\tlayers/meta\nd\t ./recipes \nf\tignored\n"),
@@ -255,15 +216,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(
             commands.build_git_tracked_files_fetch_command_for_config(config),
-            [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                "builder@10.0.0.1",
-                "cd /mnt/projects/meta-product && git ls-files",
-            ],
+            transport.ssh_command("builder@10.0.0.1", "cd /mnt/projects/meta-product && git ls-files"),
         )
         files = commands.parse_git_tracked_files(output)
 
@@ -302,15 +255,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(
             commands.build_git_branch_list_fetch_command_for_config(config, "git@example:prod"),
-            [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                "builder@10.0.0.1",
-                "git ls-remote --heads --refs git@example:prod",
-            ],
+            transport.ssh_command("builder@10.0.0.1", "git ls-remote --heads --refs git@example:prod"),
         )
         self.assertEqual(commands.parse_git_branch_list_output(output), ["main", "mirror"])
         self.assertEqual(
@@ -364,9 +309,10 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             default_dockerfile=client.DEFAULT_DOCKERFILE,
         )
 
-        self.assertEqual(argv[0:2], ["ssh", "builder@10.0.0.1"])
-        self.assertIn("cd /mnt/projects/meta-product && docker build doc -f doc/Dockerfile", argv[2])
-        self.assertIn("-t prod_img:latest", argv[2])
+        self.assertEqual(argv[0], "ssh")
+        self.assertIn("builder@10.0.0.1", argv)
+        self.assertIn("cd /mnt/projects/meta-product && docker build doc -f doc/Dockerfile", argv[-1])
+        self.assertIn("-t prod_img:latest", argv[-1])
         self.assertEqual(
             argv,
             commands.build_remote_docker_command(
@@ -399,14 +345,15 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             targets="//common-modules/xen-virtual-device:xen_virtual_device_aarch64/.config",
         )
 
-        self.assertEqual(argv[0:2], ["ssh", "builder@10.0.0.1"])
-        self.assertIn("cd /mnt/projects/meta-product && docker run", argv[2])
+        self.assertEqual(argv[0], "ssh")
+        self.assertIn("builder@10.0.0.1", argv)
+        self.assertIn("cd /mnt/projects/meta-product && docker run", argv[-1])
         self.assertIn(
             "cd android_kernel && tools/bazel --max_idle_secs=1 build //common-modules/xen-virtual-device:xen_virtual_device_aarch64/.config",
-            argv[2],
+            argv[-1],
         )
-        self.assertIn("tools/bazel shutdown", argv[2])
-        self.assertIn("exit ${BUILD_RESULT}", argv[2])
+        self.assertIn("tools/bazel shutdown", argv[-1])
+        self.assertIn("exit ${BUILD_RESULT}", argv[-1])
 
     def test_bazel_component_command_runs_manifest_builder_and_touches_outputs(self) -> None:
         config = sample_config()
@@ -430,18 +377,19 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(argv[0:2], ["ssh", "builder@10.0.0.1"])
+        self.assertEqual(argv[0], "ssh")
+        self.assertIn("builder@10.0.0.1", argv)
         self.assertIn(
             "cd android_kernel && tools/bazel --max_idle_secs=1 run --verbose_failures //common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist -- --destdir=../android/out/android_kernel/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64",
-            argv[2],
+            argv[-1],
         )
         self.assertIn(
             "for p in ../android/out/android_kernel/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64/Image",
-            argv[2],
+            argv[-1],
         )
-        self.assertIn("touch \"$p\"", argv[2])
-        self.assertIn("tools/bazel shutdown", argv[2])
-        self.assertIn("exit ${BUILD_RESULT}", argv[2])
+        self.assertIn("touch \"$p\"", argv[-1])
+        self.assertIn("tools/bazel shutdown", argv[-1])
+        self.assertIn("exit ${BUILD_RESULT}", argv[-1])
 
     def test_structured_script_api_is_used_directly(self) -> None:
         steps = [
@@ -550,8 +498,9 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             ),
         )
         self.assertEqual(ran[3], commands.build_remote_build_command_for_config(config, docker_image=docker_image, targets=build_targets))
-        self.assertEqual(ran[4][0:2], ["ssh", "builder@10.0.0.1"])
-        self.assertIn("Docker image", ran[4][2])
+        self.assertEqual(ran[4][0], "ssh")
+        self.assertIn("builder@10.0.0.1", ran[4])
+        self.assertIn("Docker image", ran[4][-1])
 
     def test_run_cli_remote_command_for_config_routes_build_commands(self) -> None:
         config = sample_config()
@@ -611,8 +560,9 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(ran, [])
-        self.assertEqual(status_ran[0][0:2], ["ssh", "builder@10.0.0.1"])
-        self.assertIn("Docker image", status_ran[0][2])
+        self.assertEqual(status_ran[0][0], "ssh")
+        self.assertIn("builder@10.0.0.1", status_ran[0])
+        self.assertIn("Docker image", status_ran[0][-1])
 
     def test_run_cli_remote_command_for_config_routes_connect_without_runtime_context(self) -> None:
         config = sample_config()

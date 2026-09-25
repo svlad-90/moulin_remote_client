@@ -8,6 +8,7 @@ from typing import Any, Callable
 from components.config.api import accessors as config_accessors
 from components.project.api import inventory as project_inventory_api
 from components.project.api import model as project_model_api
+from components.remote.api import transport
 
 
 class SyncSelectedPathService:
@@ -50,11 +51,7 @@ class SyncSelectedPathService:
     ) -> list[str]:
         local_dir = config_accessors.local_project_dir_for_config(config, app_dir)
         local_dir.mkdir(parents=True, exist_ok=True)
-        argv = ["rsync", "-az", "--relative", "--delete"]
-        if dry_run:
-            argv.extend(["--dry-run", "--itemize-changes"])
-        else:
-            argv.extend(["--progress", "--info=progress2", "--stats", "--human-readable"])
+        argv = transport.rsync_base_command(dry_run=dry_run, relative=True)
         argv.extend(self.rsync_excludes_for_config(config))
         argv.extend(self.build_rsync_path_args(paths, self.remote_base_for_config(config)))
         argv.append(str(local_dir) + "/")
@@ -72,11 +69,7 @@ class SyncSelectedPathService:
         missing = [path for path in paths if not (local_dir / path).exists()]
         if missing:
             raise SystemExit("local selected paths are missing:\n" + "\n".join(missing))
-        argv = ["rsync", "-az", "--relative", "--delete"]
-        if dry_run:
-            argv.extend(["--dry-run", "--itemize-changes"])
-        else:
-            argv.extend(["--progress", "--info=progress2", "--stats", "--human-readable"])
+        argv = transport.rsync_base_command(dry_run=dry_run, relative=True)
         argv.extend(self.rsync_excludes_for_config(config))
         argv.extend(self.build_rsync_path_args(paths, str(local_dir)))
         argv.append(self.remote_base_for_config(config) + "/")

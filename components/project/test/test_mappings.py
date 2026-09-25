@@ -1096,7 +1096,8 @@ class ProjectMappingBehaviorTests(unittest.TestCase):
 
             self.assertEqual(lines[0], f"local overlay: {local_dir}")
             self.assertEqual(local_runs, [["du", "-sh", str(local_dir)]])
-            self.assertEqual(remote_runs[0][:2], ["ssh", "u@h"])
+            self.assertEqual(remote_runs[0][0], "ssh")
+            self.assertIn("u@h", remote_runs[0])
             self.assertIn("cd meta-product", remote_runs[0][-1])
             self.assertIn("status-script", remote_runs[0][-1])
 

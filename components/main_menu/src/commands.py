@@ -12,6 +12,7 @@ from components.build_runtime.api import runtime as config_runtime_api
 from components.config.api import accessors as config_accessors
 from components.moulin.api import manifest as moulin_manifest_api
 from components.project.api import selection as project_selection_api
+from components.remote.api import transport
 from components.remote.api import workflow as remote_workflow_api
 from components.sync.api import workflow as sync_workflow_api
 from components.ui.api import input as ui_input_api
@@ -385,7 +386,11 @@ class MainMenuCommandItemsService:
         return ["bash", "-lc", script]
 
     def board_host_directory_shell_command(self, config: dict[str, Any], path: str) -> list[str]:
-        return ["ssh", "-t", config_accessors.board_host_spec_for_config(config), f"cd {shlex.quote(path)} && exec bash -l"]
+        return transport.ssh_command(
+            config_accessors.board_host_spec_for_config(config),
+            f"cd {shlex.quote(path)} && exec bash -l",
+            tty="-t",
+        )
 
     def run_incremental_build(self, app: Any) -> Any:
         app.reload_config_from_disk()

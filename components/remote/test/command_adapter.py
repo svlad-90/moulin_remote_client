@@ -10,6 +10,7 @@ from components.remote.api import discovery as remote_discovery_api
 from components.remote.api import project as remote_project_api
 from components.remote.api import workflow as remote_workflow_api
 from components.remote.src.session import RemoteSessionCommandService, remote_session_command_service
+from components.remote.api import transport
 
 
 class commands:
@@ -93,7 +94,7 @@ class commands:
         remote = config_accessors.remote_spec_for_config(config)
         project_dir = config_accessors.remote_project_dir_for_config(config)
         remote_cmd = f"cd {shlex.quote(project_dir)} && pwd && df -h . && git status --short --branch || true"
-        return ["ssh", remote, remote_cmd]
+        return transport.ssh_command(remote, remote_cmd)
 
     @staticmethod
     def build_inventory_command(project_dir: str, excludes: list[str], max_depth: int) -> str:

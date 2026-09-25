@@ -9,6 +9,7 @@ from components.board.api import workflow
 from components.board.api.session import board_session_command_service
 from components.config.api import profiles as config_profiles
 from components.moulin.api import manifest as moulin_manifest_api
+from components.remote.api import transport
 
 from components.board.test.test_commands import sample_config, sample_copy_config
 
@@ -22,25 +23,17 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertEqual(
             service.connect_command_for_config(config),
-            [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=5",
-                "testrpi5@10.13.64.242",
-                "printf 'ssh=ok\\n'; uname -a | sed 's/^/target=/'",
-            ],
+            transport.ssh_command("testrpi5@10.13.64.242", "printf 'ssh=ok\\n'; uname -a | sed 's/^/target=/'"),
         )
         self.assertEqual(
             service.interactive_shell_command_for_config(config),
-            ["ssh", "-t", "testrpi5@10.13.64.242"],
+            transport.ssh_command("testrpi5@10.13.64.242", tty="-t"),
         )
         self.assertEqual(
             service.run_interactive_shell(config, lambda argv: calls.append(argv) or 23),
             23,
         )
-        self.assertEqual(calls, [["ssh", "-t", "testrpi5@10.13.64.242"]])
+        self.assertEqual(calls, [transport.ssh_command("testrpi5@10.13.64.242", tty="-t")])
 
     def test_interactive_shell_service_matches_command_builder(self) -> None:
         config = sample_config()
@@ -49,19 +42,11 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertEqual(
             service.connect_command(config),
-            [
-                "ssh",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=5",
-                "testrpi5@10.13.64.242",
-                "printf 'ssh=ok\\n'; uname -a | sed 's/^/target=/'",
-            ],
+            transport.ssh_command("testrpi5@10.13.64.242", "printf 'ssh=ok\\n'; uname -a | sed 's/^/target=/'"),
         )
         self.assertEqual(
             service.interactive_shell_command(config),
-            ["ssh", "-t", "testrpi5@10.13.64.242"],
+            transport.ssh_command("testrpi5@10.13.64.242", tty="-t"),
         )
 
     @unittest.skipUnless(moulin_manifest_api.yaml_available(), "PyYAML is not installed")
@@ -175,7 +160,8 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         uboot = service.board_action_commands(config, "apply_uboot_network_env")
         ufs = service.board_action_commands(config, "apply_uboot_ufs_env")
 
-        self.assertEqual(["ssh", "builder@10.0.0.1"], boot[0][:2])
+        self.assertEqual("ssh", boot[0][0])
+        self.assertIn("builder@10.0.0.1", boot[0])
         self.assertIn("/srv/tftp/vgoncharuk/projects/prod", boot[0][-1])
         self.assertIn("testrpi5@10.13.64.242", boot[0][-1])
         self.assertIn("rsync -az", boot[0][-1])
@@ -238,7 +224,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         helper = service.board_action_commands(config, "install_nfs_deploy_helper")
 
         self.assertTrue(actions["install_nfs_deploy_helper"].interactive)
-        self.assertEqual(helper[0][0:3], ["ssh", "-tt", "testrpi5@10.13.64.242"])
+        self.assertEqual(helper[0][0], "ssh")
+        self.assertIn("-tt", helper[0])
+        self.assertIn("testrpi5@10.13.64.242", helper[0])
         self.assertIn("/usr/local/sbin/moulin-deploy-rootfs", helper[0][-1])
         self.assertIn('if [ "$dest" = "--check" ]', helper[0][-1])
         self.assertIn('if [ "$dest" = "--prepare" ]', helper[0][-1])
@@ -258,7 +246,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         commands = service.board_action_commands(config, "open_board_serial_console")
 
-        self.assertEqual(commands[0][0:3], ["ssh", "-tt", "testrpi5@10.13.64.242"])
+        self.assertEqual(commands[0][0], "ssh")
+        self.assertIn("-tt", commands[0])
+        self.assertIn("testrpi5@10.13.64.242", commands[0])
         self.assertNotIn("x5h_off", commands[0][-1])
         self.assertNotIn("x5h_boot", commands[0][-1])
         self.assertNotIn("x5h_on", commands[0][-1])
@@ -275,7 +265,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         commands = service.board_action_commands(config, "open_uboot_console")
 
-        self.assertEqual(commands[0][0:3], ["ssh", "-tt", "testrpi5@10.13.64.242"])
+        self.assertEqual(commands[0][0], "ssh")
+        self.assertIn("-tt", commands[0])
+        self.assertIn("testrpi5@10.13.64.242", commands[0])
         self.assertIn("x5h_off", commands[0][-1])
         self.assertIn("x5h_boot", commands[0][-1])
         self.assertIn("x5h_on", commands[0][-1])
@@ -337,7 +329,8 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("gen5_x5h_flash_ufs.py", ufs[2][-1])
         self.assertIn("x5h_boot", ufs[3][-1])
         self.assertIn("python3 /srv/tftp/vgon/gen5_x5h_flash_ufs.py", ufs[3][-1])
-        self.assertEqual(restart[0][0:2], ["ssh", "-tt"])
+        self.assertEqual(restart[0][0], "ssh")
+        self.assertIn("-tt", restart[0])
         self.assertIn("bash -lic", restart[0][-1])
         self.assertIn("x5h_off", restart[0][-1])
         self.assertIn("x5h_boot", restart[0][-1])

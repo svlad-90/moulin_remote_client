@@ -8,6 +8,7 @@ from typing import Any
 
 from components.config.api import accessors as config_accessors
 from components.remote.src import session as remote_session
+from components.remote.src import transport
 
 
 class RemoteProjectMaintenanceService:
@@ -35,7 +36,7 @@ class RemoteProjectMaintenanceService:
                 f"cd {shlex.quote(project_dir)} && git remote -v; "
                 "else printf 'project Git URL is required to prepare a missing project checkout\\n' >&2; exit 2; fi"
             )
-        return ["ssh", remote, script]
+        return transport.ssh_command(remote, script)
 
     def prepare_project_command_for_config(self, config: dict[str, Any]) -> list[str]:
         return self.prepare_project_command(
@@ -59,7 +60,7 @@ class RemoteProjectMaintenanceService:
             f"git checkout {quoted_ref} && "
             "git status --short --branch"
         )
-        return ["ssh", remote, script]
+        return transport.ssh_command(remote, script)
 
     def checkout_git_ref_command_for_config(self, config: dict[str, Any]) -> list[str]:
         return self.checkout_git_ref_command(
@@ -120,7 +121,7 @@ class RemoteProjectMaintenanceService:
             + ref_check
             + "else printf 'project=not-git\\n'; printf 'git=not-git\\n'; printf 'origin=missing\\n'; printf 'ref=missing\\n'; fi"
         )
-        return ["ssh", remote, script]
+        return transport.ssh_command(remote, script)
 
     def preflight_command_for_config(self, config: dict[str, Any], docker_image: str) -> list[str]:
         project_dir = config_accessors.remote_project_dir_for_config(config)

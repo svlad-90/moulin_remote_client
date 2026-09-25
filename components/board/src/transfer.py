@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from components.config.api import accessors as config_accessors
 from components.moulin.api import manifest as moulin_manifest
+from components.remote.api import transport
 
 
 class BoardArtifactTransferService:
@@ -73,6 +74,7 @@ class BoardArtifactTransferService:
         )
 
     def tar_progress_command(self, destination: str, destination_script: str) -> str:
+        ssh_options = transport.ssh_options(accept_new_host_key=True)
         python_script = r"""
 import os
 import signal
@@ -85,7 +87,7 @@ destination_script = os.environ["BOARD_COPY_DESTINATION_SCRIPT"]
 total = max(1, int(os.environ.get("BOARD_COPY_TOTAL_BYTES", "1")))
 tar_args = sys.argv[1:]
 ssh = subprocess.Popen(
-    ["ssh", "-o", "StrictHostKeyChecking=accept-new", destination, destination_script],
+    ["ssh", *__SSH_OPTIONS__, destination, destination_script],
     stdin=subprocess.PIPE,
     start_new_session=True,
 )
@@ -117,7 +119,7 @@ ssh_rc = ssh.wait()
 if tar_rc != 0:
     sys.exit(tar_rc)
 sys.exit(ssh_rc)
-"""
+""".replace("__SSH_OPTIONS__", repr(ssh_options))
         env_prefix = (
             f"BOARD_COPY_DESTINATION={shlex.quote(destination)} "
             f"BOARD_COPY_DESTINATION_SCRIPT={shlex.quote(destination_script)} "
@@ -155,14 +157,18 @@ sys.exit(ssh_rc)
         )
         resolver_script = self.artifact_resolver_script(source_dir, artifact_specs)
         if direct_copy:
-            board_destination_command = shlex.quote(destination_script)
+            board_destination_command = transport.ssh_command_string(
+                board_host,
+                destination_script,
+                accept_new_host_key=True,
+            )
             python_progress_command = self.tar_progress_command(board_host, destination_script)
             direct_script = (
                 describe_script
                 + resolver_script
                 + "echo 'transfer: tar stream build-host -> board-host' >&2\n"
                 + "if command -v pv >/dev/null 2>&1; then\n"
-                + f"  tar -cf - \"${{resolved_tar_args[@]}}\" | pv -n -s \"$total_bytes\" 2> >(while read -r pct; do printf 'progress: %s%%\\n' \"$pct\" >&2; done) | ssh -o StrictHostKeyChecking=accept-new {shlex.quote(board_host)} {board_destination_command}\n"
+                + f"  tar -cf - \"${{resolved_tar_args[@]}}\" | pv -n -s \"$total_bytes\" 2> >(while read -r pct; do printf 'progress: %s%%\\n' \"$pct\" >&2; done) | {board_destination_command}\n"
                 + "else\n"
                 + "  echo 'progress: pv not found on build host; using python byte progress' >&2\n"
                 + f"  {python_progress_command}\n"
@@ -170,11 +176,7 @@ sys.exit(ssh_rc)
                 + "echo 'transfer: done' >&2\n"
             )
             return [
-                [
-                    "ssh",
-                    build_host,
-                    f"bash -lc {shlex.quote(direct_script)}",
-                ],
+                transport.ssh_command(build_host, f"bash -lc {shlex.quote(direct_script)}"),
             ]
         source_script = (
             describe_script
@@ -190,8 +192,8 @@ sys.exit(ssh_rc)
         remote_source_command = f"bash -lc {shlex.quote(source_script)}"
         copy_script = (
             "set -o pipefail; "
-            f"ssh {shlex.quote(build_host)} {shlex.quote(remote_source_command)} | "
-            f"ssh {shlex.quote(board_host)} {shlex.quote(destination_script)}"
+            f"{transport.ssh_command_string(build_host, remote_source_command)} | "
+            f"{transport.ssh_command_string(board_host, destination_script)}"
         )
         return [
             builder.board_prepare_work_dir_command(board_host, destination_dir),

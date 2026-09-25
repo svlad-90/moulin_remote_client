@@ -6,6 +6,7 @@ import shlex
 from pathlib import Path, PurePosixPath
 
 from components.process.api import script as process_script_api
+from components.remote.api import transport
 
 
 class BoardCommandBuilder:
@@ -33,15 +34,12 @@ class BoardCommandBuilder:
         return str(PurePosixPath(work_dir) / tool.name)
 
     def board_ssh_command(self, board_host: str, command: str, *, tty: bool = False) -> list[str]:
-        argv = ["ssh"]
         if tty:
-            argv.append("-tt")
             command = f"bash -lic {shlex.quote(command)}"
-        argv.extend([board_host, command])
-        return argv
+        return transport.ssh_command(board_host, command, tty="-tt" if tty else "")
 
     def board_interactive_shell_command(self, board_host: str) -> list[str]:
-        return ["ssh", "-t", board_host]
+        return transport.ssh_command(board_host, tty="-t")
 
     def board_deploy_tool_command(self, board_host: str, work_dir: str, tool: Path) -> list[str]:
         remote_path = self.board_tool_remote_path(work_dir, tool)
@@ -53,7 +51,7 @@ class BoardCommandBuilder:
             f"mkdir -p {self.quote_remote_shell_path(work_dir)} && "
             f"cat > {self.quote_remote_shell_path(remote_path)} && chmod +x {self.quote_remote_shell_path(remote_path)}"
         )
-        return ["bash", "-lc", f"cat {shlex.quote(str(tool))} | ssh {shlex.quote(board_host)} {shlex.quote(script)}"]
+        return ["bash", "-lc", f"cat {shlex.quote(str(tool))} | {transport.ssh_command_string(board_host, script)}"]
 
     def board_deploy_tool_log_command(self, board_host: str, work_dir: str, tool: Path) -> list[str]:
         return self.local_log_command(

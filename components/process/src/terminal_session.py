@@ -6,6 +6,8 @@ import shlex
 from pathlib import Path
 from typing import Any, Callable
 
+from components.remote.api import transport
+
 from components.config.api import accessors as config_accessor_api
 
 
@@ -101,7 +103,7 @@ class TerminalSessionController:
             port,
             title,
             [f"build host: {host}", f"cwd: {path}"],
-            ["ssh", "-t", host, command],
+            transport.ssh_command(host, command, tty="-t"),
         )
 
     def open_board_host_directory_shell(self, port: Any, title: str, path: str) -> None:
@@ -111,7 +113,7 @@ class TerminalSessionController:
             port,
             title,
             [f"board host: {host}", f"cwd: {path}"],
-            ["ssh", "-t", host, command],
+            transport.ssh_command(host, command, tty="-t"),
         )
 
     def open_command_shell(self, port: Any, title: str, lines: list[str], command: list[str]) -> None:

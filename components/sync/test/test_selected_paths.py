@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from components.remote.api import transport
 from components.sync.api import selected_paths
 from components.sync.test.test_planner import sample_config
 
@@ -23,15 +24,9 @@ class SyncSelectedPathServiceTests(unittest.TestCase):
                 app_dir=app_dir,
             )
 
-            self.assertEqual(
-                argv,
+            expected = transport.rsync_base_command(dry_run=True, relative=True)
+            expected.extend(
                 [
-                    "rsync",
-                    "-az",
-                    "--relative",
-                    "--delete",
-                    "--dry-run",
-                    "--itemize-changes",
                     "--exclude",
                     "tmp/",
                     "--exclude",
@@ -39,8 +34,9 @@ class SyncSelectedPathServiceTests(unittest.TestCase):
                     "builder@10.0.0.1:/mnt/projects/meta-product/./layers/meta",
                     "builder@10.0.0.1:/mnt/projects/meta-product/./prod.yaml",
                     str(app_dir / "overlay") + "/",
-                ],
+                ]
             )
+            self.assertEqual(argv, expected)
             self.assertTrue((app_dir / "overlay").is_dir())
 
     def test_push_command_checks_missing_local_paths(self) -> None:

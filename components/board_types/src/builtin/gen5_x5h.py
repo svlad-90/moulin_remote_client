@@ -6,6 +6,7 @@ import shlex
 
 from components.board_types.src.base import BoardAction, BoardActionContext, BoardTypeAdapter
 from components.config.api import accessors as config_accessors
+from components.remote.api import transport
 
 
 class Gen5X5hBoardAdapter(BoardTypeAdapter):
@@ -14,6 +15,23 @@ class Gen5X5hBoardAdapter(BoardTypeAdapter):
     type_id = "gen5_x5h"
     label = "GEN5 X5H"
     description = "GEN5 X5H board connected through a board host."
+
+    def rsync_progress_args(self, *, sparse: bool = False) -> list[str]:
+        argv = ["rsync", "-az"]
+        if sparse:
+            argv[-1] += "S"
+            argv.extend(["--inplace"])
+        argv.extend([*transport.rsync_options(), "--info=progress2", "--stats", "--human-readable"])
+        return argv
+
+    def rsync_progress_shell_prefix(self, *, sparse: bool = False, accept_new_host_key: bool = False) -> str:
+        return transport.shell_command(
+            [
+                *self.rsync_progress_args(sparse=sparse),
+                "-e",
+                transport.rsync_ssh_command(accept_new_host_key=accept_new_host_key),
+            ]
+        )
 
     def stream_file_with_progress_script(self, file_expr: str, label: str) -> str:
         python_script = r"""
@@ -379,7 +397,6 @@ echo "rootfs deploy: done" >&2
     def deploy_network_boot_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
         builder = ctx.command_builder
         paths = self.network_paths(ctx)
-        board_host = shlex.quote(paths["board_host"])
         tftp_project = paths["tftp_project"]
         rsync_target = f"{paths['board_host']}:{tftp_project.rstrip('/')}/"
         prepare_board_script = (
@@ -412,20 +429,18 @@ echo "rootfs deploy: done" >&2
             "mkdir -p \"$out\"\n"
             "cp -v \"$root/Image\" \"$root/uInitramfs\" \"$out/\" >&2\n"
             "cp -v \"$domd/r8a78000-ironhide-xen.dtb\" \"$domd/xen-ironhide.uImage\" \"$domd/xenpolicy-ironhide\" \"$out/\" >&2\n"
-            f"ssh -o StrictHostKeyChecking=accept-new {board_host} {shlex.quote(prepare_board_script)}\n"
-            "rsync -az --info=progress2 --stats --human-readable "
-            "-e 'ssh -o StrictHostKeyChecking=accept-new' "
+            f"{transport.ssh_command_string(paths['board_host'], prepare_board_script, accept_new_host_key=True)}\n"
+            f"{self.rsync_progress_shell_prefix(accept_new_host_key=True)} "
             f"\"$out\"/ {shlex.quote(rsync_target)}\n"
-            f"ssh -o StrictHostKeyChecking=accept-new {board_host} {shlex.quote(refresh_board_script)}\n"
+            f"{transport.ssh_command_string(paths['board_host'], refresh_board_script, accept_new_host_key=True)}\n"
         )
         return [
-            ["ssh", paths["build_host"], "bash -lc " + shlex.quote(build_script)],
+            transport.ssh_command(paths["build_host"], "bash -lc " + shlex.quote(build_script)),
         ]
 
     def deploy_network_domd_rootfs_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
         builder = ctx.command_builder
         paths = self.network_paths(ctx)
-        board_host = shlex.quote(paths["board_host"])
         nfs_project = paths["nfs_project"]
         helper = self.nfs_deploy_helper_path()
         remote_tarball = f"{nfs_project.rstrip('/')}/.moulin-domd-rootfs.tar.bz2"
@@ -464,22 +479,20 @@ echo "rootfs deploy: done" >&2
             "echo 'rsync rootfs tarball: '\"$rootfs\" >&2\n"
             "rootfs_bytes=$(stat -c%s \"$rootfs\")\n"
             "printf 'rootfs tarball size: %s bytes\\n' \"$rootfs_bytes\" >&2\n"
-            f"ssh -o StrictHostKeyChecking=accept-new {board_host} {shlex.quote(prepare_board_script)}\n"
-            "rsync -az --info=progress2 --stats --human-readable "
-            "-e 'ssh -o StrictHostKeyChecking=accept-new' "
+            f"{transport.ssh_command_string(paths['board_host'], prepare_board_script, accept_new_host_key=True)}\n"
+            f"{self.rsync_progress_shell_prefix(accept_new_host_key=True)} "
             f"\"$rootfs\" {shlex.quote(rsync_target)}\n"
             "echo 'Rootfs tarball uploaded; starting board-host install...' >&2\n"
-            f"ssh -o StrictHostKeyChecking=accept-new {board_host} {shlex.quote(extract_board_script)}\n"
+            f"{transport.ssh_command_string(paths['board_host'], extract_board_script, accept_new_host_key=True)}\n"
         )
         return [
-            ["ssh", paths["build_host"], "bash -lc " + shlex.quote(validate_script)],
-            ["ssh", paths["build_host"], "bash -lc " + shlex.quote(build_script)],
+            transport.ssh_command(paths["build_host"], "bash -lc " + shlex.quote(validate_script)),
+            transport.ssh_command(paths["build_host"], "bash -lc " + shlex.quote(build_script)),
         ]
 
     def deploy_network_android_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
         builder = ctx.command_builder
         paths = self.network_paths(ctx)
-        board_host = shlex.quote(paths["board_host"])
         nfs_project = paths["nfs_project"]
         helper = self.nfs_deploy_helper_path()
         upload_image = f"{nfs_project.rstrip('/')}/.moulin-android_only.img"
@@ -508,15 +521,14 @@ echo "rootfs deploy: done" >&2
             "image_disk_bytes=$(du -sb \"$image\" | awk '{print $1}')\n"
             "printf 'android image apparent size: %s bytes\\n' \"$image_bytes\" >&2\n"
             "printf 'android image disk usage: %s bytes\\n' \"$image_disk_bytes\" >&2\n"
-            f"ssh -o StrictHostKeyChecking=accept-new {board_host} {shlex.quote(prepare_board_script)}\n"
-            "rsync -azS --inplace --info=progress2 --stats --human-readable "
-            "-e 'ssh -o StrictHostKeyChecking=accept-new' "
+            f"{transport.ssh_command_string(paths['board_host'], prepare_board_script, accept_new_host_key=True)}\n"
+            f"{self.rsync_progress_shell_prefix(sparse=True, accept_new_host_key=True)} "
             f"\"$image\" {shlex.quote(rsync_target)}\n"
-            f"ssh -o StrictHostKeyChecking=accept-new {board_host} {shlex.quote(install_board_script)}\n"
-            f"ssh -o StrictHostKeyChecking=accept-new {board_host} {shlex.quote(refresh_board_script)}\n"
+            f"{transport.ssh_command_string(paths['board_host'], install_board_script, accept_new_host_key=True)}\n"
+            f"{transport.ssh_command_string(paths['board_host'], refresh_board_script, accept_new_host_key=True)}\n"
         )
         return [
-            ["ssh", paths["build_host"], "bash -lc " + shlex.quote(build_script)],
+            transport.ssh_command(paths["build_host"], "bash -lc " + shlex.quote(build_script)),
         ]
 
     def pull_network_workspace_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
@@ -537,20 +549,16 @@ echo "rootfs deploy: done" >&2
                 f"mkdir -p {shlex.quote(str(local_tftp))} {shlex.quote(str(local_nfs))}",
             ],
             [
-                "rsync",
-                "-az",
-                "--info=progress2",
-                "--stats",
-                "--human-readable",
+                *self.rsync_progress_args(),
+                "-e",
+                transport.rsync_ssh_command(),
                 f"{paths['board_host']}:{paths['tftp_project'].rstrip('/')}/",
                 f"{local_tftp}/",
             ],
             [
-                "rsync",
-                "-az",
-                "--info=progress2",
-                "--stats",
-                "--human-readable",
+                *self.rsync_progress_args(),
+                "-e",
+                transport.rsync_ssh_command(),
                 f"{paths['board_host']}:{paths['nfs_project'].rstrip('/')}/",
                 f"{local_nfs}/",
             ],
@@ -574,22 +582,18 @@ echo "rootfs deploy: done" >&2
         return [
             builder.board_ssh_command(paths["board_host"], setup_script),
             [
-                "rsync",
-                "-az",
+                *self.rsync_progress_args(),
                 "--delete",
-                "--info=progress2",
-                "--stats",
-                "--human-readable",
+                "-e",
+                transport.rsync_ssh_command(),
                 f"{local_tftp}/",
                 f"{paths['board_host']}:{paths['tftp_project'].rstrip('/')}/",
             ],
             [
-                "rsync",
-                "-az",
+                *self.rsync_progress_args(),
                 "--delete",
-                "--info=progress2",
-                "--stats",
-                "--human-readable",
+                "-e",
+                transport.rsync_ssh_command(),
                 f"{local_nfs}/",
                 f"{paths['board_host']}:{paths['nfs_project'].rstrip('/')}/",
             ],
@@ -634,11 +638,9 @@ echo "rootfs deploy: done" >&2
         return [
             ["bash", "-lc", prepare_script],
             [
-                "rsync",
-                "-az",
-                "--info=progress2",
-                "--stats",
-                "--human-readable",
+                *self.rsync_progress_args(),
+                "-e",
+                transport.rsync_ssh_command(),
                 f"{paths['board_host']}:{paths['tftp_project'].rstrip('/')}/uInitramfs",
                 str(image),
             ],
@@ -678,11 +680,9 @@ echo "rootfs deploy: done" >&2
             ["bash", "-lc", pack_script],
             builder.board_ssh_command(paths["board_host"], setup_script),
             [
-                "rsync",
-                "-az",
-                "--info=progress2",
-                "--stats",
-                "--human-readable",
+                *self.rsync_progress_args(),
+                "-e",
+                transport.rsync_ssh_command(),
                 str(image),
                 f"{paths['board_host']}:{paths['tftp_project'].rstrip('/')}/uInitramfs",
             ],

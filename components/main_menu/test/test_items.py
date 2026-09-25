@@ -697,7 +697,9 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "command:Open U-Boot console",
                 ],
             )
-            self.assertEqual(app.terminal_session.commands[0][0:3], ["ssh", "-tt", "tester@10.0.0.2"])
+            self.assertEqual(app.terminal_session.commands[0][0], "ssh")
+            self.assertIn("-tt", app.terminal_session.commands[0])
+            self.assertIn("tester@10.0.0.2", app.terminal_session.commands[0])
             self.assertIn("picocom -b 1843200", app.terminal_session.commands[0][-1])
             self.assertNotIn("x5h_off", app.terminal_session.commands[0][-1])
             self.assertIn("x5h_off", app.terminal_session.commands[1][-1])
