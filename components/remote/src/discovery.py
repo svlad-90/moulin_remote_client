@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from components.config.api import accessors as config_accessors
+from components.remote.src import transport
 
 
 def _normalize_mapping_path(path: str) -> str:
@@ -24,7 +25,7 @@ class RemoteProjectDiscoveryService:
     def build_project_file_read_command(self, remote: str, project_dir: str, path: str) -> list[str]:
         target = path if Path(path).is_absolute() else f"./{path.lstrip('./')}"
         script = f"cd {shlex.quote(project_dir)} && cat -- {shlex.quote(target)}"
-        return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", remote, script]
+        return transport.ssh_command(remote, script)
 
     def build_project_file_read_command_for_config(self, config: dict[str, Any], path: str) -> list[str]:
         return self.build_project_file_read_command(
@@ -66,7 +67,10 @@ class RemoteProjectDiscoveryService:
         )
 
     def build_inventory_fetch_command_for_config(self, config: dict[str, Any]) -> list[str]:
-        return ["ssh", config_accessors.remote_spec_for_config(config), self.build_inventory_command_for_config(config)]
+        return transport.ssh_command(
+            config_accessors.remote_spec_for_config(config),
+            self.build_inventory_command_for_config(config),
+        )
 
     def _build_find_prune_expr(self, excludes: list[str]) -> str:
         prune_parts = []
@@ -98,15 +102,10 @@ class RemoteProjectDiscoveryService:
         )
 
     def build_project_tree_fetch_command_for_config(self, config: dict[str, Any], depth: int) -> list[str]:
-        return [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=8",
+        return transport.ssh_command(
             config_accessors.remote_spec_for_config(config),
             self.build_project_tree_command_for_config(config, depth),
-        ]
+        )
 
     def fetch_project_tree_for_config(
         self,
@@ -134,15 +133,10 @@ class RemoteProjectDiscoveryService:
         )
 
     def build_project_listing_fetch_command_for_config(self, config: dict[str, Any], directory: str) -> list[str]:
-        return [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=8",
+        return transport.ssh_command(
             config_accessors.remote_spec_for_config(config),
             self.build_project_listing_command_for_config(config, _normalize_mapping_path(directory)),
-        ]
+        )
 
     def fetch_project_listing_for_config(
         self,
@@ -155,7 +149,7 @@ class RemoteProjectDiscoveryService:
     def build_remote_child_dirs_fetch_command(self, remote: str, path: str) -> list[str]:
         quoted = "$HOME" if path == "~" else shlex.quote(path)
         script = f"cd {quoted} && find . -mindepth 1 -maxdepth 1 -type d -printf '%P\\n' | sort"
-        return ["ssh", remote, script]
+        return transport.ssh_command(remote, script)
 
     def build_remote_child_dirs_fetch_command_for_config(self, config: dict[str, Any], path: str) -> list[str]:
         return self.build_remote_child_dirs_fetch_command(config_accessors.remote_spec_for_config(config), path)
@@ -176,7 +170,7 @@ class RemoteProjectDiscoveryService:
         )
 
     def build_remote_home_fetch_command(self, remote: str) -> list[str]:
-        return ["ssh", remote, "printf '%s\\n' \"$HOME\""]
+        return transport.ssh_command(remote, "printf '%s\\n' \"$HOME\"")
 
     def build_remote_home_fetch_command_for_config(self, config: dict[str, Any]) -> list[str]:
         return self.build_remote_home_fetch_command(config_accessors.remote_spec_for_config(config))
@@ -225,15 +219,7 @@ class RemoteProjectDiscoveryService:
 
     def build_git_tracked_files_fetch_command_for_config(self, config: dict[str, Any]) -> list[str]:
         script = f"cd {shlex.quote(config_accessors.remote_project_dir_for_config(config))} && git ls-files"
-        return [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=8",
-            config_accessors.remote_spec_for_config(config),
-            script,
-        ]
+        return transport.ssh_command(config_accessors.remote_spec_for_config(config), script)
 
     def fetch_git_tracked_files_for_config(
         self,
@@ -269,7 +255,7 @@ class RemoteProjectDiscoveryService:
 
     def build_git_branch_list_fetch_command(self, remote: str, git_url: str) -> list[str]:
         script = f"git ls-remote --heads --refs {shlex.quote(git_url)}"
-        return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", remote, script]
+        return transport.ssh_command(remote, script)
 
     def build_git_branch_list_fetch_command_for_config(self, config: dict[str, Any], git_url: str) -> list[str]:
         return self.build_git_branch_list_fetch_command(config_accessors.remote_spec_for_config(config), git_url)

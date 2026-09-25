@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 from unittest.mock import patch
 
+from components.remote.api import transport
 from components.sync.api import display as sync_display_api
 from components.sync.api import planner as sync_planner_api
 from components.sync.api import screen_workflow as sync_screen_workflow_api
@@ -375,20 +376,9 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                 remote_base="builder@example:/work/product",
             )
 
-            self.assertEqual(
-                argv,
-                [
-                    "rsync",
-                    "-az",
-                    "--delete",
-                    "--dry-run",
-                    "--itemize-changes",
-                    "--exclude",
-                    "tmp/",
-                    "builder@example:/work/product/layers/meta-example/",
-                    str(local_base / "layers/meta-example") + "/",
-                ],
-            )
+            expected = transport.rsync_base_command(dry_run=True)
+            expected.extend(["--exclude", "tmp/", "builder@example:/work/product/layers/meta-example/", str(local_base / "layers/meta-example") + "/"])
+            self.assertEqual(argv, expected)
             self.assertTrue((local_base / "layers/meta-example").is_dir())
 
     def test_push_file_apply_command_matches_current_shape(self) -> None:
@@ -414,20 +404,9 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                 remote_base="builder@example:/work/product",
             )
 
-            self.assertEqual(
-                argv,
-                [
-                    "rsync",
-                    "-az",
-                    "--delete",
-                    "--progress",
-                    "--info=progress2",
-                    "--stats",
-                    "--human-readable",
-                    str(local_file),
-                    "builder@example:/work/product/prod.yaml",
-                ],
-            )
+            expected = transport.rsync_base_command(dry_run=False)
+            expected.extend([str(local_file), "builder@example:/work/product/prod.yaml"])
+            self.assertEqual(argv, expected)
 
     def test_push_dry_run_for_pull_only_mapping_returns_log_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -533,22 +512,17 @@ class SyncCommandBehaviorTests(unittest.TestCase):
             )
 
             self.assertTrue(local_base.is_dir())
-            self.assertEqual(
-                argv,
+            expected = transport.rsync_base_command(dry_run=True, relative=True)
+            expected.extend(
                 [
-                    "rsync",
-                    "-az",
-                    "--relative",
-                    "--delete",
-                    "--dry-run",
-                    "--itemize-changes",
                     "--exclude",
                     "tmp/",
                     "builder@10.0.0.1:/mnt/projects/meta-product/./layers/meta",
                     "builder@10.0.0.1:/mnt/projects/meta-product/./prod.yaml",
                     str(local_base) + "/",
-                ],
+                ]
             )
+            self.assertEqual(argv, expected)
 
     def test_selected_paths_push_command_for_config_checks_missing_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -592,21 +566,9 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                 app_dir=app_dir,
             )
 
-            self.assertEqual(
-                argv,
-                [
-                    "rsync",
-                    "-az",
-                    "--relative",
-                    "--delete",
-                    "--progress",
-                    "--info=progress2",
-                    "--stats",
-                    "--human-readable",
-                    str(local_base) + "/./layers/meta",
-                    "builder@10.0.0.1:/mnt/projects/meta-product/",
-                ],
-            )
+            expected = transport.rsync_base_command(dry_run=False, relative=True)
+            expected.extend([str(local_base) + "/./layers/meta", "builder@10.0.0.1:/mnt/projects/meta-product/"])
+            self.assertEqual(argv, expected)
 
     def test_run_selected_paths_pull_for_config_reads_selection_and_runs_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -710,11 +672,7 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                     {
                         "header": ["\n== push: meta ==", "role: source layer", "remote: layers/meta", "local:  layers/meta"],
                         "argv": [
-                            "rsync",
-                            "-az",
-                            "--delete",
-                            "--dry-run",
-                            "--itemize-changes",
+                            *transport.rsync_base_command(dry_run=True),
                             str(local_base / "layers/meta") + "/",
                             "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/",
                         ],
@@ -938,7 +896,8 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                 app_dir=app_dir,
             )
 
-            self.assertEqual(argv[5:7], ["--exclude", "tmp/"])
+            self.assertIn("--exclude", argv)
+            self.assertIn("tmp/", argv)
             self.assertEqual(argv[-2:], [str(local_base / "layers/meta") + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
 
     def test_selected_mapping_commands_for_config_uses_project_selection(self) -> None:

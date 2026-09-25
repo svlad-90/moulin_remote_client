@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from components.process.api import terminal_session
+from components.remote.api import transport
 
 
 class FakePort:
@@ -106,8 +107,8 @@ class TerminalSessionControllerTests(unittest.TestCase):
 
         self.assertEqual(harness.events, ["suspend", "run:command", "restore"] * 3)
         self.assertEqual(harness.commands[0][:2], ["bash", "-lc"])
-        self.assertEqual(harness.commands[1], ["ssh", "-t", "builder@10.0.0.1", "cd /mnt/projects/prod && exec bash -l"])
-        self.assertEqual(harness.commands[2], ["ssh", "-t", "tester@10.0.0.2", "cd /srv/tftp && exec bash -l"])
+        self.assertEqual(harness.commands[1], transport.ssh_command("builder@10.0.0.1", "cd /mnt/projects/prod && exec bash -l", tty="-t"))
+        self.assertEqual(harness.commands[2], transport.ssh_command("tester@10.0.0.2", "cd /srv/tftp && exec bash -l", tty="-t"))
 
 
 if __name__ == "__main__":

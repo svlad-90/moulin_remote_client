@@ -8,6 +8,7 @@ from typing import Any
 from components.config.api import accessors as config_accessors
 from components.process.api import script as process_script_api
 from components.project.api import selection as project_selection_api
+from components.remote.api import transport
 
 
 class SyncMappingCommandService:
@@ -35,11 +36,7 @@ class SyncMappingCommandService:
     ) -> list[str]:
         local_path = local_base / mapping["local"]
         remote_path = f"{remote_base}/{mapping['remote']}"
-        argv = ["rsync", "-az", "--delete"]
-        if dry_run:
-            argv.extend(["--dry-run", "--itemize-changes"])
-        else:
-            argv.extend(["--progress", "--info=progress2", "--stats", "--human-readable"])
+        argv = transport.rsync_base_command(dry_run=dry_run)
         argv.extend(excludes)
         source_suffix = "/" if mapping["kind"] == "directory" else ""
         target_suffix = "/" if mapping["kind"] == "directory" else ""

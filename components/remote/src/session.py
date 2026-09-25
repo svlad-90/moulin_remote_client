@@ -6,6 +6,7 @@ import shlex
 from typing import Any, Callable
 
 from components.config.api import accessors as config_accessors
+from components.remote.src import transport
 
 
 class RemoteSessionCommandService:
@@ -14,13 +15,13 @@ class RemoteSessionCommandService:
     def remote_shell_command(self, remote: str, project_dir: str, command: str) -> list[str]:
         if not project_dir:
             raise SystemExit("Remote project directory is not configured")
-        return ["ssh", remote, f"cd {shlex.quote(project_dir)} && {command}"]
+        return transport.ssh_command(remote, f"cd {shlex.quote(project_dir)} && {command}")
 
     def interactive_shell_command(self, remote: str, project_dir: str) -> list[str]:
         if not project_dir:
             raise SystemExit("Remote project directory is not configured")
         command = f"cd {shlex.quote(project_dir)} && exec bash -l"
-        return ["ssh", "-t", remote, command]
+        return transport.ssh_command(remote, command, tty="-t")
 
     def interactive_shell_command_for_config(self, config: dict[str, Any]) -> list[str]:
         return self.interactive_shell_command(
@@ -34,15 +35,7 @@ class RemoteSessionCommandService:
             if project_dir
             else "printf 'ssh=ok\\n'; pwd | sed 's/^/cwd=/'"
         )
-        return [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=5",
-            remote,
-            check,
-        ]
+        return transport.ssh_probe_command(remote, check)
 
     def connect_command_for_config(self, config: dict[str, Any]) -> list[str]:
         project_dir = config_accessors.remote_project_dir_for_config(config)

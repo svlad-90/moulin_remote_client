@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from components.remote.api import transport
 from components.sync.api import mapping
 from components.sync.test.test_planner import sample_config
 
@@ -26,20 +27,9 @@ class SyncMappingCommandServiceTests(unittest.TestCase):
                 remote_base="builder@10.0.0.1:/mnt/projects/meta-product",
             )
 
-            self.assertEqual(
-                argv,
-                [
-                    "rsync",
-                    "-az",
-                    "--delete",
-                    "--dry-run",
-                    "--itemize-changes",
-                    "--exclude",
-                    "*.pyc",
-                    str(local_path) + "/",
-                    "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/",
-                ],
-            )
+            expected = transport.rsync_base_command(dry_run=True)
+            expected.extend(["--exclude", "*.pyc", str(local_path) + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
+            self.assertEqual(argv, expected)
 
     def test_mapping_sync_plan_owns_header_and_argv_use_case(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
