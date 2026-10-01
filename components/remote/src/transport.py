@@ -7,6 +7,8 @@ from collections.abc import Iterable
 
 
 SSH_TRANSPORT_OPTIONS = [
+    "-F",
+    "/dev/null",
     "-o",
     "BatchMode=yes",
     "-o",
@@ -16,11 +18,7 @@ SSH_TRANSPORT_OPTIONS = [
     "-o",
     "ServerAliveCountMax=2",
     "-o",
-    "ControlMaster=auto",
-    "-o",
-    "ControlPersist=60",
-    "-o",
-    "ControlPath=/tmp/mrc-%C",
+    "ControlMaster=no",
 ]
 
 RSYNC_TRANSPORT_OPTIONS = [

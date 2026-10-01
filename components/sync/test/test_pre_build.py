@@ -60,8 +60,10 @@ class SyncPreBuildServiceTests(unittest.TestCase):
 
             self.assertEqual(len(argv), 3)
             self.assertIn("Copy mapped files: pushing active mappings to remote", argv[0][2])
-            self.assertIn("Copy mapped files mapping: layer", argv[1][2])
-            self.assertEqual(argv[1][-2:], [str(layer) + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
+            self.assertIn("Copy mapped files mappings: layer", argv[1][2])
+            self.assertIn("--rsync-path", argv[1])
+            self.assertIn("--relative", argv[1])
+            self.assertEqual(argv[1][-2:], [str(local_base) + "/./layers/meta", "builder@10.0.0.1:/mnt/projects/meta-product/"])
             self.assertIn("recorded incremental build baseline", argv[2][2])
 
     def test_command_sequence_saves_build_settings_and_appends_build_command(self) -> None:

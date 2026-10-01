@@ -49,6 +49,18 @@ class SyncPreBuildService:
         script += 'exec "$@"\n'
         return ["bash", "-lc", script, "copy-mapping", *argv]
 
+    def mappings_copy_command(self, mappings: list[dict[str, Any]], argv: list[str]) -> list[str]:
+        names = ", ".join(str(mapping["name"]) for mapping in mappings)
+        script = "".join(
+            f"printf '%s\\n' {shlex.quote(line)}\n"
+            for line in (
+                "Copy mapped files mappings: " + names,
+                "mode: batch rsync",
+            )
+        )
+        script += 'exec "$@"\n'
+        return ["bash", "-lc", script, "copy-mappings", *argv]
+
     def mapping_snapshot_command(self, config: dict[str, Any], mappings: list[dict[str, Any]], app_dir: Path) -> list[str]:
         config_json = json.dumps(config, sort_keys=True)
         mappings_json = json.dumps(mappings, sort_keys=True)
@@ -136,20 +148,26 @@ class SyncPreBuildService:
             return self.pre_build_selection_error_command(exc)
         local_base = config_accessors.local_project_dir_for_config(config, app_dir)
         issues = self.overlay_validation_service.local_mapping_issues(local_base, active_mappings)
-        commands = self.pre_build_sync_commands(
-            names,
-            active_mappings,
-            issues,
-            rsync_command=lambda mapping: self.mapping_service.rsync_mapping_command_for_config(
+        if issues:
+            return self.pre_build_sync_commands(names, active_mappings, issues, rsync_command=lambda _mapping: [])
+        try:
+            batch_command = self.mapping_service.rsync_mappings_push_command_for_config(
                 config,
-                mapping,
-                direction="push",
+                active_mappings,
                 dry_run=False,
                 app_dir=app_dir,
                 excludes=self.selected_path_service.rsync_excludes_for_config(config),
                 remote_base=self.selected_path_service.remote_base_for_config(config),
+            )
+        except SystemExit as exc:
+            return self.pre_build_selection_error_command(exc)
+        commands = [
+            self.local_log_command(
+                "Copy mapped files: pushing active mappings to remote",
+                f"mappings: {', '.join(names)}",
             ),
-        )
+            self.mappings_copy_command(active_mappings, batch_command),
+        ]
         if names and active_mappings and not issues:
             commands.append(self.mapping_snapshot_command(config, active_mappings, app_dir))
         return commands

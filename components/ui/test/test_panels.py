@@ -159,6 +159,17 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertIn("line 2", rendered)
         self.assertTrue(any("lines 1-2/2 follow" in text for text in rendered))
 
+    def test_draw_logs_panel_wraps_long_output_lines(self) -> None:
+        port = FakePanelPort()
+        port.last_job = _job(output=["$ rm -rf -- alpha beta gamma delta epsilon"])
+
+        panels.main_panels_controller().draw_logs_panel(port, 0, 0, 10, 30, port.items[0])
+
+        rendered = [row[2] for row in port.rows]
+        self.assertIn("$ rm -rf -- alpha beta", rendered)
+        self.assertIn("  gamma delta epsilon", rendered)
+        self.assertTrue(any("lines 1-2/2 follow" in text for text in rendered))
+
     def test_draw_logs_panel_uses_last_job_for_selected_action_label(self) -> None:
         port = FakePanelPort()
         port.items = [

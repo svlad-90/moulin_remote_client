@@ -150,6 +150,38 @@ class TargetSelectionControllerTests(unittest.TestCase):
         self.assertEqual(port.status, "cancelled")
         self.assertEqual(port.screen.timeouts[-1], 250)
 
+    def test_build_target_text_for_params_uses_current_manifest_candidates(self) -> None:
+        controller = target_selection.TargetSelectionController(
+            config(),
+            target_candidates=lambda build_params: [
+                {"target": "boot", "source": "manifest", "desc": ""},
+                {"target": f"android-{build_params['ENABLE_ANDROID']}", "source": "manifest", "desc": ""},
+            ],
+            app_dir=Path("/tmp"),
+            default_config_path=Path("/tmp/config.json"),
+            save_config=lambda _config: None,
+        )
+
+        result = controller.build_target_text_for_params(
+            {"ENABLE_ANDROID": "no"},
+            current_text="old target",
+        )
+
+        self.assertEqual(result, "boot android-no")
+
+    def test_build_target_text_for_params_keeps_current_when_manifest_has_no_candidates(self) -> None:
+        controller = target_selection.TargetSelectionController(
+            config(),
+            target_candidates=lambda _build_params: [],
+            app_dir=Path("/tmp"),
+            default_config_path=Path("/tmp/config.json"),
+            save_config=lambda _config: None,
+        )
+
+        result = controller.build_target_text_for_params({}, current_text=["old", "target"])
+
+        self.assertEqual(result, "old target")
+
 
 if __name__ == "__main__":
     unittest.main()

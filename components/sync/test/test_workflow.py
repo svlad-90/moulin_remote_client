@@ -61,8 +61,10 @@ class SyncCommandWorkflowServiceTests(unittest.TestCase):
 
             self.assertEqual(len(push_argv), 3)
             self.assertIn("Copy mapped files: pushing active mappings to remote", push_argv[0][2])
-            self.assertIn("Copy mapped files mapping: layer", push_argv[1][2])
-            self.assertEqual(push_argv[1][-2:], [str(layer) + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
+            self.assertIn("Copy mapped files mappings: layer", push_argv[1][2])
+            self.assertIn("--rsync-path", push_argv[1])
+            self.assertIn("--relative", push_argv[1])
+            self.assertEqual(push_argv[1][-2:], [str(local_base) + "/./layers/meta", "builder@10.0.0.1:/mnt/projects/meta-product/"])
             self.assertEqual(push_argv[2][:2], ["python3", "-c"])
             self.assertIn("recorded incremental build baseline", push_argv[2][2])
 

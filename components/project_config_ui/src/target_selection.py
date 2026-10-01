@@ -69,6 +69,13 @@ class TargetSelectionController:
             reload_runtime()
         port.status = str(plan["status"])
 
+    def build_target_text_for_params(self, build_params: dict[str, str], current_text: Any = "") -> str:
+        candidates = self.target_candidates(build_params)
+        targets = [str(candidate["target"]) for candidate in candidates if str(candidate.get("target", "")).strip()]
+        if targets:
+            return " ".join(targets)
+        return _target_text(current_text)
+
     def select_board_artifacts(
         self,
         port: Any,
@@ -175,6 +182,16 @@ class TargetSelectionController:
                 port.status = cancelled_status
                 port.screen.timeout(250)
                 return None
+
+
+def _target_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(item) for item in value if str(item).strip())
+    if value is None:
+        return ""
+    return str(value)
 
 
 def target_selection_controller_for_config(

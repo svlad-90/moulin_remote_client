@@ -22,6 +22,16 @@ def build_parser(description: str | None, default_config: Path) -> argparse.Argu
     sub.add_parser("yocto-impact-clean")
     sub.add_parser("yocto-impact-rebuild")
     sub.add_parser("yocto-impact-clean-rebuild")
+    clean_component = sub.add_parser("clean-component")
+    clean_component.add_argument("names", nargs="*", help="Moulin component names, or all when omitted")
+    clean_component.add_argument(
+        "--mode",
+        choices=("directory", "artifacts", "build_output", "yocto_component_clean", "yocto_component_sstate", "all"),
+        default="artifacts",
+        help="cleanup scope; default: artifacts",
+    )
+    clean_component.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
+    clean_component.add_argument("--execute", dest="dry_run", action="store_false")
     sub.add_parser("status")
     sub.add_parser("mappings")
     sub.add_parser("select-mappings")

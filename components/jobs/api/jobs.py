@@ -51,6 +51,7 @@ from components.jobs.src.jobs import (
     stop_running_preview_for_label,
     stopped_state,
     stop_running_preview,
+    wrapped_job_output_lines,
 )
 
 __all__ = [
@@ -102,4 +103,5 @@ __all__ = [
     "stop_running_preview_for_label",
     "stopped_state",
     "stop_running_preview",
+    "wrapped_job_output_lines",
 ]

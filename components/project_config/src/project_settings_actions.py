@@ -104,7 +104,25 @@ class ProjectSettingsActionController:
         status = self.settings_service.cycle_parameter(port.build_params, param)
         if status is None:
             return
-        port.status = status
+        target_status = self._replace_build_targets_for_params(port)
+        if target_status:
+            port.status = f"{status}; {target_status}"
+        else:
+            port.status = status
+
+    def _replace_build_targets_for_params(self, port: Any) -> str | None:
+        if self.target_selection_controller_factory is None:
+            return None
+        selector = self.target_selection_controller_factory()
+        target_text_for_params = getattr(selector, "build_target_text_for_params", None)
+        if not callable(target_text_for_params):
+            return None
+        current = _build_targets_text(getattr(port, "build_targets", ""))
+        updated = target_text_for_params(port.build_params, current_text=current)
+        if updated == current:
+            return None
+        port.build_targets = updated
+        return f"build targets={updated or '<none>'}"
 
     def _edit_local_project_dir(self, port: Any) -> None:
         value = port.prompt(
@@ -202,3 +220,13 @@ def project_settings_action_controller(
 
 def _noop() -> None:
     return None
+
+
+def _build_targets_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(item) for item in value if str(item).strip())
+    if value is None:
+        return ""
+    return str(value)

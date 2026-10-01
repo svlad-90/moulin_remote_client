@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import shlex
+import re
 
 from components.board_types.src.base import BoardAction, BoardActionContext, BoardTypeAdapter
 from components.config.api import accessors as config_accessors
+from components.moulin.api import manifest as moulin_manifest_api
 from components.remote.api import transport
 
 
@@ -127,6 +129,13 @@ sys.stdout.buffer.flush()
                 requires_project=True,
             ),
             BoardAction(
+                "deploy_network_domu_rootfs",
+                "Deploy DomU NFS rootfs",
+                "Initial or refreshed network-boot deploy: copy the DomU rootfs artifact to the board host, extract it into the NFS project directory, and update the current symlink.",
+                requires_remote=True,
+                requires_project=True,
+            ),
+            BoardAction(
                 "deploy_network_android",
                 "Deploy Android image to NFS",
                 "Initial or refreshed network-boot deploy: copy android_only.img from the build host into the board-host NFS project directory and update the current symlink.",
@@ -226,6 +235,8 @@ sys.stdout.buffer.flush()
             return self.deploy_network_boot_command_plan(ctx)
         if action_id == "deploy_network_domd_rootfs":
             return self.deploy_network_domd_rootfs_command_plan(ctx)
+        if action_id == "deploy_network_domu_rootfs":
+            return self.deploy_network_domu_rootfs_command_plan(ctx)
         if action_id == "deploy_network_android":
             return self.deploy_network_android_command_plan(ctx)
         if action_id == "deploy_network_full":
@@ -315,13 +326,14 @@ esac
 
 case "$tarball" in
   "$dest"/.moulin-domd-rootfs.tar.bz2) ;;
+  "$dest"/.moulin-domu-rootfs.tar.bz2) ;;
   *) echo "refuse unexpected tarball path: $tarball" >&2; exit 2 ;;
 esac
 
 [ -f "$tarball" ] || { echo "rootfs tarball not found: $tarball" >&2; exit 2; }
 
 echo "rootfs deploy: cleaning old NFS rootfs under $dest" >&2
-find "$dest" -mindepth 1 -maxdepth 1 ! -name '.moulin-domd-rootfs.tar.bz2' ! -name 'android_only.img' -exec rm -rf {} +
+find "$dest" -mindepth 1 -maxdepth 1 ! -name '.moulin-*-rootfs.tar.bz2' ! -name 'android_only.img' -exec rm -rf {} +
 echo "rootfs deploy: extracting $tarball into $dest" >&2
 tar --numeric-owner --same-owner -xjf "$tarball" -C "$dest"
 echo "rootfs deploy: preparing Xen log directories" >&2
@@ -439,22 +451,78 @@ echo "rootfs deploy: done" >&2
         ]
 
     def deploy_network_domd_rootfs_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
+        return self.deploy_network_rootfs_command_plan(
+            ctx,
+            domain="domd",
+            label="DomD",
+            build_dir="build-domd",
+        )
+
+    def deploy_network_domu_rootfs_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
+        return self.deploy_network_rootfs_command_plan(
+            ctx,
+            domain="domu",
+            label="DomU",
+            build_dir="build-domu",
+        )
+
+    def yocto_guest_domains(self, ctx: BoardActionContext) -> list[str]:
+        if ctx.app_dir is None or ctx.remote_read_project_file is None:
+            return ["domd"]
+        try:
+            components = moulin_manifest_api.component_builders_for_config(
+                ctx.config,
+                app_dir=ctx.app_dir,
+                remote_read_project_file=ctx.remote_read_project_file,
+                cache=ctx.manifest_cache or {},
+                default_moulin_manifest=ctx.default_moulin_manifest,
+                build_params=ctx.build_params or {},
+            )
+        except Exception:
+            return ["domd"]
+        domains = [
+            str(component.get("name", "")).strip()
+            for component in components
+            if component.get("builder_type") == "yocto" and str(component.get("name", "")).strip() != "dom0"
+        ]
+        return domains or ["domd"]
+
+    @staticmethod
+    def shell_identifier(name: str) -> str:
+        clean = re.sub(r"[^A-Za-z0-9_]", "_", name.strip())
+        return clean or "guest"
+
+    def guest_rootfs_project_dir(self, nfs_project: str, domain: str) -> str:
+        return f"{nfs_project.rstrip('/')}/rootfs/{self.shell_identifier(domain)}"
+
+    def guest_rootfs_current_dir(self, nfs_current: str, domain: str) -> str:
+        return f"{nfs_current.rstrip('/')}/rootfs/{self.shell_identifier(domain)}"
+
+    def deploy_network_rootfs_command_plan(
+        self,
+        ctx: BoardActionContext,
+        *,
+        domain: str,
+        label: str,
+        build_dir: str,
+    ) -> list[list[str]]:
         builder = ctx.command_builder
         paths = self.network_paths(ctx)
         nfs_project = paths["nfs_project"]
+        domain_nfs_project = self.guest_rootfs_project_dir(nfs_project, domain)
         helper = self.nfs_deploy_helper_path()
-        remote_tarball = f"{nfs_project.rstrip('/')}/.moulin-domd-rootfs.tar.bz2"
+        remote_tarball = f"{domain_nfs_project.rstrip('/')}/.moulin-{domain}-rootfs.tar.bz2"
         rsync_target = f"{paths['board_host']}:{remote_tarball}"
         prepare_board_script = (
             "set -euo pipefail\n"
             f"sudo -n {shlex.quote(helper)} --check || {{ echo 'Install NFS deploy helper first.' >&2; exit 2; }}\n"
-            f"sudo -n {shlex.quote(helper)} --prepare {builder.quote_remote_shell_path(nfs_project)} {shlex.quote(paths['board_user'])}\n"
+            f"sudo -n {shlex.quote(helper)} --prepare {builder.quote_remote_shell_path(domain_nfs_project)} {shlex.quote(paths['board_user'])}\n"
         )
         extract_board_script = (
             "set -euo pipefail\n"
-            f"dest={builder.quote_remote_shell_path(nfs_project)}\n"
+            f"dest={builder.quote_remote_shell_path(domain_nfs_project)}\n"
             f"tarball={builder.quote_remote_shell_path(remote_tarball)}\n"
-            "echo 'Installing DomD rootfs on board host...' >&2\n"
+            f"echo 'Installing {label} rootfs on board host...' >&2\n"
             f"sudo -n {shlex.quote(helper)} \"$dest\" \"$tarball\"\n"
             "echo 'Refreshing NFS current symlinks...' >&2\n"
             f"{self.refresh_current_symlinks_script(ctx)}"
@@ -463,19 +531,19 @@ echo "rootfs deploy: done" >&2
             "set -euo pipefail\n"
             f"cd {shlex.quote(paths['remote_project'])}\n"
             "search_roots=()\n"
-            "[ -d yocto/build-domd/tmp/deploy/images ] && search_roots+=(yocto/build-domd/tmp/deploy/images)\n"
+            f"[ -d yocto/{build_dir}/tmp/deploy/images ] && search_roots+=(yocto/{build_dir}/tmp/deploy/images)\n"
             "[ -d artifacts ] && search_roots+=(artifacts)\n"
-            "if [ \"${#search_roots[@]}\" -eq 0 ]; then echo 'DomD rootfs search directories not found' >&2; exit 2; fi\n"
+            f"if [ \"${{#search_roots[@]}}\" -eq 0 ]; then echo '{label} rootfs search directories not found' >&2; exit 2; fi\n"
             "rootfs=$(find \"${search_roots[@]}\" -type f "
             "\\( -name 'rcar-image-adas-x5h.tar.bz2' -o -name 'rcar-image-adas-*.tar.bz2' \\) -print -quit 2>/dev/null)\n"
-            "if [ -z \"$rootfs\" ]; then echo 'DomD rootfs tarball not found' >&2; exit 2; fi\n"
+            f"if [ -z \"$rootfs\" ]; then echo '{label} rootfs tarball not found' >&2; exit 2; fi\n"
         )
-        validate_script = rootfs_lookup_script + "echo 'found DomD rootfs tarball: '\"$rootfs\" >&2\n"
+        validate_script = rootfs_lookup_script + f"echo 'found {label} rootfs tarball: '\"$rootfs\" >&2\n"
         build_script = (
             rootfs_lookup_script +
-            "echo 'Deploy DomD NFS rootfs' >&2\n"
-            f"echo 'from: {paths['build_host']}:{paths['remote_project']}/yocto/build-domd/tmp/deploy/images' >&2\n"
-            f"echo 'to:   {paths['board_host']}:{paths['nfs_project']}' >&2\n"
+            f"echo 'Deploy {label} NFS rootfs' >&2\n"
+            f"echo 'from: {paths['build_host']}:{paths['remote_project']}/yocto/{build_dir}/tmp/deploy/images' >&2\n"
+            f"echo 'to:   {paths['board_host']}:{domain_nfs_project}' >&2\n"
             "echo 'rsync rootfs tarball: '\"$rootfs\" >&2\n"
             "rootfs_bytes=$(stat -c%s \"$rootfs\")\n"
             "printf 'rootfs tarball size: %s bytes\\n' \"$rootfs_bytes\" >&2\n"
@@ -690,6 +758,7 @@ echo "rootfs deploy: done" >&2
 
     def uboot_network_env_lines(self, ctx: BoardActionContext) -> list[str]:
         paths = self.network_paths(ctx)
+        guest_domains = self.yocto_guest_domains(ctx)
         tftp_root = config_accessors.board_tftp_root_for_config(ctx.config).rstrip("/")
         tftp_current = paths["tftp_current"].rstrip("/")
         if tftp_current.startswith(tftp_root + "/"):
@@ -702,18 +771,30 @@ echo "rootfs deploy: done" >&2
         if paths["server_ip"]:
             lines.append(f"setenv serverip {paths['server_ip']}")
             lines.append(f"setenv serveraddr {paths['server_ip']}")
+        configure_parts = [
+            "fdt set /boot_dev device nfs",
+            "fdt set /boot_dev my_ip $ipaddr",
+            "fdt set /boot_dev nfs_server_ip $serverip",
+        ]
+        if "domd" in guest_domains:
+            lines.append(f"setenv nfs_domd_dir {self.guest_rootfs_current_dir(paths['nfs_current'], 'domd')}")
+            configure_parts.append("fdt set /boot_dev device_doma domd_rootfs")
+            configure_parts.append("fdt set /boot_dev nfs_dir $nfs_domd_dir")
+        if "domu" in guest_domains:
+            lines.append(f"setenv nfs_domu_dir {self.guest_rootfs_current_dir(paths['nfs_current'], 'domu')}")
+            configure_parts.append("fdt set /boot_dev device_domu nfs")
+            configure_parts.append("fdt set /boot_dev nfs_dir_domu $nfs_domu_dir")
         lines.extend(
             [
                 "setenv fdt_high 0xffffffffffffffff",
                 "setenv bootm_size 0x10000000",
                 "setenv i2c_pci 'i2c dev 0; i2c mw 0x77 0x06 0x00; i2c mw 0x77 0x02 0x14; i2c mw 0x77 0x04 0x00; i2c mw 0x77 0x01 0xff'",
-                f"setenv nfs_domd_dir {paths['nfs_current']}",
                 f"setenv tftp_dtb_load 'tftp 0x54000000 {tftp_prefix}/r8a78000-ironhide-xen.dtb && fdt addr 0x54000000 && fdt resize && fdt mknode / boot_dev && run tftp_configure_nfs'",
                 f"setenv tftp_initramfs_load 'tftp 0x50000000 {tftp_prefix}/uInitramfs'",
                 f"setenv tftp_kernel_load 'tftp 0x64000000 {tftp_prefix}/Image'",
                 f"setenv tftp_xen_load 'tftp 0x54080000 {tftp_prefix}/xen-ironhide.uImage'",
                 f"setenv tftp_xenpolicy_load 'tftp 0x53000000 {tftp_prefix}/xenpolicy-ironhide'",
-                "setenv tftp_configure_nfs 'fdt set /boot_dev device nfs; fdt set /boot_dev device_doma domd_rootfs; fdt set /boot_dev my_ip $ipaddr; fdt set /boot_dev nfs_server_ip $serverip; fdt set /boot_dev nfs_dir $nfs_domd_dir'",
+                "setenv tftp_configure_nfs '" + "; ".join(configure_parts) + "'",
                 "setenv bootcmd_tftp 'env delete bootargs; run tftp_xen_load && run tftp_dtb_load && run tftp_kernel_load && run tftp_xenpolicy_load && run tftp_initramfs_load && bootm 0x54080000 0x50000000 0x54000000'",
                 "setenv bootcmd 'run bootcmd_tftp'",
                 "saveenv",
@@ -735,22 +816,85 @@ echo "rootfs deploy: done" >&2
             "if [ -z \"$console\" ]; then console=$(ls -1 /dev/GEN5_CONSOLE* 2>/dev/null | head -n 1 || true); fi\n"
             "if [ -z \"$console\" ]; then echo 'GEN5 console device not found under /dev/GEN5_CONSOLE*' >&2; exit 2; fi\n"
             "echo 'Apply U-Boot network env over: '\"$console\"\n"
-            "echo 'The board must be stopped at the U-Boot prompt before this command writes to serial.'\n"
+            "echo 'The board will be power-cycled, switched to boot mode, stopped at U-Boot, then updated.'\n"
+            "echo 'board power: x5h_off'\n"
+            "x5h_off\n"
+            "sleep 1\n"
+            "echo 'board boot mode: x5h_boot'\n"
+            "x5h_boot\n"
+            "sleep 1\n"
+            "echo 'board power: x5h_on'\n"
+            "x5h_on\n"
             "python3 - \"$console\" <<'PY'\n"
             "import serial\n"
             "import sys\n"
             "import time\n"
             "\n"
             f"commands = {serial_script!r}\n"
+            "verify_command = 'printenv bootcmd bootcmd_tftp tftp_configure_nfs nfs_domd_dir nfs_domu_dir'\n"
+            "\n"
+            "def read_available(conn, duration=1.0):\n"
+            "    deadline = time.monotonic() + duration\n"
+            "    chunks = []\n"
+            "    while time.monotonic() < deadline:\n"
+            "        data = conn.read(4096)\n"
+            "        if data:\n"
+            "            chunks.append(data)\n"
+            "            deadline = time.monotonic() + 0.2\n"
+            "    return b''.join(chunks).decode('utf-8', errors='replace')\n"
+            "\n"
+            "def stop_at_uboot(conn):\n"
+            "    try:\n"
+            "        conn.reset_input_buffer()\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "    deadline = time.monotonic() + 45.0\n"
+            "    next_key = 0.0\n"
+            "    transcript = ''\n"
+            "    while time.monotonic() < deadline:\n"
+            "        data = conn.read(4096)\n"
+            "        if data:\n"
+            "            text = data.decode('utf-8', errors='replace')\n"
+            "            transcript += text\n"
+            "            print(text, end='' if text.endswith('\\n') else '\\n', flush=True)\n"
+            "            if '=>' in transcript or 'U-Boot>' in transcript:\n"
+            "                print('Detected U-Boot prompt.', flush=True)\n"
+            "                return\n"
+            "        now = time.monotonic()\n"
+            "        if now >= next_key:\n"
+            "            conn.write(b'\\r')\n"
+            "            conn.flush()\n"
+            "            next_key = now + 0.2\n"
+            "    raise RuntimeError('Timed out waiting for U-Boot prompt after board reset')\n"
+            "\n"
+            "def send_line(conn, line, prefix='uboot', read_response=True):\n"
+            "    print(f'{prefix}: {line}', flush=True)\n"
+            "    conn.write((line + '\\r').encode('ascii'))\n"
+            "    conn.flush()\n"
+            "    time.sleep(0.12)\n"
+            "    if not read_response:\n"
+            "        return ''\n"
+            "    output = read_available(conn, 0.35)\n"
+            "    if output.strip():\n"
+            "        print(output, end='' if output.endswith('\\n') else '\\n', flush=True)\n"
+            "    return output\n"
+            "\n"
             "conn = serial.Serial(port=sys.argv[1], baudrate=1843200, timeout=0.2)\n"
             "try:\n"
-            "    conn.write(b'\\r')\n"
-            "    time.sleep(0.2)\n"
+            "    stop_at_uboot(conn)\n"
+            "    probe = send_line(conn, 'printenv bootcmd', prefix='probe')\n"
+            "    if 'bootcmd=' not in probe:\n"
+            "        print('ERROR: U-Boot prompt was not detected; stop the board at U-Boot prompt and retry.', file=sys.stderr)\n"
+            "        print('ERROR: refusing to write U-Boot environment blindly.', file=sys.stderr)\n"
+            "        sys.exit(3)\n"
             "    for line in commands.splitlines():\n"
-            "        print('uboot:', line, flush=True)\n"
-            "        conn.write((line + '\\r').encode('ascii'))\n"
-            "        conn.flush()\n"
-            "        time.sleep(0.25)\n"
+            "        send_line(conn, line, read_response=False)\n"
+            "    time.sleep(0.5)\n"
+            "    trailing = read_available(conn, 0.2)\n"
+            "    if trailing.strip():\n"
+            "        print(trailing, end='' if trailing.endswith('\\n') else '\\n', flush=True)\n"
+            "    print('Verify saved U-Boot network env', flush=True)\n"
+            "    send_line(conn, verify_command, prefix='verify')\n"
             "finally:\n"
             "    conn.close()\n"
             "PY\n"

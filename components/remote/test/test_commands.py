@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import json
+import re
 import shlex
 import unittest
 
@@ -43,6 +46,13 @@ def sample_config() -> dict[str, object]:
 def prepare_config(config: dict[str, object]) -> None:
     config_profiles.normalize_remote_profiles(config)
     config_profiles.normalize_project_profiles(config)
+
+
+def clean_command_components(argv: list[str]) -> list[dict[str, object]]:
+    match = re.search(r'base64\.b64decode\("([^"]+)"\)', argv[-1])
+    if not match:
+        return []
+    return json.loads(base64.b64decode(match.group(1)).decode("utf-8"))
 
 
 class RemoteCommandBehaviorTests(unittest.TestCase):
@@ -450,6 +460,208 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             ),
         )
 
+    def test_component_clean_command_uses_manifest_components_without_product_hardcode(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        components = [
+            {
+                "name": "domu",
+                "builder_type": "yocto",
+                "target": "domu-image",
+                "target_images": ["deploy/images/domu.img"],
+            }
+        ]
+
+        argv = commands.build_remote_component_clean_command_for_config(
+            config,
+            docker_image="prod_img",
+            components=components,
+            mode="artifacts",
+            dry_run=True,
+        )
+
+        self.assertEqual(argv[0], "ssh")
+        self.assertIn("builder@10.0.0.1", argv)
+        self.assertIn("docker run", argv[-1])
+        self.assertIn("mode:", argv[-1])
+        self.assertIn("dry_run:", argv[-1])
+        self.assertIn("ninja -t clean", argv[-1])
+        self.assertEqual(clean_command_components(argv), components)
+
+    def test_component_clean_command_falls_back_to_ninja_target_for_components_without_artifact_paths(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        components = [
+            {
+                "name": "doma",
+                "builder_type": "android",
+                "target": "doma",
+            },
+            {
+                "name": "boot_artifacts",
+                "builder_type": "custom_script",
+                "target": "boot_artifacts",
+            },
+        ]
+
+        argv = commands.build_remote_component_clean_command_for_config(
+            config,
+            docker_image="prod_img",
+            components=components,
+            mode="artifacts",
+            dry_run=True,
+        )
+
+        self.assertIn("ninja -t clean", argv[-1])
+        self.assertEqual(clean_command_components(argv), components)
+
+    def test_component_clean_command_does_not_ninja_clean_bazel_labels(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        components = [
+            {
+                "name": "doma_kernel",
+                "builder_type": "bazel",
+                "target": "//common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist",
+            },
+        ]
+
+        argv = commands.build_remote_component_clean_command_for_config(
+            config,
+            docker_image="prod_img",
+            components=components,
+            mode="artifacts",
+            dry_run=True,
+        )
+
+        self.assertIn('target.startswith("//")', argv[-1])
+        self.assertIn("skip artifact cleanup", argv[-1])
+        self.assertEqual(clean_command_components(argv), components)
+
+    def test_component_clean_command_removes_manifest_build_dir(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        components = [
+            {
+                "name": "dom0",
+                "builder_type": "yocto",
+                "target": "core-image-thin-initramfs",
+                "build_dir": "yocto",
+            },
+            {
+                "name": "doma",
+                "builder_type": "android",
+                "target": "doma",
+                "build_dir": "android",
+            }
+        ]
+
+        argv = commands.build_remote_component_clean_command_for_config(
+            config,
+            docker_image="prod_img",
+            components=components,
+            mode="directory",
+            dry_run=True,
+        )
+
+        self.assertIn("remove component directory", argv[-1])
+        self.assertIn("rm -rf --", argv[-1])
+        self.assertIn('build_path / f"build-{name}"', argv[-1])
+        self.assertEqual(clean_command_components(argv), components)
+
+    def test_component_clean_command_reports_unmatched_yocto_components(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        components = [
+            {
+                "name": "domu",
+                "builder_type": "yocto",
+                "target": "domu-image",
+            }
+        ]
+
+        argv = commands.build_remote_component_clean_command_for_config(
+            config,
+            docker_image="prod_img",
+            components=components,
+            mode="yocto_component_sstate",
+            dry_run=True,
+        )
+
+        self.assertIn("skip {name or recipe} in {build_dir}", argv[-1])
+        self.assertIn("was not found in any yocto/build-* directory", argv[-1])
+        self.assertIn("return rc or 1", argv[-1])
+        self.assertEqual(clean_command_components(argv), components)
+
+    def test_component_clean_command_uses_manifest_yocto_work_dir(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        components = [
+            {
+                "name": "domd",
+                "builder_type": "yocto",
+                "target": "rcar-image-adas",
+                "build_dir": "yocto",
+                "work_dir": "build-domd",
+            },
+            {
+                "name": "domu",
+                "builder_type": "yocto",
+                "target": "rcar-image-adas",
+                "build_dir": "yocto",
+                "work_dir": "build-domu",
+            },
+        ]
+
+        argv = commands.build_remote_component_clean_command_for_config(
+            config,
+            docker_image="prod_img",
+            components=components,
+            mode="yocto_component_clean",
+            dry_run=True,
+        )
+
+        self.assertIn("yocto_component_build_dirs(component)", argv[-1])
+        self.assertIn("Path(base) / work_dir", argv[-1])
+        self.assertEqual(clean_command_components(argv), components)
+
+    def test_component_clean_command_removes_build_outputs(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        components = [
+            {
+                "name": "domd",
+                "builder_type": "yocto",
+                "target": "rcar-image-adas",
+                "build_dir": "yocto",
+                "work_dir": "build-domd",
+            },
+            {
+                "name": "doma",
+                "builder_type": "android",
+                "target": "doma",
+                "build_dir": "android",
+            },
+        ]
+
+        argv = commands.build_remote_component_clean_command_for_config(
+            config,
+            docker_image="prod_img",
+            components=components,
+            mode="build_output",
+            dry_run=True,
+        )
+
+        self.assertIn("remove build output", argv[-1])
+        self.assertIn("bitbake -e", argv[-1])
+        self.assertIn("prefix = f", argv[-1])
+        self.assertIn("TMPDIR", argv[-1])
+        self.assertIn("failed to read TMPDIR with bitbake -e rc=", argv[-1])
+        self.assertIn("output_tail(result.stderr) or output_tail(result.stdout)", argv[-1])
+        self.assertIn("if not is_yocto", argv[-1])
+        self.assertIn('PurePosixPath(build_dir) / "out"', argv[-1])
+        self.assertEqual(clean_command_components(argv), components)
+
     def test_remote_run_helpers_delegate_built_commands_to_runner(self) -> None:
         config = sample_config()
         prepare_config(config)
@@ -541,6 +753,36 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             ),
         )
         self.assertEqual(ran[1], commands.build_remote_build_command_for_config(config, docker_image="prod_img", targets="boot_artifacts"))
+
+    def test_run_cli_remote_command_for_config_routes_component_clean(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        runtime_context = {
+            "docker_image": "prod_img",
+            "build_params": {"ENABLE_ANDROID": "yes"},
+            "build_targets": "boot_artifacts",
+            "component_builders": [
+                {"name": "domu", "builder_type": "yocto", "target": "domu-image", "target_images": []},
+                {"name": "doma", "builder_type": "android", "target": "android_only.img.gz", "target_images": []},
+            ],
+        }
+        cli_args = type("Args", (), {"mode": "yocto_component_clean", "dry_run": True, "names": ["domu"]})()
+        ran: list[list[str]] = []
+
+        commands._workflow(
+            default_dockerfile=client.DEFAULT_DOCKERFILE,
+            default_moulin_manifest=client.DEFAULT_MOULIN_MANIFEST,
+        ).run_cli_command(
+            config,
+            "clean-component",
+            runtime_context=lambda: runtime_context,
+            structured_script=lambda steps: commands.build_structured_script(steps, fail_fast=False),
+            runner=ran.append,
+            cli_args=cli_args,
+        )
+
+        self.assertEqual(ran[0][0], "ssh")
+        self.assertEqual(clean_command_components(ran[0]), [{"name": "domu", "builder_type": "yocto", "target": "domu-image", "target_images": []}])
 
     def test_run_cli_remote_command_for_config_routes_status_to_status_runner(self) -> None:
         config = sample_config()

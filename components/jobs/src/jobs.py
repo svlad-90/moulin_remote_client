@@ -6,6 +6,7 @@ import os
 import subprocess
 import threading
 import re
+import textwrap
 from collections import deque
 from typing import Any, Callable
 
@@ -147,10 +148,31 @@ def job_output_lines(job: dict[str, Any] | None) -> list[str]:
     return list(job.get("output", []))
 
 
-def log_max_scroll(job: dict[str, Any] | None, visible: int) -> int:
+def wrapped_job_output_lines(job: dict[str, Any] | None, width: int) -> list[str]:
+    inner_width = max(1, width)
+    lines: list[str] = []
+    for line in job_output_lines(job):
+        if not line:
+            lines.append("")
+            continue
+        lines.extend(
+            textwrap.wrap(
+                line,
+                width=inner_width,
+                subsequent_indent="  ",
+                replace_whitespace=False,
+                drop_whitespace=True,
+            )
+            or [""]
+        )
+    return lines
+
+
+def log_max_scroll(job: dict[str, Any] | None, visible: int, *, width: int | None = None) -> int:
     if job is None:
         return 0
-    return max(0, len(job_output_lines(job)) - max(1, visible))
+    output = wrapped_job_output_lines(job, width) if width is not None else job_output_lines(job)
+    return max(0, len(output) - max(1, visible))
 
 
 def clamp_log_scroll(
@@ -159,8 +181,9 @@ def clamp_log_scroll(
     *,
     follow: bool,
     scroll: int,
+    width: int | None = None,
 ) -> tuple[int, bool]:
-    max_scroll = log_max_scroll(job, visible)
+    max_scroll = log_max_scroll(job, visible, width=width)
     if follow:
         return max_scroll, True
     return min(max(0, scroll), max_scroll), False
@@ -173,11 +196,12 @@ def log_scroll_plan(
     follow: bool,
     scroll: int,
     delta: int,
+    width: int | None = None,
 ) -> dict[str, Any]:
     if job is None:
         return {"status": "No log for selected action"}
-    max_scroll = log_max_scroll(job, visible)
-    current, _ = clamp_log_scroll(job, visible, follow=follow, scroll=scroll)
+    max_scroll = log_max_scroll(job, visible, width=width)
+    current, _ = clamp_log_scroll(job, visible, follow=follow, scroll=scroll, width=width)
     if delta < 0:
         return {
             "log_scroll": max(0, current + delta),

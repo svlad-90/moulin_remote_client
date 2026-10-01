@@ -63,6 +63,7 @@ class CliWorkflowController:
 
     def run(self, argv: list[str]) -> int:
         args = self.parse_args(argv, description=self.description, default_config=self.default_config)
+        self._current_args = args
         config = self.load_config(args.config)
         command = str(args.command)
         if command in ("sync-menu", "menu", "tui"):
@@ -83,6 +84,7 @@ class CliWorkflowController:
             structured_script=self.remote_command_workflow.structured_script,
             runner=self.run_command,
             status_runner=lambda argv: self.run_command(argv, check=False),
+            cli_args=getattr(self, "_current_args", None),
         )
 
     def _run_project_command(self, config: dict[str, Any], command: str) -> None:

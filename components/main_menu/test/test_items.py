@@ -72,6 +72,19 @@ class FakeConfigWorkflow:
         self.calls.append("targets")
 
 
+class FakeDialogWorkflow:
+    def __init__(self) -> None:
+        self.confirm_calls: list[Any] = []
+        self.confirm_result = True
+        self.confirm_results: list[bool] = []
+
+    def run_confirm_dialog(self, _port: Any, content: Any, **_kwargs: Any) -> bool:
+        self.confirm_calls.append(content)
+        if self.confirm_results:
+            return self.confirm_results.pop(0)
+        return self.confirm_result
+
+
 class FakeApp:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -85,6 +98,7 @@ class FakeApp:
         self.workflow = FakeWorkflow()
         self.terminal_session = FakeTerminalSession()
         self.config_workflow = FakeConfigWorkflow()
+        self.dialog_workflow = FakeDialogWorkflow()
         self.reload_config_calls = 0
 
     def command_workflow_service(self) -> FakeWorkflow:
@@ -95,6 +109,9 @@ class FakeApp:
 
     def config_workflow_controller(self) -> FakeConfigWorkflow:
         return self.config_workflow
+
+    def dialog_workflow_controller(self) -> FakeDialogWorkflow:
+        return self.dialog_workflow
 
     def reload_config_from_disk(self) -> None:
         self.reload_config_calls += 1
@@ -113,6 +130,52 @@ class FakeApp:
 
     def sync_screen(self) -> None:
         return None
+
+
+class FakeMenuScreen:
+    def __init__(self, keys: list[int]) -> None:
+        self.keys = keys
+        self.timeouts: list[int] = []
+
+    def timeout(self, value: int) -> None:
+        self.timeouts.append(value)
+
+    def erase(self) -> None:
+        return None
+
+    def getmaxyx(self) -> tuple[int, int]:
+        return (24, 100)
+
+    def refresh(self) -> None:
+        return None
+
+
+class FakeMenuApp(FakeApp):
+    def __init__(self, config: dict[str, Any], keys: list[int]) -> None:
+        super().__init__(config)
+        self.screen = FakeMenuScreen(keys)
+        self.status = ""
+
+    def add(self, *_args: Any) -> None:
+        return None
+
+    def draw_box(self, *_args: Any) -> None:
+        return None
+
+    def read_key(self) -> int:
+        return self.screen.keys.pop(0)
+
+    def accent_attr(self) -> int:
+        return 1
+
+    def warn_attr(self) -> int:
+        return 2
+
+    def selected_attr(self) -> int:
+        return 3
+
+    def disabled_attr(self) -> int:
+        return 4
 
 
 def _config(app_dir: Path) -> dict[str, Any]:
@@ -209,6 +272,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Regenerate Moulin/Ninja",
                     "Run product build",
                     "Incremental build",
+                    "Clean Moulin components",
                     "Stop running command",
                 ],
             )
@@ -270,6 +334,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 [
                     "Deploy TFTP boot artifacts",
                     "Deploy DomD NFS rootfs",
+                    "Deploy DomU NFS rootfs",
                     "Deploy Android image to NFS",
                     "Deploy full TFTP/NFS set",
                     "Pull TFTP/NFS workspace",
@@ -415,12 +480,63 @@ class MainMenuBuilderTests(unittest.TestCase):
             )
             self.assertIn("touch \"$p\"", commands[3][-1])
             self.assertIn("ninja doma_kernel doma", commands[4][-1])
-            self.assertIn("ninja full_ufs.img.gz", commands[5][-1])
+            self.assertIn("ninja domd doma_kernel doma boot_artifacts", commands[5][-1])
             settings_path = app_dir / "state" / "build-settings.json"
             self.assertEqual(
                 json.loads(settings_path.read_text(encoding="utf-8"))["incremental_components"],
                 ["domd", "doma_kernel", "doma", "boot_artifacts"],
             )
+
+    def test_incremental_handler_ignores_android_components_when_android_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  domu:",
+                    "    builder:",
+                    "      type: yocto",
+                    "      build_target: rcar-image-adas",
+                    "  doma_kernel:",
+                    "    build-dir: android_kernel",
+                    "    builder:",
+                    "      type: bazel",
+                    "      target: //common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist",
+                    "  doma:",
+                    "    builder:",
+                    "      type: android",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.build_params = {"ENABLE_ANDROID": "no"}
+            app.build_targets = "boot_artifacts"
+            command_items = builder.command_items.build_items(app)
+            builder.command_items.select_incremental_component_names = lambda _app, _components: [
+                "domu",
+                "doma_kernel",
+                "doma",
+            ]
+            yocto_item = next(item for item in command_items if item.label == "Incremental build")
+
+            yocto_item.handler(app)
+
+            _title, commands = app.workflow.command_calls[0]
+            command_text = "\n".join(command[-1] for command in commands if command)
+            self.assertIn('IMAGE_RECIPES = "rcar-image-adas"', command_text)
+            self.assertNotIn("tools/bazel", command_text)
+            self.assertNotIn("ninja doma", command_text)
+            self.assertNotIn("ninja doma_kernel", command_text)
 
     def test_incremental_handler_reconfigures_bazel_for_changed_config_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -493,7 +609,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 commands[3][-1],
             )
             self.assertIn("ninja doma_kernel doma", commands[4][-1])
-            self.assertIn("ninja full_ufs.img.gz", commands[5][-1])
+            self.assertIn("ninja doma_kernel doma", commands[5][-1])
 
     def test_incremental_handler_runs_yocto_impact_even_without_selected_yocto_component(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -532,7 +648,419 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertIn('ALLOW_EMPTY = "1" == "1"', commands[0][-1])
             self.assertIn("moulin product.yaml", commands[1][-1])
             self.assertIn("ninja doma", commands[2][-1])
-            self.assertIn("ninja full_ufs.img.gz", commands[3][-1])
+            self.assertIn("ninja doma", commands[3][-1])
+
+    def test_component_clean_popup_cancel_returns_to_component_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  domd:",
+                    "    builder:",
+                    "      type: yocto",
+                    "      build_target: rcar-image-adas",
+                    "      target_images:",
+                    "        - yocto/build-domd/tmp/deploy/images/x5h/rcar-image-adas.ext4",
+                    "  domu:",
+                    "    builder:",
+                    "      type: yocto",
+                    "      build_target: domu-image",
+                    "      target_images:",
+                    "        - yocto/build-domu/tmp/deploy/images/x5h/domu-image.ext4",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.dialog_workflow.confirm_results = [False, True]
+            command_items = builder.command_items.build_items(app)
+            builder.command_items.select_component_clean_action = lambda _app: {
+                "mode": "artifacts",
+                "dry_run": False,
+            }
+            selections = iter([["domd"], ["domu"]])
+            builder.command_items.select_incremental_component_names = lambda _app, _components, **_kwargs: next(selections)
+            captured_clean: list[dict[str, Any]] = []
+            builder.command_items.component_clean_commands = lambda _app, *, selected_names, mode, dry_run: (
+                captured_clean.append({"selected_names": selected_names, "mode": mode, "dry_run": dry_run}) or [["clean"]]
+            )
+            clean_item = next(item for item in command_items if item.label == "Clean Moulin components")
+
+            self.assertFalse(clean_item.confirm)
+            clean_item.handler(app)
+
+            self.assertEqual(app.reload_config_calls, 1)
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 2)
+            self.assertEqual(app.workflow.command_calls[0][0], "Clean components (artifacts)")
+            self.assertEqual(captured_clean, [{"selected_names": ["domu"], "mode": "artifacts", "dry_run": False}])
+
+    def test_artifact_cleanup_supports_android_and_custom_script_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  doma:",
+                    "    builder:",
+                    "      type: android",
+                    "  boot_artifacts:",
+                    "    builder:",
+                    "      type: custom_script",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+
+            cleanable = builder.command_items.cleanable_components(app, mode="artifacts")
+
+            self.assertEqual(
+                [(component["name"], component["builder_type"], component["supported"]) for component in cleanable],
+                [("doma", "android", True), ("boot_artifacts", "custom_script", True)],
+            )
+
+    def test_directory_cleanup_uses_manifest_build_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  doma:",
+                    "    build-dir: android",
+                    "    builder:",
+                    "      type: android",
+                    "  boot_artifacts:",
+                    "    builder:",
+                    "      type: custom_script",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+
+            cleanable = builder.command_items.cleanable_components(app, mode="directory")
+
+            self.assertEqual(
+                [(component["name"], component.get("build_dir", ""), component["supported"]) for component in cleanable],
+                [("doma", "android", True), ("boot_artifacts", "", False)],
+            )
+
+    def test_directory_cleanup_lists_manifest_components_even_when_disabled_by_params(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  domd:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      build_target: rcar-image-adas",
+                    "  doma_kernel:",
+                    "    build-dir: android_kernel",
+                    "    builder:",
+                    "      type: bazel",
+                    "      target: //kernel:dist",
+                    "  doma:",
+                    "    build-dir: android",
+                    "    builder:",
+                    "      type: android",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.build_params = {"ENABLE_ANDROID": "no"}
+
+            cleanable = builder.command_items.cleanable_components(app, mode="directory")
+
+            self.assertEqual(
+                [(component["name"], component.get("build_dir", ""), component["supported"]) for component in cleanable],
+                [("domd", "yocto", True), ("doma_kernel", "android_kernel", True), ("doma", "android", True)],
+            )
+
+    def test_directory_cleanup_filters_missing_remote_component_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  domd:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-domd",
+                    "      build_target: rcar-image-adas",
+                    "  doma_kernel:",
+                    "    build-dir: android_kernel",
+                    "    builder:",
+                    "      type: bazel",
+                    "      target: //kernel:dist",
+                    "  doma:",
+                    "    build-dir: android",
+                    "    builder:",
+                    "      type: android",
+                    "  boot_artifacts:",
+                    "    build-dir: artifacts",
+                    "    builder:",
+                    "      type: custom_script",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            captured_commands: list[list[str]] = []
+            app.remote_capture_command = lambda argv: captured_commands.append(argv) or "domd\nboot_artifacts\n"
+
+            cleanable = builder.command_items.cleanable_components(app, mode="directory")
+
+            self.assertEqual(
+                [(component["name"], component.get("build_dir", ""), component["supported"]) for component in cleanable],
+                [("domd", "yocto", True), ("boot_artifacts", "artifacts", True)],
+            )
+            probe_script = captured_commands[0][-1]
+            self.assertIn("; if [ -d", probe_script)
+            self.assertIn("yocto/build-domd", probe_script)
+            self.assertIn("android_kernel", probe_script)
+            self.assertIn("android", probe_script)
+            self.assertIn("artifacts", probe_script)
+
+    def test_directory_cleanup_hides_successfully_removed_components(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  doma_kernel:",
+                    "    build-dir: android_kernel",
+                    "    builder:",
+                    "      type: bazel",
+                    "      target: //kernel:dist",
+                    "  doma:",
+                    "    build-dir: android",
+                    "    builder:",
+                    "      type: android",
+                    "  domd:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      build_target: rcar-image-adas",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            builder.command_items.select_incremental_component_names = (
+                lambda _app, _components, **_kwargs: ["doma_kernel", "doma"]
+            )
+            builder.command_items.confirm_component_clean = lambda _app, **_kwargs: True
+
+            result = builder.command_items.run_component_clean(app, mode="directory", dry_run=False)
+            cleanable = builder.command_items.cleanable_components(app, mode="directory")
+
+            self.assertEqual(result, 0)
+            self.assertEqual(app.cleaned_component_directories, {"doma_kernel", "doma"})
+            self.assertEqual(
+                [(component["name"], component.get("build_dir", ""), component["supported"]) for component in cleanable],
+                [("domd", "yocto", True)],
+            )
+
+    def test_component_clean_confirm_uses_popup_dialog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+
+            result = builder.command_items.confirm_component_clean(
+                app,
+                selected_names=["boot_artifacts"],
+                mode="directory",
+                dry_run=False,
+            )
+
+            self.assertTrue(result)
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
+            content = app.dialog_workflow.confirm_calls[0]
+            self.assertEqual(content.title, "Confirm")
+            self.assertEqual(content.subject, "Clean Moulin components: boot_artifacts")
+            self.assertIn("Mode: directory.", content.details)
+
+    def test_build_output_cleanup_supports_android_and_yocto_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  domd:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-domd",
+                    "      build_target: rcar-image-adas",
+                    "  doma:",
+                    "    build-dir: android",
+                    "    builder:",
+                    "      type: android",
+                    "  doma_kernel:",
+                    "    build-dir: android_kernel",
+                    "    builder:",
+                    "      type: bazel",
+                    "      target: //kernel:dist",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+
+            cleanable = builder.command_items.cleanable_components(app, mode="build_output")
+
+            self.assertEqual(
+                [(component["name"], component["builder_type"], component["supported"]) for component in cleanable],
+                [("domd", "yocto", True), ("doma", "android", True), ("doma_kernel", "bazel", False)],
+            )
+
+    def test_component_selection_cursor_skips_unsupported_components(self) -> None:
+        components = [
+            {"name": "dom0", "supported": True},
+            {"name": "doma_kernel", "supported": False},
+            {"name": "doma", "supported": False},
+            {"name": "domd", "supported": True},
+        ]
+
+        self.assertEqual(items.MainMenuCommandItemsService.clamp_supported_component_index(components, 1), 3)
+        self.assertEqual(items.MainMenuCommandItemsService.move_supported_component_index(components, 0, 1), 3)
+        self.assertEqual(items.MainMenuCommandItemsService.move_supported_component_index(components, 3, 1), 0)
+        self.assertEqual(items.MainMenuCommandItemsService.move_supported_component_index(components, 0, -1), 3)
+
+    def test_component_clean_mode_selection_preserves_stack_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [ord("j"), ord("j"), ord("j"), ord("j"), ord(" "), 10])
+
+            first = builder.command_items.select_component_clean_action(app)
+            app.screen.keys = [10]
+            second = builder.command_items.select_component_clean_action(app)
+
+            self.assertEqual(first, {"label": "Yocto component sstate", "mode": "yocto_component_sstate", "description": "Run BitBake cleansstate for each selected Yocto component build target.", "dry_run": False})
+            self.assertEqual(second, first)
+
+    def test_component_clean_component_cancel_returns_to_mode_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  doma:",
+                    "    builder:",
+                    "      type: android",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            choices = iter([
+                {"mode": "artifacts", "dry_run": True},
+                None,
+            ])
+            builder.command_items.select_component_clean_action = lambda _app: next(choices)
+            builder.command_items.select_incremental_component_names = lambda _app, _components, **_kwargs: None
+
+            builder.command_items.run_component_clean_menu(app)
+
+            self.assertEqual(app.workflow.command_calls, [])
+            self.assertEqual(app.status, "Component cleanup cancelled")
 
     def test_incremental_change_state_auto_selects_component_from_changed_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

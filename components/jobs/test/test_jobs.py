@@ -316,6 +316,22 @@ class JobsBehaviorTests(unittest.TestCase):
         self.assertEqual(jobs.clamp_log_scroll(job, 4, follow=True, scroll=0), (6, True))
         self.assertEqual(jobs.clamp_log_scroll(job, 4, follow=False, scroll=99), (6, False))
 
+    def test_wrapped_log_scroll_helpers_count_visual_lines(self) -> None:
+        job = jobs.create_command_job(
+            title="Build",
+            item_label="Run product build",
+            slot="build",
+            commands=[],
+            initial_output=["$ rm -rf -- alpha beta gamma delta"],
+        )
+
+        self.assertEqual(
+            jobs.wrapped_job_output_lines(job, 16),
+            ["$ rm -rf --", "  alpha beta", "  gamma delta"],
+        )
+        self.assertEqual(jobs.log_max_scroll(job, 2, width=16), 1)
+        self.assertEqual(jobs.clamp_log_scroll(job, 2, follow=True, scroll=0, width=16), (1, True))
+
     def test_display_job_for_label_prefers_active_then_last_jobs(self) -> None:
         active = {"item_label": "Current"}
         last_board = {"item_label": "Flash UFS image"}
