@@ -405,7 +405,7 @@ class SyncCommandBehaviorTests(unittest.TestCase):
             )
 
             expected = transport.rsync_base_command(dry_run=False)
-            expected.extend([str(local_file), "builder@example:/work/product/prod.yaml"])
+            expected.extend(["--rsync-path", "mkdir -p /work/product && rsync", str(local_file), "builder@example:/work/product/prod.yaml"])
             self.assertEqual(argv, expected)
 
     def test_push_dry_run_for_pull_only_mapping_returns_log_command(self) -> None:
@@ -673,6 +673,8 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                         "header": ["\n== push: meta ==", "role: source layer", "remote: layers/meta", "local:  layers/meta"],
                         "argv": [
                             *transport.rsync_base_command(dry_run=True),
+                            "--rsync-path",
+                            "mkdir -p /mnt/projects/meta-product/layers/meta && rsync",
                             str(local_base / "layers/meta") + "/",
                             "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/",
                         ],
@@ -1049,8 +1051,10 @@ class SyncCommandBehaviorTests(unittest.TestCase):
 
             self.assertEqual(len(argv), 3)
             self.assertIn("Copy mapped files: pushing active mappings to remote", argv[0][2])
-            self.assertIn("Copy mapped files mapping: layer", argv[1][2])
-            self.assertEqual(argv[1][-2:], [str(layer) + "/", "builder@10.0.0.1:/mnt/projects/meta-product/layers/meta/"])
+            self.assertIn("Copy mapped files mappings: layer", argv[1][2])
+            self.assertIn("--rsync-path", argv[1])
+            self.assertIn("--relative", argv[1])
+            self.assertEqual(argv[1][-2:], [str(local_base) + "/./layers/meta", "builder@10.0.0.1:/mnt/projects/meta-product/"])
             self.assertIn("recorded incremental build baseline", argv[2][2])
 
     def test_build_command_sequence_for_config_saves_settings_without_prepending_sync(self) -> None:

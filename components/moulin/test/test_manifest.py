@@ -154,6 +154,139 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
             self.assertEqual(context["board_artifacts"], "full_ufs.img.gz")
 
     @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
+    def test_build_runtime_context_reconciles_targets_after_parameter_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "overlay"
+            local.mkdir()
+            (local / "prod.yaml").write_text(
+                "\n".join(
+                    [
+                        "min_ver: '1.0'",
+                        "images:",
+                        "  full_ufs: {}",
+                        "components:",
+                        "  boot_artifacts:",
+                        "    builder:",
+                        "      target_images:",
+                        "        - boot.tar",
+                        "parameters:",
+                        "  ENABLE_ANDROID:",
+                        "    no: {}",
+                        "    yes:",
+                        "      default: 'true'",
+                        "      overrides:",
+                        "        images:",
+                        "          android_only: {}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "projects": [
+                    {
+                        "name": "prod",
+                        "local_project_dir": str(local),
+                        "moulin_manifest": "prod.yaml",
+                        "parameters": {"ENABLE_ANDROID": "no"},
+                        "targets": "boot_artifacts full_ufs.img.gz android_only.img.gz",
+                    }
+                ],
+                "active_project": "prod",
+            }
+
+            context = manifest.build_runtime_context_for_config(
+                config,
+                app_dir=root,
+                env={},
+                default_docker_image="default-image",
+                default_build_targets="default-target",
+                default_moulin_manifest="fallback.yaml",
+                remote_read_project_file=lambda _config, _path: "",
+                cache={},
+            )
+
+            self.assertEqual(context["build_targets"], "boot_artifacts full_ufs.img.gz")
+
+    @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
+    def test_build_runtime_context_preserves_valid_target_subset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "overlay"
+            local.mkdir()
+            (local / "prod.yaml").write_text(
+                "\n".join(
+                    [
+                        "min_ver: '1.0'",
+                        "images:",
+                        "  full_ufs: {}",
+                        "components:",
+                        "  boot_artifacts:",
+                        "    builder:",
+                        "      target_images:",
+                        "        - boot.tar",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "projects": [
+                    {
+                        "name": "prod",
+                        "local_project_dir": str(local),
+                        "moulin_manifest": "prod.yaml",
+                        "targets": "boot_artifacts",
+                    }
+                ],
+                "active_project": "prod",
+            }
+
+            context = manifest.build_runtime_context_for_config(
+                config,
+                app_dir=root,
+                env={},
+                default_docker_image="default-image",
+                default_build_targets="default-target",
+                default_moulin_manifest="fallback.yaml",
+                remote_read_project_file=lambda _config, _path: "",
+                cache={},
+            )
+
+            self.assertEqual(context["build_targets"], "boot_artifacts")
+
+    @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
+    def test_build_runtime_context_preserves_explicit_env_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "overlay"
+            local.mkdir()
+            (local / "prod.yaml").write_text("min_ver: '1.0'\nimages:\n  full_ufs: {}\n", encoding="utf-8")
+            config = {
+                "projects": [
+                    {
+                        "name": "prod",
+                        "local_project_dir": str(local),
+                        "moulin_manifest": "prod.yaml",
+                        "targets": "old",
+                    }
+                ],
+                "active_project": "prod",
+            }
+
+            context = manifest.build_runtime_context_for_config(
+                config,
+                app_dir=root,
+                env={"MOULIN_REMOTE_BUILD_TARGETS": "forced"},
+                default_docker_image="default-image",
+                default_build_targets="default-target",
+                default_moulin_manifest="fallback.yaml",
+                remote_read_project_file=lambda _config, _path: "",
+                cache={},
+            )
+
+            self.assertEqual(context["build_targets"], "forced")
+
+    @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
     def test_artifact_copy_specs_for_config_uses_effective_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -280,6 +413,41 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
             ],
         )
 
+    def test_target_candidates_from_manifest_filters_android_targets_when_android_param_disabled(self) -> None:
+        data = {
+            "min_ver": "1.0",
+            "images": {"full_ufs": {"desc": "UFS"}},
+            "components": {
+                "boot_artifacts": {"builder": {"target_images": ["artifacts/boot.tar"]}},
+                "doma_kernel": {"builder": {"target_images": ["kernel/Image"]}},
+                "doma": {"builder": {"target_images": ["android/super.img"]}},
+                "domu": {"builder": {"target_images": ["domu/rootfs.ext4"]}},
+            },
+            "parameters": {
+                "ENABLE_ANDROID": {
+                    "no": {},
+                    "yes": {
+                        "default": "true",
+                        "overrides": {
+                            "images": {"android_only": {"desc": "Android image"}},
+                            "components": {
+                                "android_boot": {"builder": {"target_images": ["android/boot.tar"]}}
+                            },
+                        },
+                    },
+                }
+            },
+        }
+
+        self.assertEqual(
+            manifest.target_candidates_from_manifest(data, {"ENABLE_ANDROID": "no"}),
+            [
+                {"target": "boot_artifacts", "source": "manifest", "desc": "manifest component target"},
+                {"target": "domu", "source": "manifest", "desc": "manifest component target"},
+                {"target": "full_ufs.img.gz", "source": "manifest", "desc": "UFS"},
+            ],
+        )
+
     def test_effective_manifest_merges_overrides_without_mutating_source(self) -> None:
         data = {
             "min_ver": "1.0",
@@ -369,9 +537,9 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
                 "KERNEL_TARGET": "//common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist",
             },
             "components": {
-                "domd": {"builder": {"type": "yocto", "build_target": "%{DOMD_IMAGE}"}},
+                "domd": {"build-dir": "yocto", "builder": {"type": "yocto", "work_dir": "build-domd", "build_target": "%{DOMD_IMAGE}"}},
                 "doma_kernel": {"builder": {"type": "bazel", "target": "%{KERNEL_TARGET}"}},
-                "doma": {"builder": {"type": "android"}},
+                "doma": {"build-dir": "android", "builder": {"type": "android"}},
                 "boot_artifacts": {"builder": {"type": "custom_script"}},
             },
         }
@@ -379,7 +547,7 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
         self.assertEqual(
             manifest.component_builders_from_manifest(data),
             [
-                {"name": "domd", "builder_type": "yocto", "target": "rcar-image-adas"},
+                {"name": "domd", "builder_type": "yocto", "target": "rcar-image-adas", "build_dir": "yocto", "work_dir": "build-domd"},
                 {
                     "name": "doma_kernel",
                     "builder_type": "bazel",
@@ -391,7 +559,7 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
                     "target_patterns": [],
                     "target_images": [],
                 },
-                {"name": "doma", "builder_type": "android", "target": "doma"},
+                {"name": "doma", "builder_type": "android", "target": "doma", "build_dir": "android"},
                 {"name": "boot_artifacts", "builder_type": "custom_script", "target": "boot_artifacts"},
             ],
         )
@@ -420,6 +588,29 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
                 {"name": "domd", "builder_type": "yocto", "target": "rcar-image-adas"},
             ],
         )
+
+    def test_component_builders_from_manifest_treats_android_param_as_doma_alias(self) -> None:
+        data = {
+            "components": {
+                "dom0": {"builder": {"type": "yocto", "build_target": "core-image-thin-initramfs"}},
+                "domd": {"builder": {"type": "yocto", "build_target": "rcar-image-adas"}},
+                "domu": {"builder": {"type": "yocto", "build_target": "xt-rcar-image"}},
+                "doma_kernel": {"builder": {"type": "bazel", "target": "//kernel:dist"}},
+                "doma": {"builder": {"type": "android"}},
+            },
+        }
+
+        names = [
+            component["name"]
+            for component in manifest.component_builders_from_manifest(
+                data,
+                {
+                    "ENABLE_ANDROID": "no",
+                },
+            )
+        ]
+
+        self.assertEqual(names, ["dom0", "domd", "domu"])
 
     @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
     def test_yocto_image_recipes_for_config_loads_manifest(self) -> None:

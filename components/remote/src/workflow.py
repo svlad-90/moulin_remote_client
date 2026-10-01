@@ -21,6 +21,7 @@ REMOTE_CLI_COMMANDS = {
     "yocto-impact-clean",
     "yocto-impact-rebuild",
     "yocto-impact-clean-rebuild",
+    "clean-component",
 }
 
 YOCTO_IMPACT_ACTIONS = {
@@ -126,6 +127,23 @@ class RemoteCommandWorkflowService:
             targets=targets,
         )
 
+    def component_clean_command(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        components: list[dict[str, Any]],
+        mode: str,
+        dry_run: bool = True,
+    ) -> list[str]:
+        return self.build_service.component_clean_command_for_config(
+            config,
+            docker_image=docker_image,
+            components=components,
+            mode=mode,
+            dry_run=dry_run,
+        )
+
     def ninja_tool_command(
         self,
         config: dict[str, Any],
@@ -225,6 +243,26 @@ class RemoteCommandWorkflowService:
             )
         )
 
+    def run_component_clean(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        components: list[dict[str, Any]],
+        mode: str,
+        dry_run: bool,
+        runner: Callable[[list[str]], Any],
+    ) -> None:
+        runner(
+            self.component_clean_command(
+                config,
+                docker_image=docker_image,
+                components=components,
+                mode=mode,
+                dry_run=dry_run,
+            )
+        )
+
     def status_command(
         self,
         config: dict[str, Any],
@@ -263,6 +301,7 @@ class RemoteCommandWorkflowService:
         structured_script: Callable[[list[tuple[str, str]]], str],
         runner: Callable[[list[str]], Any],
         status_runner: Callable[[list[str]], Any] | None = None,
+        cli_args: Any | None = None,
     ) -> None:
         if command in {"connect", "server-tui"}:
             self.run_interactive_shell(config, runner)
@@ -293,6 +332,24 @@ class RemoteCommandWorkflowService:
                 config,
                 docker_image=docker_image,
                 targets=str(context["build_targets"]),
+                runner=runner,
+            )
+            return
+        if command == "clean-component":
+            mode = str(getattr(cli_args, "mode", "artifacts"))
+            dry_run = bool(getattr(cli_args, "dry_run", False))
+            names = [str(name) for name in getattr(cli_args, "names", [])]
+            components = list(context.get("component_builders", []))
+            if names and names != ["all"]:
+                selected = [component for component in components if str(component.get("name", "")) in set(names)]
+            else:
+                selected = components
+            self.run_component_clean(
+                config,
+                docker_image=docker_image,
+                components=selected,
+                mode=mode,
+                dry_run=dry_run,
                 runner=runner,
             )
             return

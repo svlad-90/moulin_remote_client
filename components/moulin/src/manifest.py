@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
+import shlex
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -264,7 +265,7 @@ def build_runtime_context_for_config(
     remote_read_project_file: Callable[[dict[str, Any], str], str],
     cache: dict[tuple[str, str, str], dict[str, Any]],
 ) -> dict[str, Any]:
-    return config_runtime.build_runtime_context_for_config(
+    context = config_runtime.build_runtime_context_for_config(
         config,
         app_dir=app_dir,
         env=env,
@@ -278,6 +279,38 @@ def build_runtime_context_for_config(
             default_moulin_manifest=default_moulin_manifest,
         ),
     )
+    target_candidates = target_candidates_for_config(
+        config,
+        app_dir=app_dir,
+        remote_read_project_file=remote_read_project_file,
+        cache=cache,
+        default_moulin_manifest=default_moulin_manifest,
+        build_params=dict(context["build_params"]),
+    )
+    if not env.get("MOULIN_REMOTE_BUILD_TARGETS"):
+        context["build_targets"] = reconciled_build_targets(
+            str(context["build_targets"]),
+            target_candidates,
+        )
+    context["component_builders"] = component_builders_for_config(
+        config,
+        app_dir=app_dir,
+        remote_read_project_file=remote_read_project_file,
+        cache=cache,
+        default_moulin_manifest=default_moulin_manifest,
+        build_params=dict(context["build_params"]),
+    )
+    return context
+
+
+def reconciled_build_targets(current_targets: str, target_candidates: list[dict[str, str]]) -> str:
+    candidate_targets = [str(candidate["target"]) for candidate in target_candidates if str(candidate.get("target", "")).strip()]
+    if not candidate_targets:
+        return current_targets
+    selected = shlex.split(current_targets)
+    if selected and all(target in set(candidate_targets) for target in selected):
+        return current_targets
+    return " ".join(candidate_targets)
 
 
 def target_candidates_from_manifest(
@@ -300,6 +333,8 @@ def target_candidates_from_manifest(
         if not isinstance(components, dict):
             return
         for name, raw in components.items():
+            if not component_enabled_by_params(str(name), build_params):
+                continue
             builder = raw.get("builder", {}) if isinstance(raw, dict) else {}
             if isinstance(builder, dict) and builder.get("target_images"):
                 target = str(name)
@@ -522,6 +557,8 @@ def component_enabled_by_params(name: str, build_params: dict[str, str] | None) 
     candidates = [f"ENABLE_{normalized}"]
     if normalized.endswith("_KERNEL"):
         candidates.append(f"ENABLE_{normalized.removesuffix('_KERNEL')}")
+    if normalized in {"DOMA", "DOMA_KERNEL"}:
+        candidates.append("ENABLE_ANDROID")
     disabled_values = {"0", "false", "no", "off", "disable", "disabled"}
     for param_name in candidates:
         value = build_params.get(param_name)
@@ -555,20 +592,30 @@ def component_builders_from_manifest(
             continue
         target = str(builder.get("build_target") or builder.get("target") or name).strip()
         expanded_target = expand_value(target, variables).strip()
+        build_dir = expand_value(str(raw.get("build-dir", "")), variables).strip()
         item: dict[str, Any] = {
             "name": str(name),
             "builder_type": builder_type,
             "target": expanded_target,
         }
+        if build_dir:
+            item["build_dir"] = build_dir
+        target_images = expanded_string_list(builder.get("target_images", []), variables)
+        if target_images:
+            item["target_images"] = target_images
+        if builder_type == "yocto":
+            work_dir = expand_value(str(builder.get("work_dir", "")), variables).strip()
+            if work_dir:
+                item["work_dir"] = work_dir
         if builder_type == "bazel":
             item.update(
                 {
-                    "build_dir": expand_value(str(raw.get("build-dir", "")), variables).strip(),
+                    "build_dir": build_dir,
                     "tool": expand_value(str(builder.get("tool", "tools/bazel")), variables).strip(),
                     "command": expand_value(str(builder.get("command", "build")), variables).strip(),
                     "args": expanded_string_list(builder.get("args", []), variables),
                     "target_patterns": expanded_string_list(builder.get("target-patterns", []), variables),
-                    "target_images": expanded_string_list(builder.get("target_images", []), variables),
+                    "target_images": target_images,
                 }
             )
         result.append(item)

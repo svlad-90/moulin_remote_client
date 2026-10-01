@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shlex
+import base64
+import json
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
@@ -143,6 +145,287 @@ class RemoteBuildCommandService:
             self.product_docker_command(project_dir, docker_image, f"ninja {quoted_targets}"),
         )
 
+    def component_clean_command(
+        self,
+        remote: str,
+        project_dir: str,
+        docker_image: str,
+        components: list[dict[str, Any]],
+        *,
+        mode: str,
+        dry_run: bool = True,
+    ) -> list[str]:
+        mode = mode.strip()
+        if mode not in {"artifacts", "directory", "build_output", "yocto_component_clean", "yocto_component_sstate", "all"}:
+            raise ValueError(f"unsupported clean mode: {mode}")
+        payload = base64.b64encode(json.dumps(components, sort_keys=True).encode("utf-8")).decode("ascii")
+        script = r'''
+from __future__ import annotations
+
+import base64
+import json
+import os
+import shlex
+import subprocess
+from pathlib import Path, PurePosixPath
+
+
+MODE = "__MODE__"
+DRY_RUN = "__DRY_RUN__" == "1"
+COMPONENTS = json.loads(base64.b64decode("__COMPONENTS_B64__").decode("utf-8"))
+
+
+def run(command: str, *, label: str) -> int:
+    print()
+    print(label)
+    print("$", command)
+    if DRY_RUN:
+        return 0
+    return subprocess.run(command, shell=True, executable="/bin/bash", check=False).returncode
+
+
+def safe_relative_path(raw: str) -> str:
+    text = raw.strip()
+    if not text or text.startswith("/") or text.startswith("~"):
+        return ""
+    path = PurePosixPath(text)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return ""
+    return str(path)
+
+
+def artifact_paths(component: dict[str, object]) -> list[str]:
+    result: list[str] = []
+    for key in ("target_images", "artifacts"):
+        values = component.get(key, [])
+        if isinstance(values, list):
+            result.extend(str(value) for value in values)
+    target = str(component.get("target", "")).strip()
+    suffixes = (".img", ".img.gz", ".wic", ".wic.gz", ".bmap", ".dtb", ".dtbo", ".cpio", ".cpio.gz")
+    if "/" in target or target.endswith(suffixes):
+        result.append(target)
+    seen: set[str] = set()
+    clean: list[str] = []
+    for raw in result:
+        path = safe_relative_path(raw)
+        if path and path not in seen:
+            seen.add(path)
+            clean.append(path)
+    return clean
+
+
+def ninja_clean_target(component: dict[str, object]) -> str:
+    target = str(component.get("target", "") or component.get("name", "")).strip()
+    if not target or target.startswith("-") or target.startswith("//"):
+        return ""
+    return target
+
+
+def remove_artifacts(component: dict[str, object]) -> int:
+    paths = artifact_paths(component)
+    if paths:
+        quoted = " ".join(shlex.quote(path) for path in paths)
+        return run(f"rm -rf -- {quoted}", label=f"remove artifacts for {component.get('name')}")
+    target = ninja_clean_target(component)
+    if not target:
+        print(f"skip artifact cleanup for {component.get('name')}: no manifest artifacts or Ninja target")
+        return 0
+    return run(f"ninja -t clean {shlex.quote(target)}", label=f"clean ninja target for {component.get('name')}")
+
+
+def remove_component_directory(component: dict[str, object]) -> int:
+    build_dir = safe_relative_path(str(component.get("build_dir", "")))
+    if not build_dir:
+        return 0
+    if component.get("builder_type") == "yocto":
+        build_path = PurePosixPath(build_dir)
+        if not build_path.name.startswith("build-"):
+            name = safe_relative_path(str(component.get("name", "")))
+            if not name:
+                return 0
+            build_dir = str(build_path / f"build-{name}")
+    return run(f"rm -rf -- {shlex.quote(build_dir)}", label=f"remove component directory for {component.get('name')}")
+
+
+def build_output_paths(component: dict[str, object]) -> list[str]:
+    build_dir = safe_relative_path(str(component.get("build_dir", "")))
+    if not build_dir:
+        return []
+    builder_type = str(component.get("builder_type", ""))
+    if builder_type == "android":
+        return [str(PurePosixPath(build_dir) / "out")]
+    return []
+
+
+def remove_build_output(component: dict[str, object]) -> int:
+    is_yocto = component.get("builder_type") == "yocto"
+    paths = yocto_build_output_paths(component) if is_yocto else build_output_paths(component)
+    if not paths:
+        if not is_yocto:
+            print(f"ERROR: build output cleanup is not supported for {component.get('name')}")
+        return 1
+    quoted = " ".join(shlex.quote(path) for path in paths)
+    return run(f"rm -rf -- {quoted}", label=f"remove build output for {component.get('name')}")
+
+
+def bitbake_setup(build_dir: Path) -> str:
+    return f". yocto/openembedded-core/oe-init-build-env {shlex.quote(str(build_dir))} >/dev/null"
+
+
+def output_tail(text: str, *, limit: int = 12) -> str:
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    return "\n".join(lines[-limit:])
+
+
+def bitbake_env_value(build_dir: Path, recipe: str, variable: str) -> tuple[str, int, str]:
+    command = f"{bitbake_setup(build_dir)} && bitbake -e {shlex.quote(recipe)}"
+    result = subprocess.run(command, shell=True, executable="/bin/bash", text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        detail = output_tail(result.stderr) or output_tail(result.stdout)
+        return "", result.returncode, detail
+    prefix = f'{variable}="'
+    for line in result.stdout.splitlines():
+        if line.startswith(prefix) and line.endswith('"'):
+            return line[len(prefix):-1], 0, ""
+    return "", 1, f"{variable} was not present in bitbake -e output"
+
+
+def safe_resolved_output_path(build_dir: Path, raw: str) -> str:
+    text = raw.strip()
+    if not text:
+        return ""
+    path = Path(text)
+    if path.is_absolute():
+        try:
+            return str(path.resolve().relative_to(Path.cwd().resolve()))
+        except ValueError:
+            return ""
+    clean = safe_relative_path(text)
+    if not clean:
+        return ""
+    return str(build_dir / clean)
+
+
+def yocto_build_output_paths(component: dict[str, object]) -> list[str]:
+    name = str(component.get("name", "")).strip()
+    recipe = str(component.get("target", "")).strip()
+    if not recipe:
+        print(f"ERROR: no Yocto recipe target for {name or '<unnamed>'}")
+        return []
+    build_dirs, exact_build_dir = yocto_component_build_dirs(component)
+    if not build_dirs:
+        print(f"ERROR: no Yocto build directories found for {name or recipe}")
+        return []
+    paths: list[str] = []
+    for build_dir in build_dirs:
+        if not exact_build_dir:
+            found, probe_rc = bitbake_recipe_probe(build_dir, recipe)
+            if not found:
+                reason = f"probe exit {probe_rc}" if probe_rc not in (0, 1) else "recipe not available"
+                print(f"skip {name or recipe} in {build_dir}: {reason}")
+                continue
+        tmpdir, env_rc, env_detail = bitbake_env_value(build_dir, recipe, "TMPDIR")
+        if env_rc != 0:
+            print(f"skip {name or recipe} in {build_dir}: failed to read TMPDIR with bitbake -e rc={env_rc}")
+            if env_detail:
+                print(env_detail)
+            continue
+        path = safe_resolved_output_path(build_dir, tmpdir)
+        if not path:
+            print(f"skip {name or recipe} in {build_dir}: unsafe TMPDIR {tmpdir!r}")
+            continue
+        paths.append(path)
+        break
+    if not paths:
+        print(f"ERROR: selected Yocto component {name or recipe} target {recipe} has no safe BitBake TMPDIR")
+    return paths
+
+
+def bitbake_recipe_probe(build_dir: Path, recipe: str) -> tuple[bool, int]:
+    command = f"{bitbake_setup(build_dir)} && bitbake -s {shlex.quote(recipe)}"
+    result = subprocess.run(command, shell=True, executable="/bin/bash", text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if result.returncode not in (0, 1):
+        return False, result.returncode
+    return any(line.split()[:1] == [recipe] or line.split()[:1] == [f"{recipe}:"] for line in result.stdout.splitlines()), result.returncode
+
+
+def yocto_component_build_dirs(component: dict[str, object]) -> tuple[list[Path], bool]:
+    build_dir = safe_relative_path(str(component.get("build_dir", "")))
+    work_dir = safe_relative_path(str(component.get("work_dir", "")))
+    if work_dir:
+        base = build_dir or "yocto"
+        return [Path(base) / work_dir], True
+    if build_dir and PurePosixPath(build_dir).name.startswith("build-"):
+        return [Path(build_dir)], True
+    return sorted(path for path in Path("yocto").glob("build-*") if (path / "conf/bblayers.conf").exists()), False
+
+
+def clean_yocto_work(component: dict[str, object], *, task: str) -> int:
+    name = str(component.get("name", "")).strip()
+    recipe = str(component.get("target", "")).strip()
+    if not recipe:
+        print(f"ERROR: no Yocto recipe target for {name or '<unnamed>'}")
+        return 1
+    rc = 0
+    matched = 0
+    build_dirs, exact_build_dir = yocto_component_build_dirs(component)
+    if not build_dirs:
+        print(f"ERROR: no Yocto build directories found for {name or recipe}")
+        return 1
+    for build_dir in build_dirs:
+        if exact_build_dir:
+            command = f"{bitbake_setup(build_dir)} && bitbake -c {shlex.quote(task)} {shlex.quote(recipe)}"
+            matched += 1
+            rc = run(command, label=f"{task} {recipe} in {build_dir}") or rc
+            continue
+        found, probe_rc = bitbake_recipe_probe(build_dir, recipe)
+        if not found:
+            reason = f"probe exit {probe_rc}" if probe_rc not in (0, 1) else "recipe not available"
+            print(f"skip {name or recipe} in {build_dir}: {reason}")
+            continue
+        matched += 1
+        command = f"{bitbake_setup(build_dir)} && bitbake -c {shlex.quote(task)} {shlex.quote(recipe)}"
+        rc = run(command, label=f"{task} {recipe} in {build_dir}") or rc
+    if matched == 0:
+        print(f"ERROR: selected Yocto component {name or recipe} target {recipe} was not found in any yocto/build-* directory")
+        return rc or 1
+    return rc
+
+
+def main() -> int:
+    print("mode:", MODE)
+    print("dry_run:", DRY_RUN)
+    print("components:", " ".join(str(component.get("name", "")) for component in COMPONENTS) or "<none>")
+    rc = 0
+    for component in COMPONENTS:
+        if MODE in {"artifacts", "all"}:
+            rc = remove_artifacts(component) or rc
+        if MODE == "directory":
+            rc = remove_component_directory(component) or rc
+        if MODE == "build_output":
+            rc = remove_build_output(component) or rc
+        if component.get("builder_type") == "yocto" and MODE in {"yocto_component_clean", "yocto_component_sstate", "all"}:
+            task = "clean" if MODE == "yocto_component_clean" else "cleansstate"
+            rc = clean_yocto_work(component, task=task) or rc
+    if rc == 0:
+        print("clean-component completed")
+    return rc
+
+
+raise SystemExit(main())
+'''
+        script = (
+            script.replace("__MODE__", mode)
+            .replace("__DRY_RUN__", "1" if dry_run else "0")
+            .replace("__COMPONENTS_B64__", payload)
+        )
+        inner = "python3 - <<'PY'\n" + script + "\nPY"
+        return self.session_service.remote_shell_command(
+            remote,
+            project_dir,
+            self.product_docker_command(project_dir, docker_image, inner),
+        )
+
     def ninja_tool_command(self, remote: str, project_dir: str, docker_image: str, args: str) -> list[str]:
         quoted_args = " ".join(shlex.quote(arg) for arg in shlex.split(args))
         return self.session_service.remote_shell_command(
@@ -207,6 +490,24 @@ class RemoteBuildCommandService:
             config_accessors.remote_project_dir_for_config(config),
             docker_image,
             targets,
+        )
+
+    def component_clean_command_for_config(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        components: list[dict[str, Any]],
+        mode: str,
+        dry_run: bool = True,
+    ) -> list[str]:
+        return self.component_clean_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            docker_image,
+            components,
+            mode=mode,
+            dry_run=dry_run,
         )
 
     def ninja_tool_command_for_config(

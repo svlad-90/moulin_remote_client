@@ -339,6 +339,23 @@ class commands:
         return commands._build().build_command(remote, project_dir, docker_image, targets)
 
     @staticmethod
+    def build_remote_component_clean_command_for_config(
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        components: list[dict[str, Any]],
+        mode: str,
+        dry_run: bool = True,
+    ) -> list[str]:
+        return commands._build().component_clean_command_for_config(
+            config,
+            docker_image=docker_image,
+            components=components,
+            mode=mode,
+            dry_run=dry_run,
+        )
+
+    @staticmethod
     def build_remote_bazel_config_command_for_config(
         config: dict[str, Any],
         *,

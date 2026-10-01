@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import curses
 from pathlib import Path
+from pathlib import PurePosixPath
 import shlex
 from typing import Any, Callable
 
@@ -15,11 +16,15 @@ from components.project.api import selection as project_selection_api
 from components.remote.api import transport
 from components.remote.api import workflow as remote_workflow_api
 from components.sync.api import workflow as sync_workflow_api
+from components.ui.api import dialogs as ui_dialog_api
 from components.ui.api import input as ui_input_api
 from components.ui.api import menu as ui_menu_api
 from components.ui.api import session as ui_session_api
 from components.ui.api import text as ui_text_api
 from components.ui.api.menu import MenuItem
+
+
+CLEAN_COMPONENT_BACK = object()
 
 
 class MainMenuCommandItemsService:
@@ -44,6 +49,8 @@ class MainMenuCommandItemsService:
         self.remote_read_project_file = remote_read_project_file
         self.manifest_cache = manifest_cache
         self.mapping_selection_service = project_selection_api.project_mapping_selection_service()
+        self.component_clean_action_index = 0
+        self.component_clean_dry_run = True
 
     def build_items(self, app: Any) -> list[MenuItem]:
         items = [
@@ -155,6 +162,15 @@ class MainMenuCommandItemsService:
                     self.incremental_product_build_commands(app)
                 ),
                 lambda app: self.run_incremental_build(app),
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Clean Moulin components",
+                "build / commands",
+                "Choose a cleanup mode, then select Moulin components to clean.",
+                lambda _app: "Opens cleanup mode selection: component directory, Moulin artifacts, build output, or Yocto component clean.",
+                lambda app: self.run_component_clean_menu(app),
                 requires_remote=True,
                 requires_project=True,
             ),
@@ -428,6 +444,7 @@ class MainMenuCommandItemsService:
         ]
         bazel_components = [component for component in selected if component["builder_type"] == "bazel"]
         bazel_config_targets = self.bazel_config_targets_for_components(selected)
+        selected_product_targets = " ".join(str(component["name"]) for component in selected)
 
         commands: list[list[str]] = []
         commands.append(
@@ -475,10 +492,318 @@ class MainMenuCommandItemsService:
             self.remote_command_workflow.product_build_command(
                 app.config,
                 docker_image=app.docker_image,
-                targets=app.build_targets,
+                targets=selected_product_targets,
             )
         )
         return commands
+
+    def run_component_clean_menu(self, app: Any) -> Any:
+        while True:
+            action = self.select_component_clean_action(app)
+            if action is None:
+                app.status = "Component cleanup cancelled"
+                return None
+            result = self.run_component_clean(
+                app,
+                mode=str(action["mode"]),
+                dry_run=bool(action["dry_run"]),
+            )
+            if result is CLEAN_COMPONENT_BACK:
+                continue
+            return result
+
+    def select_component_clean_action(self, app: Any) -> dict[str, object] | None:
+        actions: list[dict[str, object]] = [
+            {
+                "label": "Component directory",
+                "mode": "directory",
+                "description": "Delete the manifest build-dir directory for selected components.",
+            },
+            {
+                "label": "Moulin artifacts",
+                "mode": "artifacts",
+                "description": "Delete manifest-declared artifact outputs for selected components.",
+            },
+            {
+                "label": "Build output",
+                "mode": "build_output",
+                "description": "Delete build outputs while keeping fetched sources and configuration.",
+            },
+            {
+                "label": "Yocto component clean",
+                "mode": "yocto_component_clean",
+                "description": "Run BitBake clean for each selected Yocto component build target.",
+            },
+            {
+                "label": "Yocto component sstate",
+                "mode": "yocto_component_sstate",
+                "description": "Run BitBake cleansstate for each selected Yocto component build target.",
+            },
+        ]
+        index = self.component_clean_action_index
+        dry_run = self.component_clean_dry_run
+        app.screen.timeout(-1)
+        try:
+            while True:
+                app.screen.erase()
+                height, width = app.screen.getmaxyx()
+                if height < 12 or width < 72:
+                    app.add(0, 0, "Terminal is too small. Need at least 72x12.", app.warn_attr())
+                    app.screen.refresh()
+                    ch = app.read_key()
+                    if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                        return None
+                    continue
+
+                index = ui_menu_api.clamp_index(index, len(actions))
+                app.draw_box(0, 0, height - 2, width, "Clean Moulin Components")
+                app.add(1, 2, "Select cleanup mode. Press Space to toggle dry-run.", app.accent_attr())
+                dry_run_text = "Dry-run: on" if dry_run else "Dry-run: off"
+                dry_run_attr = app.accent_attr() if dry_run else app.warn_attr()
+                app.add(3, 2, dry_run_text, dry_run_attr)
+                top = 5
+                for offset, action in enumerate(actions):
+                    row = top + offset
+                    label = str(action["label"])
+                    attr = app.selected_attr() if offset == index else 0
+                    app.add(row, 2, ui_text_api.fit_text(label, width - 4).ljust(width - 4), attr)
+
+                current = actions[index]
+                app.add(height - 4, 2, ui_text_api.fit_text(str(current["description"]), width - 4))
+                footer = "Up/Down: select | Space: toggle dry-run | Enter: continue | q/Esc: back"
+                app.add(height - 2, 0, footer[:width], app.accent_attr())
+                app.add(height - 1, 0, app.status[:width].ljust(width), curses.A_REVERSE)
+                app.screen.refresh()
+                ch = app.read_key()
+                if ch == ord(" "):
+                    dry_run = not dry_run
+                    self.component_clean_dry_run = dry_run
+                    app.status = "Dry-run enabled" if dry_run else "Dry-run disabled"
+                elif ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+                    index = ui_menu_api.move_index(index, len(actions), -1)
+                    self.component_clean_action_index = index
+                elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j"):
+                    index = ui_menu_api.move_index(index, len(actions), 1)
+                    self.component_clean_action_index = index
+                elif ch in (10, 13):
+                    self.component_clean_action_index = index
+                    self.component_clean_dry_run = dry_run
+                    return {**actions[index], "dry_run": dry_run}
+                elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                    self.component_clean_action_index = index
+                    self.component_clean_dry_run = dry_run
+                    return None
+        finally:
+            app.screen.timeout(250)
+
+    def run_component_clean(self, app: Any, *, mode: str, dry_run: bool) -> Any:
+        app.reload_config_from_disk()
+        components = self.cleanable_components(app, mode=mode)
+        while True:
+            selected_names = self.select_incremental_component_names(
+                app,
+                components,
+                title="Clean Moulin Components",
+                prompt=f"Select Moulin components to clean ({mode}), then press Enter.",
+                supported_description=f"Cleanup mode {mode} is supported for {{builder_type}}.",
+                unsupported_description=f"Cleanup mode {mode} is not supported for {{builder_type}}.",
+            )
+            if selected_names is None:
+                app.status = "Back to cleanup mode selection"
+                return CLEAN_COMPONENT_BACK
+            if not selected_names:
+                app.status = "Back to cleanup mode selection: no components selected"
+                return CLEAN_COMPONENT_BACK
+            if not self.confirm_component_clean(app, selected_names=selected_names, mode=mode, dry_run=dry_run):
+                app.status = "Back to component selection"
+                continue
+            label = "Dry-run clean components" if dry_run else f"Clean components ({mode})"
+            result = app.command_workflow_service().run_commands(
+                app,
+                label,
+                self.component_clean_commands(app, selected_names=selected_names, mode=mode, dry_run=dry_run),
+            )
+            if result == 0 and mode == "directory" and not dry_run:
+                cleaned_dirs = set(getattr(app, "cleaned_component_directories", set()))
+                cleaned_dirs.update(selected_names)
+                app.cleaned_component_directories = cleaned_dirs
+            return result
+
+    def confirm_component_clean(
+        self,
+        app: Any,
+        *,
+        selected_names: list[str],
+        mode: str,
+        dry_run: bool,
+    ) -> bool:
+        if dry_run:
+            return True
+        components = ", ".join(selected_names)
+        return app.dialog_workflow_controller().run_confirm_dialog(
+            app,
+            ui_dialog_api.ConfirmContent(
+                title="Confirm",
+                warning="This action can change remote build state.",
+                subject=f"Clean Moulin components: {components}",
+                details=(
+                    f"Mode: {mode}. "
+                    "The cleanup command will run only for the selected Moulin components."
+                ),
+                footer="Enter/y: clean | n/q/Esc: back",
+            ),
+            redraw_background=False,
+        )
+
+    def component_clean_commands(
+        self,
+        app: Any,
+        *,
+        selected_names: list[str] | None = None,
+        mode: str,
+        dry_run: bool,
+    ) -> list[list[str]]:
+        components = self.cleanable_components(app, mode=mode)
+        selected_name_set = set(selected_names or [])
+        selected = [component for component in components if component["name"] in selected_name_set]
+        if not selected:
+            selected = [component for component in components if component["supported"]]
+        return [
+            self.remote_command_workflow.component_clean_command(
+                app.config,
+                docker_image=app.docker_image,
+                components=selected,
+                mode=mode,
+                dry_run=dry_run,
+            )
+        ]
+
+    def cleanable_components(self, app: Any, *, mode: str) -> list[dict[str, Any]]:
+        cleaned_dirs = set(getattr(app, "cleaned_component_directories", set())) if mode == "directory" else set()
+        components = [
+            component
+            for component in self.manifest_components(app)
+            if component.get("name") not in cleaned_dirs
+        ]
+        existing_dirs = self.existing_component_directory_names(app, components) if mode == "directory" else None
+        if existing_dirs is not None:
+            components = [
+                component
+                for component in components
+                if str(component.get("name", "")) in existing_dirs
+            ]
+        for component in components:
+            builder_type = str(component.get("builder_type", ""))
+            target = str(component.get("target", ""))
+            build_dir = str(component.get("build_dir", "")).strip()
+            work_dir = str(component.get("work_dir", "")).strip()
+            has_artifacts = bool(component.get("target_images")) or bool(target)
+            component["supported"] = (
+                mode == "artifacts" and has_artifacts
+            ) or (
+                mode == "directory" and bool(build_dir)
+            ) or (
+                mode == "build_output" and (
+                    builder_type == "android" and bool(build_dir)
+                    or builder_type == "yocto" and bool(target)
+                )
+            ) or (
+                mode in {"yocto_component_clean", "yocto_component_sstate", "all"} and builder_type == "yocto"
+            )
+        return components
+
+    def existing_component_directory_names(self, app: Any, components: list[dict[str, Any]]) -> set[str] | None:
+        capture = self.remote_capture_command(app)
+        if capture is None:
+            return None
+        paths = [
+            (str(component.get("name", "")), path)
+            for component in components
+            for path in [self.component_directory_path(component)]
+            if component.get("name") and path
+        ]
+        if not paths:
+            return set()
+        checks = "; ".join(
+            f"if [ -d {shlex.quote(path)} ]; then printf '%s\\n' {shlex.quote(name)}; fi"
+            for name, path in paths
+        )
+        script = f"cd {shlex.quote(config_accessors.remote_project_dir_for_config(app.config))} && {checks}"
+        try:
+            output = capture(transport.ssh_command(config_accessors.remote_spec_for_config(app.config), script))
+        except Exception as exc:
+            app.status = f"Directory probe failed: {exc}"
+            return None
+        return {line.strip() for line in output.splitlines() if line.strip()}
+
+    @staticmethod
+    def remote_capture_command(app: Any) -> Callable[[list[str]], str] | None:
+        direct = getattr(app, "remote_capture_command", None)
+        if callable(direct):
+            return direct
+        services = getattr(app, "services", None)
+        process_execution = getattr(services, "process_execution", None)
+        capture = getattr(process_execution, "capture_command", None)
+        if not callable(capture):
+            return None
+        return lambda argv: capture(argv, echo=False, timeout=15)
+
+    @classmethod
+    def component_directory_path(cls, component: dict[str, Any]) -> str:
+        build_dir = cls.safe_relative_path(str(component.get("build_dir", "")))
+        if not build_dir:
+            return ""
+        if component.get("builder_type") != "yocto":
+            return build_dir
+        work_dir = cls.safe_relative_path(str(component.get("work_dir", "")))
+        if work_dir:
+            return str(PurePosixPath(build_dir or "yocto") / work_dir)
+        build_path = PurePosixPath(build_dir)
+        if build_path.name.startswith("build-"):
+            return build_dir
+        name = cls.safe_relative_path(str(component.get("name", "")))
+        return str(build_path / f"build-{name}") if name else ""
+
+    @staticmethod
+    def safe_relative_path(raw: str) -> str:
+        text = raw.strip()
+        if not text or text.startswith("/") or text.startswith("~"):
+            return ""
+        path = PurePosixPath(text)
+        if any(part in {"", ".", ".."} for part in path.parts):
+            return ""
+        return str(path)
+
+    def manifest_components(self, app: Any) -> list[dict[str, Any]]:
+        return moulin_manifest_api.component_builders_for_config(
+            app.config,
+            app_dir=self.app_dir,
+            remote_read_project_file=self.remote_read_project_file,
+            cache=self.manifest_cache,
+            default_moulin_manifest=self.default_moulin_manifest,
+            build_params=None,
+        )
+
+    @staticmethod
+    def clamp_supported_component_index(components: list[dict[str, Any]], index: int) -> int:
+        if not components:
+            return 0
+        index = ui_menu_api.clamp_index(index, len(components))
+        supported = [offset for offset, component in enumerate(components) if component["supported"]]
+        if not supported or index in supported:
+            return index
+        return next((offset for offset in supported if offset > index), supported[0])
+
+    @staticmethod
+    def move_supported_component_index(components: list[dict[str, Any]], index: int, delta: int) -> int:
+        if not components:
+            return 0
+        supported = [offset for offset, component in enumerate(components) if component["supported"]]
+        if not supported:
+            return ui_menu_api.move_index(index, len(components), delta)
+        current = MainMenuCommandItemsService.clamp_supported_component_index(components, index)
+        position = supported.index(current)
+        return supported[(position + delta) % len(supported)]
 
     def bazel_config_targets_for_components(self, selected_components: list[dict[str, Any]]) -> list[str]:
         bazel_targets = [
@@ -578,7 +903,16 @@ class MainMenuCommandItemsService:
         changed_names = config_runtime_api.changed_runtime_mappings(app.config, self.app_dir, mappings) if mappings else []
         return [mapping for mapping in mappings if str(mapping.get("name", "")) in set(changed_names)]
 
-    def select_incremental_component_names(self, app: Any, components: list[dict[str, Any]]) -> list[str] | None:
+    def select_incremental_component_names(
+        self,
+        app: Any,
+        components: list[dict[str, Any]],
+        *,
+        title: str = "Incremental Build",
+        prompt: str = "Select Moulin components to rebuild, then press Enter.",
+        supported_description: str = "Incremental rebuild is supported for {builder_type}.",
+        unsupported_description: str = "Incremental rebuild is not supported for {builder_type} yet.",
+    ) -> list[str] | None:
         supported = [component for component in components if component["supported"]]
         supported_names = {str(component["name"]) for component in supported}
         change_state = self.incremental_change_state(app, components)
@@ -599,9 +933,9 @@ class MainMenuCommandItemsService:
                         return None
                     continue
 
-                index = ui_menu_api.clamp_index(index, len(components))
-                app.draw_box(0, 0, height - 2, width, "Incremental Build")
-                app.add(1, 2, "Select Moulin components to rebuild, then press Enter.", app.accent_attr())
+                index = self.clamp_supported_component_index(components, index)
+                app.draw_box(0, 0, height - 2, width, title)
+                app.add(1, 2, prompt, app.accent_attr())
                 app.add(2, 2, ui_text_api.fit_text(f"Final targets: {app.build_targets}", width - 4))
                 app.add(3, 2, ui_text_api.fit_text("Selected: " + " ".join(name for name in selected if name), width - 4))
 
@@ -629,9 +963,9 @@ class MainMenuCommandItemsService:
                 if components:
                     current = components[index]
                     desc = (
-                        f"Incremental rebuild is supported for {current['builder_type']}."
+                        supported_description.format(builder_type=current["builder_type"])
                         if current["supported"]
-                        else f"Incremental rebuild is not supported for {current['builder_type']} yet."
+                        else unsupported_description.format(builder_type=current["builder_type"])
                     )
                     app.add(height - 4, 2, ui_text_api.fit_text(desc, width - 4))
                 footer = "Up/Down: select | Space: toggle supported | Enter: run | q/Esc: cancel"
@@ -640,9 +974,9 @@ class MainMenuCommandItemsService:
                 app.screen.refresh()
                 ch = app.read_key()
                 if (ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k")) and components:
-                    index = ui_menu_api.move_index(index, len(components), -1)
+                    index = self.move_supported_component_index(components, index, -1)
                 elif (ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j")) and components:
-                    index = ui_menu_api.move_index(index, len(components), 1)
+                    index = self.move_supported_component_index(components, index, 1)
                 elif ch == ord(" ") and components:
                     component = components[index]
                     if not component["supported"]:
@@ -766,6 +1100,7 @@ class MainMenuCommandItemsService:
         if action_id in {
             "deploy_network_boot",
             "deploy_network_domd_rootfs",
+            "deploy_network_domu_rootfs",
             "deploy_network_android",
             "deploy_network_full",
         }:

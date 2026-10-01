@@ -200,13 +200,15 @@ class MainPanelsController:
     def scroll_logs(self, port: Any, delta: int) -> None:
         item = port.items[port.selected]
         job = self._display_job(port, item)
-        height, _ = port.screen.getmaxyx()
+        height, width = port.screen.getmaxyx()
+        inner_width = max(1, (width - 4) if port.logs_expanded else ((width - 1) // 2 - 5))
         plan = job_api.log_scroll_plan(
             job,
             job_api.log_visible_lines(height, expanded=port.logs_expanded),
             follow=port.log_follow,
             scroll=port.log_scroll,
             delta=delta,
+            width=inner_width,
         )
         if "status" in plan:
             port.status = str(plan["status"])
@@ -267,7 +269,7 @@ class MainPanelsController:
         port.add(row, x, f"{job.get('title', 'Command')} [{state}]"[:inner], port.running_attr() if state == "RUNNING" else port.group_attr())
         row += 2
         visible = max(1, top + height - 2 - row)
-        output = job_api.job_output_lines(job)
+        output = job_api.wrapped_job_output_lines(job, inner)
         if not output:
             port.add(row, x, "Waiting for output..."[:inner], port.disabled_attr())
             return
@@ -276,6 +278,7 @@ class MainPanelsController:
             visible,
             follow=port.log_follow,
             scroll=port.log_scroll,
+            width=inner,
         )
         port.log_scroll = scroll
         shown = output[scroll : scroll + visible]

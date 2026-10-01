@@ -34,6 +34,7 @@ class BoardTypeRegistryTests(unittest.TestCase):
                 ("open_uboot_console", "Open U-Boot console"),
                 ("deploy_network_boot", "Deploy TFTP boot artifacts"),
                 ("deploy_network_domd_rootfs", "Deploy DomD NFS rootfs"),
+                ("deploy_network_domu_rootfs", "Deploy DomU NFS rootfs"),
                 ("deploy_network_android", "Deploy Android image to NFS"),
                 ("deploy_network_full", "Deploy full TFTP/NFS set"),
                 ("install_nfs_deploy_helper", "Install NFS deploy helper"),

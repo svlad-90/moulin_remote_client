@@ -117,6 +117,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
                 "open_uboot_console",
                 "deploy_network_boot",
                 "deploy_network_domd_rootfs",
+                "deploy_network_domu_rootfs",
                 "deploy_network_android",
                 "deploy_network_full",
                 "install_nfs_deploy_helper",
@@ -156,6 +157,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         boot = service.board_action_commands(config, "deploy_network_boot")
         rootfs = service.board_action_commands(config, "deploy_network_domd_rootfs")
+        domu_rootfs = service.board_action_commands(config, "deploy_network_domu_rootfs")
         android = service.board_action_commands(config, "deploy_network_android")
         uboot = service.board_action_commands(config, "apply_uboot_network_env")
         ufs = service.board_action_commands(config, "apply_uboot_ufs_env")
@@ -176,13 +178,19 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("rsync -az", rootfs[1][-1])
         self.assertIn("--info=progress2", rootfs[1][-1])
         self.assertIn("--stats", rootfs[1][-1])
-        self.assertIn("testrpi5@10.13.64.242:/srv/nfs/vgoncharuk/projects/prod/.moulin-domd-rootfs.tar.bz2", rootfs[1][-1])
+        self.assertIn("testrpi5@10.13.64.242:/srv/nfs/vgoncharuk/projects/prod/rootfs/domd/.moulin-domd-rootfs.tar.bz2", rootfs[1][-1])
         self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --check", rootfs[1][-1])
-        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --prepare /srv/nfs/vgoncharuk/projects/prod testrpi5", rootfs[1][-1])
+        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --prepare /srv/nfs/vgoncharuk/projects/prod/rootfs/domd testrpi5", rootfs[1][-1])
         self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs \"$dest\" \"$tarball\"", rootfs[1][-1])
         self.assertNotIn("sudo -n mkdir -p /srv/nfs/vgoncharuk/projects/prod", rootfs[1][-1])
         self.assertNotIn("MOULIN_STREAM_FILE", rootfs[1][-1])
         self.assertNotIn("pv not found", rootfs[1][-1])
+        self.assertIn("/srv/nfs/vgoncharuk/projects/prod", domu_rootfs[1][-1])
+        self.assertIn("yocto/build-domu/tmp/deploy/images", domu_rootfs[0][-1])
+        self.assertIn("yocto/build-domu/tmp/deploy/images", domu_rootfs[1][-1])
+        self.assertIn("Deploy DomU NFS rootfs", domu_rootfs[1][-1])
+        self.assertIn("Installing DomU rootfs on board host", domu_rootfs[1][-1])
+        self.assertIn("testrpi5@10.13.64.242:/srv/nfs/vgoncharuk/projects/prod/rootfs/domu/.moulin-domu-rootfs.tar.bz2", domu_rootfs[1][-1])
         self.assertIn("android_only.img", android[0][-1])
         self.assertIn("rsync -azS", android[0][-1])
         self.assertIn("--inplace", android[0][-1])
@@ -198,7 +206,12 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("setenv ipaddr 10.13.64.120", uboot[0][-1])
         self.assertIn("vgoncharuk/projects/current/Image", uboot[0][-1])
         self.assertIn("setenv tftp_configure_nfs", uboot[0][-1])
+        self.assertIn("setenv nfs_domd_dir /srv/nfs/vgoncharuk/projects/current/rootfs/domd", uboot[0][-1])
         self.assertIn("fdt set /boot_dev device_doma domd_rootfs", uboot[0][-1])
+        self.assertIn("fdt set /boot_dev nfs_dir $nfs_domd_dir", uboot[0][-1])
+        self.assertNotIn("device_domu", uboot[0][-1])
+        self.assertNotIn("nfs_dir_domu", uboot[0][-1])
+        self.assertNotIn("guest_domains", uboot[0][-1])
         self.assertIn("setenv tftp_initramfs_load", uboot[0][-1])
         self.assertIn("tftp 0x50000000 vgoncharuk/projects/current/uInitramfs", uboot[0][-1])
         self.assertIn("tftp 0x54000000 vgoncharuk/projects/current/r8a78000-ironhide-xen.dtb && fdt addr", uboot[0][-1])
@@ -212,6 +225,53 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("run bootcmd_tftp", uboot[0][-1])
         self.assertIn("bootcmd_ufs", ufs[0][-1])
         self.assertIn("saveenv", ufs[0][-1])
+
+    def test_uboot_network_env_uses_manifest_yocto_guest_domains(self) -> None:
+        config = sample_copy_config()
+        config["board_hosts"][0].update(
+            {
+                "tftp_root": "/srv/tftp",
+                "nfs_root": "/srv/nfs",
+                "deploy_subdir": "vgoncharuk/projects",
+                "server_ip": "10.13.64.242",
+                "board_ip": "10.13.64.120",
+            }
+        )
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_board_host_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        manifest_text = "\n".join(
+            [
+                "min_ver: '1.0'",
+                "components:",
+                "  dom0:",
+                "    builder:",
+                "      type: yocto",
+                "      build_target: core-image-thin-initramfs",
+                "  domd:",
+                "    builder:",
+                "      type: yocto",
+                "      build_target: rcar-image-adas",
+                "  domu:",
+                "    builder:",
+                "      type: yocto",
+                "      build_target: rcar-image-adas",
+                "  doma:",
+                "    builder:",
+                "      type: android",
+            ]
+        )
+        service = self._service(remote_read_project_file=lambda _config, _path: manifest_text)
+
+        uboot = service.board_action_commands(config, "apply_uboot_network_env", build_params={"ENABLE_DOMU": "yes"})
+
+        self.assertIn("setenv nfs_domd_dir /srv/nfs/vgoncharuk/projects/current/rootfs/domd", uboot[0][-1])
+        self.assertIn("setenv nfs_domu_dir /srv/nfs/vgoncharuk/projects/current/rootfs/domu", uboot[0][-1])
+        self.assertIn("fdt set /boot_dev nfs_dir $nfs_domd_dir", uboot[0][-1])
+        self.assertIn("fdt set /boot_dev device_domu nfs", uboot[0][-1])
+        self.assertIn("fdt set /boot_dev nfs_dir_domu $nfs_domu_dir", uboot[0][-1])
+        self.assertIn("fdt set /boot_dev device_doma domd_rootfs", uboot[0][-1])
+        self.assertNotIn("guest_domains", uboot[0][-1])
 
     def test_install_nfs_deploy_helper_is_interactive_board_setup(self) -> None:
         config = sample_copy_config()
@@ -232,6 +292,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn('if [ "$dest" = "--prepare" ]', helper[0][-1])
         self.assertIn('if [ "$dest" = "--prepare-android" ]', helper[0][-1])
         self.assertIn('if [ "$dest" = "--install-android" ]', helper[0][-1])
+        self.assertIn('.moulin-domd-rootfs.tar.bz2', helper[0][-1])
+        self.assertIn('.moulin-domu-rootfs.tar.bz2', helper[0][-1])
+        self.assertIn(".moulin-*-rootfs.tar.bz2", helper[0][-1])
         self.assertIn("android_only.img", helper[0][-1])
         self.assertIn("testrpi5 ALL=(root) NOPASSWD: /usr/local/sbin/moulin-deploy-rootfs", helper[0][-1])
         self.assertIn("visudo -cf /etc/sudoers.d/moulin-rootfs-deploy", helper[0][-1])

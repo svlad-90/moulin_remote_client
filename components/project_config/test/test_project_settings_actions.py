@@ -70,6 +70,10 @@ class FakeTargetSelector:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.reload_runtime: Any = None
+        self.targets_by_android = {
+            "yes": "boot_artifacts dom0 doma doma_kernel domd",
+            "no": "boot_artifacts dom0 domd",
+        }
 
     def select_build_targets(self, _port: Any, *, reload_runtime: Any) -> None:
         self.calls.append("targets")
@@ -78,6 +82,9 @@ class FakeTargetSelector:
     def select_board_artifacts(self, _port: Any, *, reload_runtime: Any) -> None:
         self.calls.append("board_artifacts")
         self.reload_runtime = reload_runtime
+
+    def build_target_text_for_params(self, build_params: dict[str, str], *, current_text: str = "") -> str:
+        return self.targets_by_android.get(build_params.get("ENABLE_ANDROID", ""), current_text)
 
 
 class FakeRemoteFileSelector:
@@ -238,6 +245,29 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
         self.assertFalse(result)
         self.assertEqual(port.build_params["ENABLE_ANDROID"], "no")
         self.assertEqual(port.status, "ENABLE_ANDROID=no")
+
+    def test_parameter_action_replaces_build_targets_for_new_params(self) -> None:
+        cfg = config()
+        port = FakeSettingsPort()
+        port.build_targets = "boot_artifacts dom0 doma doma_kernel domd"
+        selector = FakeTargetSelector()
+        controller = project_settings_actions.ProjectSettingsActionController(
+            cfg,
+            app_dir=Path("/app"),
+            default_config_path=Path("/app/config.json"),
+            save_config=lambda _config: None,
+            target_selection_controller_factory=lambda: selector,
+        )
+
+        result = controller.run_action(
+            port,
+            {"kind": "param", "param": {"name": "ENABLE_ANDROID", "default": "no", "choices": ["no", "yes"]}},
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(port.build_params["ENABLE_ANDROID"], "no")
+        self.assertEqual(port.build_targets, "boot_artifacts dom0 domd")
+        self.assertEqual(port.status, "ENABLE_ANDROID=no; build targets=boot_artifacts dom0 domd")
 
     def test_parameter_action_keeps_state_when_choices_are_empty(self) -> None:
         port = FakeSettingsPort()
