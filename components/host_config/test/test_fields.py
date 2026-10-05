@@ -16,6 +16,7 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
                 ("SSH user", "user"),
                 ("SSH host", "host"),
                 ("Working dir", "work_dir"),
+                ("Direct copy", "direct_copy"),
                 ("Console device", "console_device"),
                 ("UFS load addr", "ufs_loadaddr"),
                 ("UFS buffer size", "ufs_buffersize"),
@@ -24,7 +25,15 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
                 ("Deploy subdir", "deploy_subdir"),
                 ("TFTP server IP", "server_ip"),
                 ("Target board IP", "board_ip"),
-                ("Direct copy", "direct_copy"),
+            ],
+        )
+        self.assertEqual(
+            fields.board_host_fields({"type": "gen5_x5h"})[-4:],
+            [
+                ("Power off command", "command_power_off"),
+                ("Power on command", "command_power_on"),
+                ("Boot mode command", "command_boot_mode"),
+                ("Flash mode command", "command_flash_mode"),
             ],
         )
         self.assertEqual(
@@ -267,6 +276,7 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
         self.assertIn("gen5_x5h", fields.board_host_field_hint("type"))
         self.assertIn("auto-detect", fields.board_host_field_hint("console_device"))
         self.assertIn("Enter/Space toggles yes", fields.board_host_field_hint("direct_copy"))
+        self.assertIn("x5h_off", fields.board_host_field_hint("command_power_off"))
         self.assertEqual(fields.board_host_field_hint("unknown"), "")
 
     def test_board_host_value_helpers_match_current_behavior(self) -> None:
@@ -308,6 +318,15 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
         plan = fields.apply_board_host_inline_field_update_for_config(config, other, "host", "10.0.0.3")
         self.assertEqual(other["host"], "10.0.0.3")
         self.assertFalse(plan["connection_reset"])
+
+        plan = fields.apply_board_host_inline_field_update_for_config(config, board, "command_power_off", " lab-off ")
+        self.assertEqual(board["commands"], {"power_off": "lab-off"})
+        self.assertEqual(config["board_host"]["commands"], {"power_off": "lab-off"})
+        self.assertEqual(plan, {"value": "lab-off", "status": "command_power_off updated", "connection_reset": False})
+
+        plan = fields.apply_board_host_inline_field_update_for_config(config, board, "command_power_off", " ")
+        self.assertEqual(board["commands"], {})
+        self.assertEqual(plan, {"value": "", "status": "command_power_off updated", "connection_reset": False})
 
     def test_board_host_direct_copy_toggle_mutates_config_and_status(self) -> None:
         config = {

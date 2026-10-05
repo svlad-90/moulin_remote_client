@@ -8,9 +8,49 @@ from components.board_types.api import registry as board_type_registry_api
 from components.config.api import accessors
 from components.config.api import profiles as config_profiles
 
+BOARD_COMMAND_FIELD_PREFIX = "command_"
+
 
 class BoardHostFieldService:
     """Own board host field update and availability use cases."""
+
+    def command_field_key(self, command_id: str) -> str:
+        return f"{BOARD_COMMAND_FIELD_PREFIX}{command_id}"
+
+    def command_id_for_field(self, key: str) -> str:
+        if key.startswith(BOARD_COMMAND_FIELD_PREFIX):
+            return key[len(BOARD_COMMAND_FIELD_PREFIX) :]
+        return ""
+
+    def command_defaults_for_host(self, host: dict[str, Any]) -> list[dict[str, str]]:
+        adapter = board_type_registry_api.board_type_registry().adapter_for_host(host)
+        return [
+            {
+                "key": self.command_field_key(command.command_id),
+                "command_id": command.command_id,
+                "label": command.label,
+                "default": command.default,
+                "description": command.description,
+            }
+            for command in adapter.command_defaults()
+        ]
+
+    def command_override_value(self, host: dict[str, Any], key: str) -> str:
+        command_id = self.command_id_for_field(key)
+        commands = host.get("commands")
+        if command_id and isinstance(commands, dict):
+            return str(commands.get(command_id, ""))
+        return ""
+
+    def command_display_value(self, host: dict[str, Any], key: str) -> str:
+        value = self.command_override_value(host, key).strip()
+        if value:
+            return value
+        command_id = self.command_id_for_field(key)
+        for command in self.command_defaults_for_host(host):
+            if command["command_id"] == command_id:
+                return f"<default: {command['default']}>"
+        return ""
 
     def normalize_value(self, key: str, value: str) -> str:
         value = value.strip()
@@ -54,6 +94,22 @@ class BoardHostFieldService:
         raw_value: str,
     ) -> dict[str, Any]:
         value = self.normalize_value(key, raw_value)
+        command_id = self.command_id_for_field(key)
+        if command_id:
+            commands = host.setdefault("commands", {})
+            if not isinstance(commands, dict):
+                commands = {}
+                host["commands"] = commands
+            if value:
+                commands[command_id] = value
+            else:
+                commands.pop(command_id, None)
+            config_profiles.sync_active_board_host(config)
+            return {
+                "value": value,
+                "status": f"{key} updated",
+                "connection_reset": False,
+            }
         config_profiles.update_board_host_profile_field(config, host, key, value)
         return {
             "value": value,
@@ -74,6 +130,8 @@ class BoardHostFieldService:
         }
 
     def field_enabled(self, key: str, host: dict[str, Any]) -> bool:
+        if self.command_id_for_field(key):
+            return True
         if key in (
             "name",
             "label",
@@ -101,6 +159,15 @@ class BoardHostFieldService:
         return ""
 
     def field_hint(self, key: str) -> str:
+        return self.field_hint_for_host(key, {"commands": {}, "type": "gen5_x5h"})
+
+    def field_hint_for_host(self, key: str, host: dict[str, Any]) -> str:
+        command_id = self.command_id_for_field(key)
+        if command_id:
+            for command in self.command_defaults_for_host(host):
+                if command["command_id"] == command_id:
+                    return f"{command['description']} Leave empty to use default: {command['default']}"
+            return "Board-host command override. Leave empty to use the board type default."
         hints = {
             "name": "Unique local board host profile id. Renaming an active profile preserves active selection.",
             "label": "Display label shown in the main client header.",

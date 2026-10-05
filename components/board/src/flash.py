@@ -21,6 +21,7 @@ class BoardFlashCommandService:
         work_dir: str,
         artifacts_dir: str,
         tool: Path,
+        console: str = "",
     ) -> list[list[str]]:
         builder = self.command_builder
         remote_tool = builder.board_tool_remote_path(work_dir, tool)
@@ -78,6 +79,9 @@ class BoardFlashCommandService:
         run_flasher_script = (
             "set -euo pipefail\n"
             f"{boot_archive_find}"
+            f"console={shlex.quote(console)}\n"
+            "if [ -z \"$console\" ]; then console=$(ls -1 /dev/GEN5_CONSOLE* 2>/dev/null | head -n 1 || true); fi\n"
+            "if [ -z \"$console\" ]; then echo 'GEN5 console device not found under /dev/GEN5_CONSOLE*' >&2; exit 2; fi\n"
             "if [ -z \"$archive\" ]; then echo 'boot artifacts archive not found under artifacts' >&2; exit 2; fi\n"
             "archive_dir=$(dirname \"$archive\")\n"
             "archive_base=$(basename \"$archive\")\n"
@@ -90,7 +94,8 @@ class BoardFlashCommandService:
             "if [ ! -f \"$ipls_dir/flash_bootloaders.py\" ]; then echo 'flash_bootloaders.py not installed in: '\"$ipls_dir\" >&2; exit 2; fi\n"
             "cd \"$ipls_dir\"\n"
             "echo 'run bootloader flasher from: '\"$PWD\"\n"
-            "PYTHONUNBUFFERED=1 python3 -u ./flash_bootloaders.py --port /dev/GEN5_CONSOLE --config x5h_bootloaders.yaml --mode all\n"
+            "echo 'GEN5 console: '\"$console\"\n"
+            "PYTHONUNBUFFERED=1 python3 -u ./flash_bootloaders.py --port \"$console\" --config x5h_bootloaders.yaml --mode all\n"
             "echo 'bootloader flasher done'\n"
             "echo 'run: x5h_boot'\n"
             "x5h_boot\n"

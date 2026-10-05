@@ -56,6 +56,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
                 "deploy_subdir": "",
                 "server_ip": "",
                 "board_ip": "",
+                "commands": {},
             },
         )
 

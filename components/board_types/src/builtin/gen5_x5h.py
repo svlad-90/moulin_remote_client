@@ -5,8 +5,9 @@ from __future__ import annotations
 import shlex
 import re
 
-from components.board_types.src.base import BoardAction, BoardActionContext, BoardTypeAdapter
+from components.board_types.src.base import BoardAction, BoardActionContext, BoardCommandDefault, BoardTypeAdapter
 from components.config.api import accessors as config_accessors
+from components.config.api import profiles as config_profiles
 from components.moulin.api import manifest as moulin_manifest_api
 from components.remote.api import transport
 
@@ -17,6 +18,41 @@ class Gen5X5hBoardAdapter(BoardTypeAdapter):
     type_id = "gen5_x5h"
     label = "GEN5 X5H"
     description = "GEN5 X5H board connected through a board host."
+
+    def command_defaults(self) -> list[BoardCommandDefault]:
+        return [
+            BoardCommandDefault(
+                "power_off",
+                "Power off command",
+                "x5h_off",
+                "Board-host command that powers the board off.",
+            ),
+            BoardCommandDefault(
+                "power_on",
+                "Power on command",
+                "x5h_on",
+                "Board-host command that powers the board on.",
+            ),
+            BoardCommandDefault(
+                "boot_mode",
+                "Boot mode command",
+                "x5h_boot",
+                "Board-host command that switches the board to normal boot mode.",
+            ),
+            BoardCommandDefault(
+                "flash_mode",
+                "Flash mode command",
+                "x5h_flash",
+                "Board-host command that switches the board to bootloader flash mode.",
+            ),
+        ]
+
+    def board_command(self, ctx: BoardActionContext, command_id: str) -> str:
+        return self.command_value_for_host(config_profiles.active_board_host(ctx.config), command_id)
+
+    def board_command_script(self, ctx: BoardActionContext, command_id: str, label: str) -> str:
+        command = self.board_command(ctx, command_id)
+        return f"echo {shlex.quote(label + ': ' + command)}\n{command}\n"
 
     def rsync_progress_args(self, *, sparse: bool = False) -> list[str]:
         argv = ["rsync", "-az"]
@@ -120,6 +156,8 @@ sys.stdout.buffer.flush()
                 "Initial or refreshed network-boot deploy: copy GEN5 boot artifacts from the build host into the board-host TFTP project directory and update the current symlink.",
                 requires_remote=True,
                 requires_project=True,
+                domains=("dom0",),
+                target_patterns=("boot_artifacts",),
             ),
             BoardAction(
                 "deploy_network_domd_rootfs",
@@ -127,6 +165,8 @@ sys.stdout.buffer.flush()
                 "Initial or refreshed network-boot deploy: copy the DomD rootfs artifact to the board host, extract it into the NFS project directory, and update the current symlink.",
                 requires_remote=True,
                 requires_project=True,
+                domains=("domd",),
+                target_patterns=("domd",),
             ),
             BoardAction(
                 "deploy_network_domu_rootfs",
@@ -134,6 +174,8 @@ sys.stdout.buffer.flush()
                 "Initial or refreshed network-boot deploy: copy the DomU rootfs artifact to the board host, extract it into the NFS project directory, and update the current symlink.",
                 requires_remote=True,
                 requires_project=True,
+                domains=("domu",),
+                target_patterns=("domu",),
             ),
             BoardAction(
                 "deploy_network_android",
@@ -141,13 +183,17 @@ sys.stdout.buffer.flush()
                 "Initial or refreshed network-boot deploy: copy android_only.img from the build host into the board-host NFS project directory and update the current symlink.",
                 requires_remote=True,
                 requires_project=True,
+                domains=("doma",),
+                target_patterns=("android_only.img.gz", "android_only", "doma"),
             ),
             BoardAction(
                 "deploy_network_full",
                 "Deploy full TFTP/NFS set",
-                "First step for a full network-boot setup: deploy TFTP boot artifacts, DomD NFS rootfs, and Android image for the active project.",
+                "First step for a full network-boot setup: deploy the network artifacts that match the active build targets.",
                 requires_remote=True,
                 requires_project=True,
+                domains=("dom0", "domd", "domu", "doma"),
+                target_patterns=("boot_artifacts", "domd", "domu", "android_only.img.gz", "android_only", "doma"),
             ),
             BoardAction(
                 "install_nfs_deploy_helper",
@@ -210,6 +256,7 @@ sys.stdout.buffer.flush()
                 board_host=config_accessors.board_host_spec_for_config(ctx.config),
                 work_dir=config_accessors.board_work_dir_for_config(ctx.config),
                 artifacts_dir=config_accessors.board_artifacts_dir_for_config(ctx.config),
+                console=config_accessors.board_console_device_for_config(ctx.config),
                 tool=ctx.flash_bootloaders_tool,
             )
         if action_id == "flash_ufs_image":
@@ -240,11 +287,7 @@ sys.stdout.buffer.flush()
         if action_id == "deploy_network_android":
             return self.deploy_network_android_command_plan(ctx)
         if action_id == "deploy_network_full":
-            return (
-                self.deploy_network_boot_command_plan(ctx)
-                + self.deploy_network_domd_rootfs_command_plan(ctx)
-                + self.deploy_network_android_command_plan(ctx)
-            )
+            return self.deploy_network_full_command_plan(ctx)
         if action_id == "install_nfs_deploy_helper":
             return self.install_nfs_deploy_helper_command_plan(ctx)
         if action_id == "pull_network_workspace":
@@ -599,6 +642,29 @@ echo "rootfs deploy: done" >&2
             transport.ssh_command(paths["build_host"], "bash -lc " + shlex.quote(build_script)),
         ]
 
+    def deploy_network_full_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
+        targets = set(shlex.split(ctx.artifact_targets or ""))
+        if not targets:
+            targets = {"boot_artifacts", "domd", "domu", "android_only.img.gz", "doma"}
+        domains = ctx.active_domains or frozenset({"dom0", "domd", "domu", "doma"})
+        commands: list[list[str]] = []
+        if "dom0" in domains and "boot_artifacts" in targets:
+            commands += self.deploy_network_boot_command_plan(ctx)
+        if "domd" in domains and "domd" in targets:
+            commands += self.deploy_network_domd_rootfs_command_plan(ctx)
+        if "domu" in domains and "domu" in targets:
+            commands += self.deploy_network_domu_rootfs_command_plan(ctx)
+        if "doma" in domains and targets.intersection({"android_only.img.gz", "android_only", "doma"}):
+            commands += self.deploy_network_android_command_plan(ctx)
+        if not commands:
+            return [
+                ctx.command_builder.local_log_command(
+                    "No network deploy artifacts match the active build targets",
+                    exit_code=1,
+                )
+            ]
+        return commands
+
     def pull_network_workspace_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
         builder = ctx.command_builder
         paths = self.network_paths(ctx)
@@ -808,6 +874,13 @@ echo "rootfs deploy: done" >&2
         env_lines = self.uboot_network_env_lines(ctx)
         serial_script = "\n".join(env_lines) + "\n"
         env_echo_script = "".join(f"echo {shlex.quote(line)}\n" for line in env_lines)
+        power_script = (
+            self.board_command_script(ctx, "power_off", "board power")
+            + "sleep 1\n"
+            + self.board_command_script(ctx, "boot_mode", "board boot mode")
+            + "sleep 1\n"
+            + self.board_command_script(ctx, "power_on", "board power")
+        )
         script = (
             "set -euo pipefail\n"
             "echo 'Apply U-Boot network env'\n"
@@ -817,14 +890,7 @@ echo "rootfs deploy: done" >&2
             "if [ -z \"$console\" ]; then echo 'GEN5 console device not found under /dev/GEN5_CONSOLE*' >&2; exit 2; fi\n"
             "echo 'Apply U-Boot network env over: '\"$console\"\n"
             "echo 'The board will be power-cycled, switched to boot mode, stopped at U-Boot, then updated.'\n"
-            "echo 'board power: x5h_off'\n"
-            "x5h_off\n"
-            "sleep 1\n"
-            "echo 'board boot mode: x5h_boot'\n"
-            "x5h_boot\n"
-            "sleep 1\n"
-            "echo 'board power: x5h_on'\n"
-            "x5h_on\n"
+            f"{power_script}"
             "python3 - \"$console\" <<'PY'\n"
             "import serial\n"
             "import sys\n"
@@ -905,6 +971,14 @@ echo "rootfs deploy: done" >&2
 
     def uboot_ufs_env_lines(self) -> list[str]:
         return [
+            "setenv fdt_high 0xffffffffffffffff",
+            "setenv bootm_size 0x10000000",
+            "setenv ufs_dtb_load 'ext2load scsi 1:1 0x54000000 xen.dtb && fdt addr 0x54000000 && fdt resize && fdt mknode / boot_dev && fdt set /boot_dev device sda'",
+            "setenv ufs_initramfs_load 'ext2load scsi 1:1 0x50000000 uInitramfs'",
+            "setenv ufs_kernel_load 'ext2load scsi 1:1 0x64000000 Image'",
+            "setenv ufs_xen_load 'ext2load scsi 1:1 0x54080000 xen'",
+            "setenv ufs_xenpolicy_load 'ext2load scsi 1:1 0x53000000 xenpolicy'",
+            "setenv bootcmd_ufs 'env delete bootargs; scsi scan; run ufs_xen_load && run ufs_dtb_load && run ufs_kernel_load && run ufs_xenpolicy_load && run ufs_initramfs_load && bootm 0x54080000 0x50000000 0x54000000'",
             "setenv bootcmd 'run bootcmd_ufs'",
             "saveenv",
         ]
@@ -915,6 +989,13 @@ echo "rootfs deploy: done" >&2
         env_lines = self.uboot_ufs_env_lines()
         serial_script = "\n".join(env_lines) + "\n"
         env_echo_script = "".join(f"echo {shlex.quote(line)}\n" for line in env_lines)
+        power_script = (
+            self.board_command_script(ctx, "power_off", "board power")
+            + "sleep 1\n"
+            + self.board_command_script(ctx, "boot_mode", "board boot mode")
+            + "sleep 1\n"
+            + self.board_command_script(ctx, "power_on", "board power")
+        )
         script = (
             "set -euo pipefail\n"
             "echo 'Apply U-Boot UFS env'\n"
@@ -923,22 +1004,77 @@ echo "rootfs deploy: done" >&2
             "if [ -z \"$console\" ]; then console=$(ls -1 /dev/GEN5_CONSOLE* 2>/dev/null | head -n 1 || true); fi\n"
             "if [ -z \"$console\" ]; then echo 'GEN5 console device not found under /dev/GEN5_CONSOLE*' >&2; exit 2; fi\n"
             "echo 'Apply U-Boot UFS env over: '\"$console\"\n"
-            "echo 'The board must be stopped at the U-Boot prompt before this command writes to serial.'\n"
+            "echo 'The board will be power-cycled, switched to boot mode, stopped at U-Boot, then updated.'\n"
+            f"{power_script}"
             "python3 - \"$console\" <<'PY'\n"
             "import serial\n"
             "import sys\n"
             "import time\n"
             "\n"
             f"commands = {serial_script!r}\n"
+            "verify_command = 'printenv bootcmd bootcmd_ufs ufs_dtb_load ufs_xen_load ufs_kernel_load ufs_xenpolicy_load ufs_initramfs_load'\n"
+            "\n"
+            "def read_available(conn, duration=1.0):\n"
+            "    deadline = time.monotonic() + duration\n"
+            "    chunks = []\n"
+            "    while time.monotonic() < deadline:\n"
+            "        data = conn.read(4096)\n"
+            "        if data:\n"
+            "            chunks.append(data)\n"
+            "            deadline = time.monotonic() + 0.2\n"
+            "    return b''.join(chunks).decode('utf-8', errors='replace')\n"
+            "\n"
+            "def stop_at_uboot(conn):\n"
+            "    try:\n"
+            "        conn.reset_input_buffer()\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "    deadline = time.monotonic() + 45.0\n"
+            "    next_key = 0.0\n"
+            "    transcript = ''\n"
+            "    while time.monotonic() < deadline:\n"
+            "        data = conn.read(4096)\n"
+            "        if data:\n"
+            "            text = data.decode('utf-8', errors='replace')\n"
+            "            transcript += text\n"
+            "            print(text, end='' if text.endswith('\\n') else '\\n', flush=True)\n"
+            "            if '=>' in transcript or 'U-Boot>' in transcript:\n"
+            "                print('Detected U-Boot prompt.', flush=True)\n"
+            "                return\n"
+            "        now = time.monotonic()\n"
+            "        if now >= next_key:\n"
+            "            conn.write(b'\\r')\n"
+            "            conn.flush()\n"
+            "            next_key = now + 0.2\n"
+            "    raise RuntimeError('Timed out waiting for U-Boot prompt after board reset')\n"
+            "\n"
+            "def send_line(conn, line, prefix='uboot', read_response=True):\n"
+            "    print(f'{prefix}: {line}', flush=True)\n"
+            "    conn.write((line + '\\r').encode('ascii'))\n"
+            "    conn.flush()\n"
+            "    time.sleep(0.12)\n"
+            "    if not read_response:\n"
+            "        return ''\n"
+            "    output = read_available(conn, 0.35)\n"
+            "    if output.strip():\n"
+            "        print(output, end='' if output.endswith('\\n') else '\\n', flush=True)\n"
+            "    return output\n"
+            "\n"
             "conn = serial.Serial(port=sys.argv[1], baudrate=1843200, timeout=0.2)\n"
             "try:\n"
-            "    conn.write(b'\\r')\n"
-            "    time.sleep(0.2)\n"
+            "    stop_at_uboot(conn)\n"
+            "    probe = send_line(conn, 'printenv bootcmd', prefix='probe')\n"
+            "    if 'bootcmd=' not in probe:\n"
+            "        print('ERROR: U-Boot prompt was not detected; refusing to write U-Boot environment blindly.', file=sys.stderr)\n"
+            "        sys.exit(3)\n"
             "    for line in commands.splitlines():\n"
-            "        print('uboot:', line, flush=True)\n"
-            "        conn.write((line + '\\r').encode('ascii'))\n"
-            "        conn.flush()\n"
-            "        time.sleep(0.25)\n"
+            "        send_line(conn, line, read_response=False)\n"
+            "    time.sleep(0.5)\n"
+            "    trailing = read_available(conn, 0.2)\n"
+            "    if trailing.strip():\n"
+            "        print(trailing, end='' if trailing.endswith('\\n') else '\\n', flush=True)\n"
+            "    print('Verify saved U-Boot UFS env', flush=True)\n"
+            "    send_line(conn, verify_command, prefix='verify')\n"
             "finally:\n"
             "    conn.close()\n"
             "PY\n"
@@ -952,14 +1088,11 @@ echo "rootfs deploy: done" >&2
         board_host = config_accessors.board_host_spec_for_config(ctx.config)
         script = (
             "set -euo pipefail\n"
-            "echo 'board power: x5h_off'\n"
-            "x5h_off\n"
+            f"{self.board_command_script(ctx, 'power_off', 'board power')}"
             "sleep 1\n"
-            "echo 'board boot mode: x5h_boot'\n"
-            "x5h_boot\n"
+            f"{self.board_command_script(ctx, 'boot_mode', 'board boot mode')}"
             "sleep 1\n"
-            "echo 'board power: x5h_on'\n"
-            "x5h_on\n"
+            f"{self.board_command_script(ctx, 'power_on', 'board power')}"
         )
         return [
             builder.board_ssh_command(board_host, script, tty=True),
@@ -978,16 +1111,16 @@ echo "rootfs deploy: done" >&2
         restart_script = ""
         sequence = "picocom"
         if restart:
-            sequence = "x5h_off, x5h_boot, x5h_on, picocom"
+            power_off = self.board_command(ctx, "power_off")
+            boot_mode = self.board_command(ctx, "boot_mode")
+            power_on = self.board_command(ctx, "power_on")
+            sequence = f"{power_off}, {boot_mode}, {power_on}, picocom"
             restart_script = (
-                "echo 'board power: x5h_off'\n"
-                "x5h_off\n"
-                "sleep 1\n"
-                "echo 'board boot mode: x5h_boot'\n"
-                "x5h_boot\n"
-                "sleep 1\n"
-                "echo 'board power: x5h_on'\n"
-                "x5h_on\n"
+                self.board_command_script(ctx, "power_off", "board power")
+                + "sleep 1\n"
+                + self.board_command_script(ctx, "boot_mode", "board boot mode")
+                + "sleep 1\n"
+                + self.board_command_script(ctx, "power_on", "board power")
             )
         script = (
             "set -euo pipefail\n"
@@ -1020,16 +1153,19 @@ echo "rootfs deploy: done" >&2
         board_host: str,
         work_dir: str,
         artifacts_dir: str,
+        console: str,
         tool: object,
     ) -> list[list[str]]:
         builder = ctx.command_builder
         remote_tool = builder.board_tool_remote_path(work_dir, tool)
+        flash_mode = self.board_command(ctx, "flash_mode")
+        boot_mode = self.board_command(ctx, "boot_mode")
         enter_flash_script = (
             "set -euo pipefail\n"
             f"cd {builder.quote_remote_shell_path(work_dir)}\n"
-            "echo 'run: x5h_flash'\n"
-            "x5h_flash\n"
-            "echo 'done: x5h_flash'\n"
+            f"echo {shlex.quote('run: ' + flash_mode)}\n"
+            f"{flash_mode}\n"
+            f"echo {shlex.quote('done: ' + flash_mode)}\n"
         )
         boot_archive_find = (
             f"archive=$(find {builder.quote_remote_shell_path(artifacts_dir)} -type f \\( "
@@ -1078,6 +1214,9 @@ echo "rootfs deploy: done" >&2
         run_flasher_script = (
             "set -euo pipefail\n"
             f"{boot_archive_find}"
+            f"console={shlex.quote(console)}\n"
+            "if [ -z \"$console\" ]; then console=$(ls -1 /dev/GEN5_CONSOLE* 2>/dev/null | head -n 1 || true); fi\n"
+            "if [ -z \"$console\" ]; then echo 'GEN5 console device not found under /dev/GEN5_CONSOLE*' >&2; exit 2; fi\n"
             "if [ -z \"$archive\" ]; then echo 'boot artifacts archive not found under artifacts' >&2; exit 2; fi\n"
             "archive_dir=$(dirname \"$archive\")\n"
             "archive_base=$(basename \"$archive\")\n"
@@ -1090,11 +1229,12 @@ echo "rootfs deploy: done" >&2
             "if [ ! -f \"$ipls_dir/flash_bootloaders.py\" ]; then echo 'flash_bootloaders.py not installed in: '\"$ipls_dir\" >&2; exit 2; fi\n"
             "cd \"$ipls_dir\"\n"
             "echo 'run bootloader flasher from: '\"$PWD\"\n"
-            "PYTHONUNBUFFERED=1 python3 -u ./flash_bootloaders.py --port /dev/GEN5_CONSOLE --config x5h_bootloaders.yaml --mode all\n"
+            "echo 'GEN5 console: '\"$console\"\n"
+            "PYTHONUNBUFFERED=1 python3 -u ./flash_bootloaders.py --port \"$console\" --config x5h_bootloaders.yaml --mode all\n"
             "echo 'bootloader flasher done'\n"
-            "echo 'run: x5h_boot'\n"
-            "x5h_boot\n"
-            "echo 'done: x5h_boot'\n"
+            f"echo {shlex.quote('run: ' + boot_mode)}\n"
+            f"{boot_mode}\n"
+            f"echo {shlex.quote('done: ' + boot_mode)}\n"
         )
         return [
             builder.board_prepare_work_dir_command(board_host, artifacts_dir),
@@ -1121,6 +1261,9 @@ echo "rootfs deploy: done" >&2
         remote_tool = builder.board_tool_remote_path(work_dir, tool)
         helper_tool = self.ufs_helper_tool(ctx)
         remote_helper = builder.board_tool_remote_path(work_dir, helper_tool)
+        power_off_script = self.board_command_script(ctx, "power_off", "board power")
+        power_on_script = self.board_command_script(ctx, "power_on", "board power")
+        boot_mode_script = self.board_command_script(ctx, "boot_mode", "board boot mode")
         extra_args = []
         if loadaddr:
             extra_args.extend(["--loadaddr", shlex.quote(loadaddr)])
@@ -1137,19 +1280,14 @@ echo "rootfs deploy: done" >&2
             "if [ -z \"$console\" ]; then echo 'GEN5 console device not found under /dev/GEN5_CONSOLE*' >&2; exit 2; fi\n"
             "echo 'flash UFS image: '\"$image\"\n"
             "echo 'GEN5 console: '\"$console\"\n"
-            "echo 'board power: x5h_off'\n"
-            "x5h_off\n"
+            f"{power_off_script}"
             "sleep 1\n"
-            "echo 'board power: x5h_on'\n"
-            "x5h_on\n"
+            f"{power_on_script}"
             "sleep 1\n"
-            "echo 'board boot mode: x5h_boot'\n"
-            "x5h_boot\n"
-            "echo 'board power after boot mode: x5h_off'\n"
-            "x5h_off\n"
+            f"{boot_mode_script}"
+            f"{self.board_command_script(ctx, 'power_off', 'board power after boot mode')}"
             "sleep 1\n"
-            "echo 'board power after boot mode: x5h_on'\n"
-            "x5h_on\n"
+            f"{self.board_command_script(ctx, 'power_on', 'board power after boot mode')}"
             "sleep 1\n"
             "echo 'board console: drain stale output before xt-imager'\n"
             "python3 - \"$console\" <<'PY'\n"

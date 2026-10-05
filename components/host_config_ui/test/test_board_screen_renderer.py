@@ -128,6 +128,45 @@ class BoardScreenRendererTests(unittest.TestCase):
 
         self.assertTrue(any(row[0] == 25 and "shown in the main client header" in row[2] for row in port.rows))
 
+    def test_render_scrolls_field_rows_to_selected_command(self) -> None:
+        cfg = config()
+        cfg["board_hosts"][0]["type"] = "gen5_x5h"
+        port = FakeRenderPort()
+        state = board_screen_state.BoardScreenStateController(cfg)
+        state.state.host_index_initialized = True
+        state.state.focus = "fields"
+        fields = [
+            ("Profile name", "name"),
+            ("Display label", "label"),
+            ("Board type", "type"),
+            ("SSH user", "user"),
+            ("SSH host", "host"),
+            ("Working dir", "work_dir"),
+            ("Console device", "console_device"),
+            ("UFS load addr", "ufs_loadaddr"),
+            ("UFS buffer size", "ufs_buffersize"),
+            ("TFTP root", "tftp_root"),
+            ("NFS root", "nfs_root"),
+            ("Deploy subdir", "deploy_subdir"),
+            ("TFTP server IP", "server_ip"),
+            ("Target board IP", "board_ip"),
+            ("Direct copy", "direct_copy"),
+            ("Power off command", "command_power_off"),
+            ("Power on command", "command_power_on"),
+            ("Boot mode command", "command_boot_mode"),
+        ]
+        state.state.field_index = len(fields) - 1
+        renderer = board_screen_renderer.BoardScreenRenderer(
+            cfg,
+            board_host_fields_factory=lambda _host: fields,
+        )
+
+        renderer.render(port, height=24, width=120, screen_state=state)
+
+        rendered = [row[2] for row in port.rows]
+        self.assertTrue(any("Boot mode command:" in row for row in rendered))
+        self.assertFalse(any("Profile name:" in row for row in rendered))
+
 
 if __name__ == "__main__":
     unittest.main()

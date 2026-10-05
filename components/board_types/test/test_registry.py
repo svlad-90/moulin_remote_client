@@ -47,6 +47,21 @@ class BoardTypeRegistryTests(unittest.TestCase):
             ],
         )
 
+    def test_gen5_x5h_adapter_declares_board_host_command_defaults(self) -> None:
+        adapter = registry.board_type_registry().adapter_for_type("gen5_x5h")
+
+        self.assertEqual(
+            [(command.command_id, command.default) for command in adapter.command_defaults()],
+            [
+                ("power_off", "x5h_off"),
+                ("power_on", "x5h_on"),
+                ("boot_mode", "x5h_boot"),
+                ("flash_mode", "x5h_flash"),
+            ],
+        )
+        self.assertEqual(adapter.command_value_for_host({"commands": {"power_off": "lab-off"}}, "power_off"), "lab-off")
+        self.assertEqual(adapter.command_value_for_host({"commands": {"power_off": ""}}, "power_off"), "x5h_off")
+
 
 if __name__ == "__main__":
     unittest.main()

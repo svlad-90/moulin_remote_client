@@ -223,8 +223,94 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("bootm 0x54080000 0x50000000 0x54000000", uboot[0][-1])
         self.assertIn("setenv bootcmd", uboot[0][-1])
         self.assertIn("run bootcmd_tftp", uboot[0][-1])
+        self.assertIn("The board will be power-cycled, switched to boot mode, stopped at U-Boot, then updated.", ufs[0][-1])
+        self.assertIn("x5h_off", ufs[0][-1])
+        self.assertIn("x5h_boot", ufs[0][-1])
+        self.assertIn("x5h_on", ufs[0][-1])
+        self.assertIn("setenv ufs_dtb_load", ufs[0][-1])
+        self.assertIn("setenv ufs_initramfs_load", ufs[0][-1])
+        self.assertIn("setenv ufs_kernel_load", ufs[0][-1])
+        self.assertIn("setenv ufs_xen_load", ufs[0][-1])
+        self.assertIn("setenv ufs_xenpolicy_load", ufs[0][-1])
+        self.assertIn("setenv bootcmd_ufs", ufs[0][-1])
         self.assertIn("bootcmd_ufs", ufs[0][-1])
+        self.assertIn("printenv bootcmd bootcmd_ufs", ufs[0][-1])
         self.assertIn("saveenv", ufs[0][-1])
+        self.assertNotIn("The board must be stopped at the U-Boot prompt", ufs[0][-1])
+
+    def test_full_network_deploy_uses_active_artifact_targets(self) -> None:
+        config = sample_copy_config()
+        config["board_hosts"][0].update(
+            {
+                "tftp_root": "/srv/tftp",
+                "nfs_root": "/srv/nfs",
+                "deploy_subdir": "vgoncharuk/projects",
+            }
+        )
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_board_host_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        service = self._service()
+
+        commands = service.board_action_commands(
+            config,
+            "deploy_network_full",
+            artifact_targets="boot_artifacts domd domu",
+        )
+        script = "\n".join(command[-1] for command in commands)
+
+        self.assertIn("Deploy TFTP boot artifacts", script)
+        self.assertIn("Deploy DomD NFS rootfs", script)
+        self.assertIn("Deploy DomU NFS rootfs", script)
+        self.assertNotIn("Deploy Android image to NFS", script)
+        self.assertNotIn("android_only.img", script)
+
+    def test_full_network_deploy_uses_active_manifest_domains(self) -> None:
+        config = sample_copy_config()
+        config["board_hosts"][0].update(
+            {
+                "tftp_root": "/srv/tftp",
+                "nfs_root": "/srv/nfs",
+                "deploy_subdir": "vgoncharuk/projects",
+            }
+        )
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_board_host_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        manifest_text = "\n".join(
+            [
+                "min_ver: '1.0'",
+                "components:",
+                "  boot_artifacts:",
+                "    builder:",
+                "      type: custom_script",
+                "  domd:",
+                "    builder:",
+                "      type: yocto",
+                "      build_target: rcar-image-adas",
+                "  domu:",
+                "    builder:",
+                "      type: yocto",
+                "      build_target: domu-image",
+                "  doma:",
+                "    builder:",
+                "      type: android",
+            ]
+        )
+        service = self._service(remote_read_project_file=lambda _config, _path: manifest_text)
+
+        commands = service.board_action_commands(
+            config,
+            "deploy_network_full",
+            artifact_targets="boot_artifacts domd domu doma",
+            build_params={"ENABLE_ANDROID": "no"},
+        )
+        script = "\n".join(command[-1] for command in commands)
+
+        self.assertIn("Deploy TFTP boot artifacts", script)
+        self.assertIn("Deploy DomD NFS rootfs", script)
+        self.assertIn("Deploy DomU NFS rootfs", script)
+        self.assertNotIn("Deploy Android image to NFS", script)
 
     def test_uboot_network_env_uses_manifest_yocto_guest_domains(self) -> None:
         config = sample_copy_config()
@@ -388,6 +474,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(len(bootloaders), 6)
         self.assertIn("x5h_flash", bootloaders[2][-1])
         self.assertIn("python3 -u ./flash_bootloaders.py", bootloaders[5][-1])
+        self.assertIn('PYTHONUNBUFFERED=1 python3 -u ./flash_bootloaders.py --port "$console"', bootloaders[5][-1])
         self.assertEqual(len(ufs), 4)
         self.assertIn("gen5_x5h_flash_ufs.py", ufs[2][-1])
         self.assertIn("x5h_boot", ufs[3][-1])
@@ -398,6 +485,44 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("x5h_off", restart[0][-1])
         self.assertIn("x5h_boot", restart[0][-1])
         self.assertIn("x5h_on", restart[0][-1])
+
+    def test_flash_bootloaders_uses_configured_console_device(self) -> None:
+        config = sample_config()
+        config["board_hosts"][0]["console_device"] = "/dev/GEN5_CONSOLE2"
+        config_profiles.normalize_board_host_profiles(config)
+        service = self._service()
+
+        bootloaders = service.flash_bootloaders_commands(config)
+        script = bootloaders[5][-1]
+
+        self.assertIn("console=/dev/GEN5_CONSOLE2", script)
+        self.assertIn('PYTHONUNBUFFERED=1 python3 -u ./flash_bootloaders.py --port "$console"', script)
+        self.assertNotIn("--port /dev/GEN5_CONSOLE --config", script)
+
+    def test_board_host_command_overrides_replace_board_type_defaults(self) -> None:
+        config = sample_config()
+        config["board_hosts"][0]["commands"] = {
+            "power_off": "relayctl off",
+            "power_on": "relayctl on",
+            "boot_mode": "relayctl boot",
+            "flash_mode": "relayctl flash",
+        }
+        config_profiles.normalize_board_host_profiles(config)
+        service = self._service()
+
+        bootloaders = service.flash_bootloaders_commands(config)
+        ufs = service.flash_ufs_image_commands(config)
+        restart = service.board_action_commands(config, "restart_board")
+
+        self.assertIn("relayctl flash", bootloaders[2][-1])
+        self.assertIn("relayctl boot", bootloaders[5][-1])
+        self.assertIn("gen5_x5h_flash_ufs.py", ufs[2][-1])
+        self.assertIn("python3 /srv/tftp/vgon/gen5_x5h_flash_ufs.py", ufs[3][-1])
+        self.assertIn("relayctl off", restart[0][-1])
+        self.assertIn("relayctl boot", restart[0][-1])
+        self.assertIn("relayctl on", restart[0][-1])
+        self.assertNotIn("x5h_flash", bootloaders[2][-1])
+        self.assertNotIn("x5h_off", restart[0][-1])
 
     def test_workflow_runs_flash_scenarios_with_titles(self) -> None:
         config = sample_config()

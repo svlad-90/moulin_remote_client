@@ -7,7 +7,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 
-def empty_host_profile(name: str = "") -> dict[str, str]:
+def empty_host_profile(name: str = "") -> dict[str, Any]:
     return {
         "name": name,
         "label": name,
@@ -24,6 +24,7 @@ def empty_host_profile(name: str = "") -> dict[str, str]:
         "deploy_subdir": "",
         "server_ip": "",
         "board_ip": "",
+        "commands": {},
     }
 
 
@@ -391,6 +392,9 @@ def normalize_board_host_profiles(config: dict[str, Any]) -> None:
         host.setdefault("console_device", "")
         host.setdefault("ufs_loadaddr", "")
         host.setdefault("ufs_buffersize", "")
+        commands = host.get("commands")
+        if not isinstance(commands, dict):
+            host["commands"] = {}
     if not hosts:
         config["active_board_host"] = ""
         sync_active_board_host(config)
