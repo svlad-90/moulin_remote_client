@@ -71,6 +71,9 @@ class FakeConfigWorkflow:
     def select_build_targets(self, _port: Any) -> None:
         self.calls.append("targets")
 
+    def select_board_artifacts(self, _port: Any) -> None:
+        self.calls.append("board-artifacts")
+
 
 class FakeDialogWorkflow:
     def __init__(self) -> None:
@@ -94,7 +97,7 @@ class FakeApp:
         self.docker_image = "demo-image"
         self.build_params = {"ENABLE_ANDROID": "yes"}
         self.build_targets = "full_ufs.img.gz"
-        self.board_artifacts = "full_ufs.img.gz"
+        self.board_artifacts = "boot_artifacts domd domu android_only.img.gz"
         self.workflow = FakeWorkflow()
         self.terminal_session = FakeTerminalSession()
         self.config_workflow = FakeConfigWorkflow()
@@ -281,11 +284,26 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertIn("Select build host", [item.label for item in menu_items if item.group == "sessions / build host"])
             self.assertIn("Select board host", [item.label for item in menu_items if item.group == "sessions / board host"])
             flashing_labels = [item.label for item in menu_items if item.group == "flashing / commands"]
+            flashing_configuration_labels = [item.label for item in menu_items if item.group == "flashing / configuration"]
             flashing_host_labels = [item.label for item in menu_items if item.group == "flashing / hosts"]
             board_host_labels = [item.label for item in menu_items if item.group == "flashing / board host"]
+            self.assertEqual(flashing_configuration_labels, ["Configure copied artifacts"])
             self.assertIn("Copy build artifacts", flashing_labels)
             self.assertIn("Flash UFS image", flashing_labels)
             self.assertEqual(flashing_host_labels, ["Open build host shell", "Open board host shell"])
+            flashing_order = [
+                (item.group, item.label)
+                for item in menu_items
+                if item.group.startswith("flashing / ")
+            ]
+            self.assertLess(
+                flashing_order.index(("flashing / hosts", "Open board host shell")),
+                flashing_order.index(("flashing / configuration", "Configure copied artifacts")),
+            )
+            self.assertLess(
+                flashing_order.index(("flashing / configuration", "Configure copied artifacts")),
+                flashing_order.index(("flashing / commands", "Copy build artifacts")),
+            )
             self.assertEqual(
                 board_host_labels,
                 [
@@ -1232,6 +1250,116 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertNotIn("x5h_off", app.terminal_session.commands[0][-1])
             self.assertIn("x5h_off", app.terminal_session.commands[1][-1])
             self.assertIn("picocom -b 1843200", app.terminal_session.commands[1][-1])
+
+    def test_configure_copied_artifacts_opens_board_artifact_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            menu_items = builder.build_items(app)
+
+            item = next(item for item in menu_items if item.label == "Configure copied artifacts")
+            self.assertEqual(item.group, "flashing / configuration")
+
+            item.handler(app)
+
+            self.assertEqual(app.config_workflow.calls, ["board-artifacts"])
+            self.assertEqual(app.workflow.command_calls, [])
+
+    def test_network_deploy_menu_keeps_individual_actions_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.board_artifacts = "boot_artifacts domd domu"
+
+            labels = [
+                item.label
+                for item in builder.command_items.board_action_items(app)
+                if item.group == "tftp/nfs / deploy artifacts"
+            ]
+
+            self.assertEqual(
+                labels,
+                [
+                    "Deploy TFTP boot artifacts",
+                    "Deploy DomD NFS rootfs",
+                    "Deploy DomU NFS rootfs",
+                    "Deploy Android image to NFS",
+                    "Deploy full TFTP/NFS set",
+                ],
+            )
+
+    def test_network_deploy_menu_uses_active_manifest_domains(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  boot_artifacts:",
+                    "    builder:",
+                    "      type: custom_script",
+                    "  domd:",
+                    "    builder:",
+                    "      type: yocto",
+                    "      build_target: rcar-image-adas",
+                    "  domu:",
+                    "    builder:",
+                    "      type: yocto",
+                    "      build_target: domu-image",
+                    "  doma:",
+                    "    builder:",
+                    "      type: android",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.build_params = {"ENABLE_ANDROID": "no"}
+            app.board_artifacts = "boot_artifacts domd domu doma"
+
+            labels = [
+                item.label
+                for item in builder.command_items.board_action_items(app)
+                if item.group == "tftp/nfs / deploy artifacts"
+            ]
+
+            self.assertEqual(
+                labels,
+                [
+                    "Deploy TFTP boot artifacts",
+                    "Deploy DomD NFS rootfs",
+                    "Deploy DomU NFS rootfs",
+                    "Deploy full TFTP/NFS set",
+                ],
+            )
 
 
 if __name__ == "__main__":

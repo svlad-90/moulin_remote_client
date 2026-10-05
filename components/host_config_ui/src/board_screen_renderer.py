@@ -35,7 +35,7 @@ class BoardScreenRenderer:
         self,
         config: dict[str, Any],
         *,
-        board_host_fields_factory: Callable[[], list[tuple[str, str]]],
+        board_host_fields_factory: Callable[..., list[tuple[str, str]]],
         board_field_service: config_field_api.BoardHostFieldService | None = None,
     ) -> None:
         self.config = config
@@ -52,7 +52,9 @@ class BoardScreenRenderer:
     ) -> BoardScreenRenderResult:
         state = screen_state.state
         hosts = screen_state.hosts()
-        fields = self.board_host_fields_factory()
+        screen_state.sync_selection(hosts, [])
+        selected_host = screen_state.selected_host(hosts)
+        fields = self._board_host_fields(selected_host)
         screen_state.sync_selection(hosts, fields)
         selected_host = screen_state.selected_host(hosts)
 
@@ -160,9 +162,11 @@ class BoardScreenRenderer:
         display_rows = self._field_display_rows(fields)
         hint_row = panel_top + panel_height - 2
         visible_fields = max(0, hint_row - row)
+        display_scroll = self._field_display_scroll(display_rows, state.field_index, visible_fields)
         editing_cursor_yx = self._render_field_rows(
             port,
             display_rows,
+            display_scroll,
             selected_host,
             row,
             visible_fields,
@@ -170,7 +174,7 @@ class BoardScreenRenderer:
             detail_w,
             state,
         )
-        self._render_field_hint(port, fields, hint_row, detail_x, detail_w, state)
+        self._render_field_hint(port, fields, selected_host, hint_row, detail_x, detail_w, state)
         return editing_cursor_yx
 
     def _field_display_rows(self, fields: list[tuple[str, str]]) -> list[BoardFieldDisplayRow]:
@@ -186,21 +190,50 @@ class BoardScreenRenderer:
             rows.append(BoardFieldDisplayRow(label, key, field_index))
         return rows
 
+    def _field_display_scroll(
+        self,
+        display_rows: list[BoardFieldDisplayRow],
+        selected_field_index: int,
+        visible_rows: int,
+    ) -> int:
+        if visible_rows <= 0 or len(display_rows) <= visible_rows:
+            return 0
+        selected_display_index = 0
+        for index, row in enumerate(display_rows):
+            if row.field_index == selected_field_index:
+                selected_display_index = index
+                break
+        return min(
+            max(0, selected_display_index - visible_rows + 1),
+            max(0, len(display_rows) - visible_rows),
+        )
+
     def _field_group_for_key(self, key: str) -> str:
         if key in {"name", "label", "type"}:
             return "PROFILE"
-        if key in {"user", "host", "work_dir"}:
+        if key in {"user", "host", "work_dir", "direct_copy"}:
             return "SSH"
-        if key in {"console_device", "ufs_loadaddr", "ufs_buffersize", "direct_copy"}:
+        if key in {"console_device", "ufs_loadaddr", "ufs_buffersize"}:
             return "FLASHING"
         if key in {"tftp_root", "nfs_root", "deploy_subdir", "server_ip", "board_ip"}:
             return "NETWORK BOOT"
+        if key.startswith("command_"):
+            return "COMMANDS"
         return "OTHER"
+
+    def _board_host_fields(self, selected_host: dict[str, Any] | None) -> list[tuple[str, str]]:
+        if selected_host is None:
+            return self.board_host_fields_factory()
+        try:
+            return self.board_host_fields_factory(selected_host)
+        except TypeError:
+            return self.board_host_fields_factory()
 
     def _render_field_rows(
         self,
         port: Any,
         display_rows: list[BoardFieldDisplayRow],
+        display_scroll: int,
         selected_host: dict[str, Any],
         row: int,
         visible_fields: int,
@@ -209,7 +242,7 @@ class BoardScreenRenderer:
         state: config_board_screen_state_api.BoardScreenState,
     ) -> tuple[int, int] | None:
         editing_cursor_yx: tuple[int, int] | None = None
-        for display_row in display_rows[:visible_fields]:
+        for display_row in display_rows[display_scroll : display_scroll + visible_fields]:
             if display_row.group:
                 attr = port.accent_attr() if display_row.label else 0
                 port.add(row, detail_x, ui_text_api.fit_text(display_row.label, detail_w).ljust(detail_w), attr)
@@ -218,7 +251,12 @@ class BoardScreenRenderer:
             label = display_row.label
             key = display_row.key
             is_editing = state.focus == "fields" and key == state.editing_key
-            raw_value = state.editing_value if is_editing else str(selected_host.get(key, ""))
+            if is_editing:
+                raw_value = state.editing_value
+            elif key.startswith("command_"):
+                raw_value = self.board_field_service.command_display_value(selected_host, key)
+            else:
+                raw_value = str(selected_host.get(key, ""))
             enabled = self.board_field_service.field_enabled(key, selected_host)
             row_model = config_field_api.host_field_row_model(
                 label=label,
@@ -241,6 +279,7 @@ class BoardScreenRenderer:
         self,
         port: Any,
         fields: list[tuple[str, str]],
+        selected_host: dict[str, Any],
         row: int,
         detail_x: int,
         detail_w: int,
@@ -252,7 +291,7 @@ class BoardScreenRenderer:
         if state.editing_key:
             port.add(row, detail_x, "Enter: save | Esc: cancel | Left/Right/Home/End: move cursor"[:detail_w], port.accent_attr())
             return
-        port.add(row, detail_x, self.board_field_service.field_hint(selected_key)[:detail_w], port.accent_attr())
+        port.add(row, detail_x, self.board_field_service.field_hint_for_host(selected_key, selected_host)[:detail_w], port.accent_attr())
 
     def _render_footer(self, port: Any, height: int, width: int) -> None:
         footer = "Left/Right: hosts/fields | Enter: edit/save | a: add | d: delete | s: set active | Esc: hosts/back | q: back"

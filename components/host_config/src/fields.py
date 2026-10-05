@@ -9,14 +9,15 @@ from components.host_config.api import host_fields
 from components.config.api import profiles as config_profiles
 
 
-def board_host_fields() -> list[tuple[str, str]]:
-    return [
+def board_host_fields(host: dict[str, Any] | None = None) -> list[tuple[str, str]]:
+    fields = [
         ("Profile name", "name"),
         ("Display label", "label"),
         ("Board type", "type"),
         ("SSH user", "user"),
         ("SSH host", "host"),
         ("Working dir", "work_dir"),
+        ("Direct copy", "direct_copy"),
         ("Console device", "console_device"),
         ("UFS load addr", "ufs_loadaddr"),
         ("UFS buffer size", "ufs_buffersize"),
@@ -25,8 +26,13 @@ def board_host_fields() -> list[tuple[str, str]]:
         ("Deploy subdir", "deploy_subdir"),
         ("TFTP server IP", "server_ip"),
         ("Target board IP", "board_ip"),
-        ("Direct copy", "direct_copy"),
     ]
+    if host is not None:
+        fields.extend(
+            (command["label"], command["key"])
+            for command in host_fields.board_host_field_service().command_defaults_for_host(host)
+        )
+    return fields
 
 
 def remote_fields() -> list[tuple[str, str]]:

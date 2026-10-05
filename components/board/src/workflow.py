@@ -12,6 +12,7 @@ from components.board.src.transfer import board_artifact_transfer_service
 from components.board_types.api import base as board_type_base_api
 from components.board_types.api import registry as board_type_registry_api
 from components.config.api import profiles as config_profiles
+from components.moulin.api import manifest as moulin_manifest_api
 
 
 class BoardCommandWorkflowService:
@@ -88,8 +89,17 @@ class BoardCommandWorkflowService:
             runner=runner,
         )
 
-    def board_actions(self, config: dict[str, Any]) -> list[board_type_base_api.BoardAction]:
-        return self._adapter_for_config(config).actions(config)
+    def board_actions(
+        self,
+        config: dict[str, Any],
+        *,
+        build_params: dict[str, str] | None = None,
+    ) -> list[board_type_base_api.BoardAction]:
+        actions = self._adapter_for_config(config).actions(config)
+        domains = self.active_domains_for_config(config, build_params=build_params)
+        if not domains:
+            return actions
+        return [action for action in actions if self.action_matches_active_domains(action, domains)]
 
     def board_action_commands(
         self,
@@ -117,7 +127,7 @@ class BoardCommandWorkflowService:
         build_params: dict[str, str] | None = None,
         runner: Callable[[str, list[list[str]]], Any],
     ) -> Any:
-        action = self._action_by_id(config, action_id)
+        action = self._action_by_id(config, action_id, build_params=build_params)
         return runner(
             action.label,
             self.board_action_commands(
@@ -153,11 +163,56 @@ class BoardCommandWorkflowService:
     def _adapter_for_config(self, config: dict[str, Any]) -> board_type_base_api.BoardTypeAdapter:
         return self.board_type_registry.adapter_for_host(config_profiles.active_board_host(config))
 
-    def _action_by_id(self, config: dict[str, Any], action_id: str) -> board_type_base_api.BoardAction:
-        for action in self.board_actions(config):
+    def _action_by_id(
+        self,
+        config: dict[str, Any],
+        action_id: str,
+        *,
+        build_params: dict[str, str] | None = None,
+    ) -> board_type_base_api.BoardAction:
+        for action in self.board_actions(config, build_params=build_params):
             if action.action_id == action_id:
                 return action
         raise ValueError(f"unsupported board action: {action_id}")
+
+    def action_matches_active_domains(self, action: board_type_base_api.BoardAction, domains: frozenset[str]) -> bool:
+        required = frozenset(action.domains)
+        return not required or bool(required & domains)
+
+    def active_domains_for_config(
+        self,
+        config: dict[str, Any],
+        *,
+        build_params: dict[str, str] | None = None,
+    ) -> frozenset[str]:
+        try:
+            components = moulin_manifest_api.component_builders_for_config(
+                config,
+                app_dir=self.app_dir,
+                remote_read_project_file=self.remote_read_project_file,
+                cache=self.manifest_cache,
+                default_moulin_manifest=self.default_moulin_manifest,
+                build_params=build_params,
+            )
+        except Exception:
+            return frozenset()
+        domains: set[str] = set()
+        for component in components:
+            domain = self.domain_for_component_name(str(component.get("name", "")))
+            if domain:
+                domains.add(domain)
+        return frozenset(domains)
+
+    def domain_for_component_name(self, name: str) -> str:
+        if name in {"boot_artifacts", "dom0"}:
+            return "dom0"
+        if name.startswith("domd"):
+            return "domd"
+        if name.startswith("domu"):
+            return "domu"
+        if name.startswith("doma") or name.startswith("android"):
+            return "doma"
+        return ""
 
     def _action_context(
         self,
@@ -169,6 +224,7 @@ class BoardCommandWorkflowService:
         return board_type_base_api.BoardActionContext(
             config=config,
             artifact_targets=artifact_targets,
+            active_domains=self.active_domains_for_config(config, build_params=build_params),
             build_params=build_params or {},
             app_dir=self.app_dir,
             default_moulin_manifest=self.default_moulin_manifest,

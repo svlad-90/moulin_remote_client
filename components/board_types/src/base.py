@@ -19,6 +19,18 @@ class BoardAction:
     requires_project: bool = False
     allow_during_job: bool = False
     interactive: bool = False
+    domains: tuple[str, ...] = ()
+    target_patterns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BoardCommandDefault:
+    """Board-host command kind and its board-type default command."""
+
+    command_id: str
+    label: str
+    default: str
+    description: str = ""
 
 
 @dataclass(frozen=True)
@@ -27,6 +39,7 @@ class BoardActionContext:
 
     config: dict[str, Any]
     artifact_targets: str = ""
+    active_domains: frozenset[str] = frozenset()
     build_params: dict[str, str] | None = None
     app_dir: Path | None = None
     default_moulin_manifest: str = "product.yaml"
@@ -48,6 +61,23 @@ class BoardTypeAdapter:
 
     def actions(self, _config: dict[str, Any]) -> list[BoardAction]:
         return []
+
+    def command_defaults(self) -> list[BoardCommandDefault]:
+        return []
+
+    def command_default_map(self) -> dict[str, str]:
+        return {command.command_id: command.default for command in self.command_defaults()}
+
+    def command_value_for_host(self, host: dict[str, Any], command_id: str) -> str:
+        defaults = self.command_default_map()
+        if command_id not in defaults:
+            raise ValueError(f"unsupported board command for {self.type_id}: {command_id}")
+        commands = host.get("commands")
+        if isinstance(commands, dict):
+            value = str(commands.get(command_id, "")).strip()
+            if value:
+                return value
+        return defaults[command_id]
 
     def action_commands(self, ctx: BoardActionContext, action_id: str) -> list[list[str]]:
         raise ValueError(f"unsupported board action for {self.type_id}: {action_id}")

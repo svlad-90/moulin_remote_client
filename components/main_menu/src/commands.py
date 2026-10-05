@@ -213,7 +213,12 @@ class MainMenuCommandItemsService:
                 allow_during_job=True,
             ),
         ]
-        items.extend(self.board_action_items(app))
+        board_items = self.board_action_items(app)
+        board_host_items = [item for item in board_items if item.group == "flashing / hosts"]
+        board_other_items = [item for item in board_items if item.group != "flashing / hosts"]
+        items.extend(board_host_items)
+        items.append(self.configure_copied_artifacts_item())
+        items.extend(board_other_items)
         items.extend([
             MenuItem(
                 "Stop current board command",
@@ -383,6 +388,16 @@ class MainMenuCommandItemsService:
                 continue
             ordered_items.append(item)
         return ordered_items
+
+    def configure_copied_artifacts_item(self) -> MenuItem:
+        return MenuItem(
+            "Configure copied artifacts",
+            "flashing / configuration",
+            "Choose which build artifacts are copied to the board host artifacts directory.",
+            lambda app: f"Current copied artifacts: {getattr(app, 'board_artifacts', '') or app.build_targets or '<not set>'}",
+            lambda app: app.config_workflow_controller().select_board_artifacts(app),
+            requires_project=True,
+        )
 
     def item_parent_group(self, item: MenuItem) -> str:
         return item.group.split(" / ", 1)[0]
@@ -1093,7 +1108,10 @@ class MainMenuCommandItemsService:
                 requires_project=action.requires_project,
                 allow_during_job=action.allow_during_job,
             )
-            for action in self.board_command_workflow.board_actions(app.config)
+            for action in self.board_command_workflow.board_actions(
+                app.config,
+                build_params=getattr(app, "build_params", {}),
+            )
         ]
 
     def board_action_group(self, action_id: str) -> str:

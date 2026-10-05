@@ -275,6 +275,7 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             work_dir=config_accessors.board_work_dir_for_config(config),
             artifacts_dir=config_accessors.board_artifacts_dir_for_config(config),
             tool=client.FLASH_BOOTLOADERS_TOOL,
+            console=config_accessors.board_console_device_for_config(config),
         )
 
         self.assertEqual(
@@ -284,7 +285,7 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         self.assertEqual(len(argv), 6)
         self.assertIn("x5h_flash", argv[2][-1])
         self.assertIn("tar -xf \"$archive\" -C \"$artifact_dir\" --strip-components=1", argv[3][-1])
-        self.assertIn("python3 -u ./flash_bootloaders.py --port /dev/GEN5_CONSOLE", argv[5][-1])
+        self.assertIn('PYTHONUNBUFFERED=1 python3 -u ./flash_bootloaders.py --port "$console"', argv[5][-1])
         self.assertIn("x5h_boot", argv[5][-1])
 
     def test_flash_ufs_commands_from_config_use_gen5_board_type_helper(self) -> None:

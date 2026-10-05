@@ -117,7 +117,11 @@ def run_board_host_configurations_screen(
                     else:
                         field_action_controller.apply_board_host_inline_value(port, selected_host, key, value)
             else:
-                screen_state.begin_inline_edit(key, str(selected_host.get(key, "")))
+                if key.startswith("command_"):
+                    value = board_field_service.command_override_value(selected_host, key)
+                else:
+                    value = str(selected_host.get(key, ""))
+                screen_state.begin_inline_edit(key, value)
                 port.status = f"Editing {label}"
         elif action["action"] == "toggle-field-choice":
             selected_key = screen_state.selected_field_key(fields)
