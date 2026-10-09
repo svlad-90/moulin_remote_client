@@ -11,9 +11,11 @@ class ProjectOverlayValidationService:
 
     def local_mapping_issue(self, local_base: Path, mapping: dict[str, Any]) -> str | None:
         path = local_base / mapping["local"]
-        if not path.exists():
-            return f"{mapping['name']}: local path missing: {path}"
         kind = str(mapping.get("kind", "directory"))
+        if not path.exists():
+            if kind == "file":
+                return None
+            return f"{mapping['name']}: local path missing: {path}"
         if kind == "directory":
             if not path.is_dir():
                 return f"{mapping['name']}: local path is not a directory: {path}"

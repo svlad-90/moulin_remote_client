@@ -66,6 +66,48 @@ class SyncPreBuildServiceTests(unittest.TestCase):
             self.assertEqual(argv[1][-2:], [str(local_base) + "/./layers/meta", "builder@10.0.0.1:/mnt/projects/meta-product/"])
             self.assertIn("recorded incremental build baseline", argv[2][2])
 
+    def test_pre_build_sync_commands_for_config_filters_push_disabled_mappings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            layer = local_base / "layers/meta"
+            crate = local_base / "_synced/build-host/crates/vhost-0.14.0.crate"
+            layer.mkdir(parents=True)
+            crate.parent.mkdir(parents=True)
+            (layer / "recipe.bb").write_text("x\n", encoding="utf-8")
+            crate.write_text("crate\n", encoding="utf-8")
+            service = pre_build.sync_pre_build_service()
+            config = sample_config(app_dir)
+            project = config["projects"][0]
+            project["active_mappings"] = ["layer", "crate"]
+            project["mappings"] = [
+                {"name": "layer", "role": "source layer", "remote": "layers/meta", "local": "layers/meta", "push": True},
+                {
+                    "name": "crate",
+                    "role": "rust crate",
+                    "remote": "yocto/common_data/downloads/vhost-0.14.0.crate",
+                    "local": "_synced/build-host/crates/vhost-0.14.0.crate",
+                    "kind": "file",
+                    "push": False,
+                },
+            ]
+
+            argv = service.pre_build_sync_commands_for_config(
+                config,
+                selection_path=app_dir / "unused.txt",
+                app_dir=app_dir,
+            )
+
+            copy_command_text = " ".join(argv[1])
+            snapshot_mappings_text = argv[2][-1].split("mappings = json.loads(", 1)[1]
+            self.assertEqual(len(argv), 3)
+            self.assertIn("Copy mapped files mappings: layer", argv[1][2])
+            self.assertNotIn("crate", copy_command_text)
+            self.assertNotIn("vhost-0.14.0.crate", copy_command_text)
+            self.assertIn('"name": "layer"', snapshot_mappings_text)
+            self.assertNotIn('"name": "crate"', snapshot_mappings_text)
+            self.assertIn("recorded incremental build baseline", argv[2][2])
+
     def test_command_sequence_saves_build_settings_and_appends_build_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)

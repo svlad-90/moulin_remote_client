@@ -31,8 +31,7 @@ class MainRunLoopController:
         started = self.monotonic()
         port.draw()
         port.ui_profile_slow("draw-initial", started)
-        if self.auto_connect_enabled:
-            port.connection_workflow_service().auto_connect(port)
+        auto_connect_pending = self.auto_connect_enabled
         try:
             while not port.done:
                 self._poll_jobs(port)
@@ -40,6 +39,11 @@ class MainRunLoopController:
                 port.screen.timeout(max(0, int(input_timeout * 1000)))
                 wait_started = self.monotonic()
                 ch = port.read_key()
+                if auto_connect_pending and ch == -1:
+                    auto_connect_pending = False
+                    self._start_auto_connect(port)
+                    self.sleep(0.05)
+                    continue
                 if ch == -1:
                     port.ui_profile_slow(
                         "input-wait-timeout",
@@ -53,8 +57,19 @@ class MainRunLoopController:
                     self.sleep(0.05)
                     continue
                 self._handle_input(port, ch)
+                if auto_connect_pending and not port.done:
+                    auto_connect_pending = False
+                    self._start_auto_connect(port)
         finally:
             port.flush_ui_profile()
+
+    def _start_auto_connect(self, port: Any) -> None:
+        started = self.monotonic()
+        port.connection_workflow_service().auto_connect(port)
+        port.ui_profile_slow("auto-connect-start-slow", started, threshold_ms=20.0)
+        started = self.monotonic()
+        port.draw()
+        port.ui_profile_slow("draw-auto-connect-slow", started)
 
     def _poll_jobs(self, port: Any) -> None:
         started = self.monotonic()

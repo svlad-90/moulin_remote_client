@@ -20,7 +20,8 @@ class RemoteSessionCommandService:
     def interactive_shell_command(self, remote: str, project_dir: str) -> list[str]:
         if not project_dir:
             raise SystemExit("Remote project directory is not configured")
-        command = f"cd {shlex.quote(project_dir)} && exec bash -l"
+        quoted_project_dir = shlex.quote(project_dir)
+        command = f"mkdir -p {quoted_project_dir} && cd {quoted_project_dir} && exec bash -l"
         return transport.ssh_command(remote, command, tty="-t")
 
     def interactive_shell_command_for_config(self, config: dict[str, Any]) -> list[str]:

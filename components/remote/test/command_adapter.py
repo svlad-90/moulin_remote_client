@@ -193,6 +193,14 @@ class commands:
         return commands._discovery().build_git_tracked_files_fetch_command_for_config(config)
 
     @staticmethod
+    def build_git_remote_files_fetch_command_for_config(config: dict[str, Any]) -> list[str]:
+        return commands._discovery().build_git_remote_files_fetch_command_for_config(config)
+
+    @staticmethod
+    def build_git_remote_file_read_command_for_config(config: dict[str, Any], path: str) -> list[str]:
+        return commands._discovery().build_git_remote_file_read_command_for_config(config, path)
+
+    @staticmethod
     def parse_git_tracked_files(output: str) -> list[str]:
         return commands._discovery().parse_git_tracked_files(output)
 
@@ -202,6 +210,21 @@ class commands:
         runner: Callable[[list[str]], str],
     ) -> list[str]:
         return commands._discovery().fetch_git_tracked_files_for_config(config, runner)
+
+    @staticmethod
+    def fetch_git_remote_files_for_config(
+        config: dict[str, Any],
+        runner: Callable[[list[str]], str],
+    ) -> list[str]:
+        return commands._discovery().fetch_git_remote_files_for_config(config, runner)
+
+    @staticmethod
+    def read_git_remote_file_for_config(
+        config: dict[str, Any],
+        path: str,
+        runner: Callable[[list[str]], str],
+    ) -> str:
+        return commands._discovery().read_git_remote_file_for_config(config, path, runner)
 
     @staticmethod
     def root_yaml_candidates(paths: list[str]) -> list[str]:
@@ -263,6 +286,43 @@ class commands:
     @staticmethod
     def build_remote_docker_command(remote: str, project_dir: str, docker_image: str, dockerfile: str) -> list[str]:
         return commands._build().docker_command(remote, project_dir, docker_image, dockerfile)
+
+    @staticmethod
+    def build_remote_bitbake_cleanup_command_for_config(
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        components: list[dict[str, Any]],
+    ) -> list[str]:
+        return commands._build().bitbake_cleanup_command_for_config(
+            config,
+            docker_image=docker_image,
+            components=components,
+        )
+
+    @staticmethod
+    def build_remote_bitbake_cleanup_command(
+        remote: str,
+        project_dir: str,
+        docker_image: str,
+        components: list[dict[str, Any]],
+    ) -> list[str]:
+        return commands._build().bitbake_cleanup_command(remote, project_dir, docker_image, components)
+
+    @staticmethod
+    def run_remote_bitbake_cleanup_for_config(
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        components: list[dict[str, Any]],
+        runner: Callable[[list[str]], Any],
+    ) -> Any:
+        return commands._build().run_bitbake_cleanup_for_config(
+            config,
+            docker_image=docker_image,
+            components=components,
+            runner=runner,
+        )
 
     @staticmethod
     def run_remote_docker_for_config(

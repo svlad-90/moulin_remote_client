@@ -196,7 +196,7 @@ class ConfigWorkflowController:
             port,
             self.config,
             self.app_dir,
-            remote_read_project_file=self.remote_read_project_file,
+            remote_read_project_file=lambda config, path: self._read_project_file_with_git_fallback(port, config, path),
             manifest_cache=self.manifest_cache,
             default_moulin_manifest=self.default_moulin_manifest,
             default_config_path=self.default_config_path,
@@ -251,7 +251,16 @@ class ConfigWorkflowController:
                 self.config,
                 lambda argv: self.capture_command(argv, echo=False, timeout=20),
             ),
+            fetch_git_remote_files=lambda: remote_discovery.fetch_git_remote_files_for_config(
+                self.config,
+                lambda argv: self.capture_command(argv, echo=False, timeout=20),
+            ),
             read_project_file=self.remote_read_project_file,
+            read_git_remote_file=lambda config, path: remote_discovery.read_git_remote_file_for_config(
+                config,
+                path,
+                lambda argv: self.capture_command(argv, echo=False, timeout=20),
+            ),
             manifest_cache=self.manifest_cache,
             default_moulin_manifest=self.default_moulin_manifest,
             save_config=self.save_config,
@@ -262,12 +271,27 @@ class ConfigWorkflowController:
         return config_target_selection_api.target_selection_controller_for_config(
             self.config,
             app_dir=self.app_dir,
-            remote_read_project_file=self.remote_read_project_file,
+            remote_read_project_file=self._read_project_file_with_git_fallback,
             manifest_cache=self.manifest_cache,
             default_moulin_manifest=self.default_moulin_manifest,
             default_config_path=self.default_config_path,
             save_config=self.save_config,
         )
+
+    def _read_project_file_with_git_fallback(self, port: Any, config: dict[str, Any], path: str) -> str:
+        try:
+            text = self.remote_read_project_file(config, path)
+            port.project_config_source = "build-host checkout"
+            return text
+        except Exception:
+            remote_discovery = remote_discovery_api.remote_project_discovery_service()
+            text = remote_discovery.read_git_remote_file_for_config(
+                config,
+                path,
+                lambda argv: self.capture_command(argv, echo=False, timeout=20),
+            )
+            port.project_config_source = "Git remote"
+            return text
 
     def _project_remote_dir_editor(self) -> Any:
         return config_remote_location_api.project_remote_dir_editor_for_config(

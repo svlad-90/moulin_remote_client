@@ -127,6 +127,24 @@ class ProjectScreenRendererTests(unittest.TestCase):
         self.assertEqual(rendered[build_row - 1], "")
         self.assertEqual(rendered[artifacts_row - 1], "")
 
+    def test_render_shows_build_parameter_source_when_available(self) -> None:
+        cfg = config()
+        port = FakeRenderPort()
+        port.project_config_source = "Git remote"
+        state = project_screen_state.ProjectScreenStateController(cfg)
+        renderer = project_screen_renderer.ProjectScreenRenderer(
+            cfg,
+            app_dir=Path("/app"),
+            project_fields_factory=lambda _params: [
+                {"label": "ENABLE_DOMU", "key": "param:ENABLE_DOMU", "kind": "param", "param": {"default": "yes"}},
+            ],
+        )
+
+        renderer.render(port, height=30, width=120, params=[], screen_state=state)
+
+        rendered = [row[2].strip() for row in port.rows]
+        self.assertIn("BUILD (source: Git remote)", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

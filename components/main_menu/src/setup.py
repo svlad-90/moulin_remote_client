@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import curses
 import shlex
 from typing import Any
 
 from components.config.api import accessors as config_accessor_api
 from components.config.api import profiles as config_profile_api
 from components.remote.api import workflow as remote_workflow_api
+from components.ui.api import input as ui_input_api
 from components.ui.api import preflight as ui_preflight_api
 from components.ui.api import session as ui_session_api
 from components.ui.api.menu import MenuItem
@@ -25,7 +27,7 @@ class MainMenuSetupItemsService:
 
     def build_items(self, app: Any) -> list[MenuItem]:
         items = self.setup_items()
-        items.extend(self.build_host_session_items())
+        items.extend(self.build_host_session_items(app))
         items.extend(self.preflight_action_items(app))
         return items
 
@@ -55,16 +57,34 @@ class MainMenuSetupItemsService:
                 lambda app: app.config_workflow_controller().run_project_configurations_screen(app),
                 allow_during_job=True,
             ),
+            MenuItem(
+                "Settings",
+                "configuration",
+                "Open general TUI settings.",
+                lambda app: f"Show commands in logs: {setting_enabled_text(app.config, 'show_commands')}",
+                lambda app: run_general_settings_screen(app),
+                allow_during_job=True,
+            ),
         ]
 
-    def build_host_session_items(self) -> list[MenuItem]:
+    def build_host_session_items(self, app: Any) -> list[MenuItem]:
+        has_build_hosts = bool([remote for remote in app.config.get("remotes", []) if isinstance(remote, dict)])
+        has_board_hosts = bool([host for host in app.config.get("board_hosts", []) if isinstance(host, dict)])
         return [
             MenuItem(
-                "Select build host",
+                "Select build host" if has_build_hosts else "Add build host",
                 "sessions / build host",
-                "Choose the active build host profile used by Moulin, Ninja, and source sync commands.",
+                (
+                    "Choose the active build host profile used by Moulin, Ninja, and source sync commands."
+                    if has_build_hosts
+                    else "Open build host profile setup."
+                ),
                 lambda app: self._host_selection_preview(app.config, "active_remote", "remotes"),
-                lambda app: app.config_workflow_controller().select_active_remote(app),
+                (
+                    lambda app: app.config_workflow_controller().select_active_remote(app)
+                    if has_build_hosts
+                    else app.config_workflow_controller().run_remote_configurations_screen(app)
+                ),
                 allow_during_job=True,
             ),
             MenuItem(
@@ -76,7 +96,6 @@ class MainMenuSetupItemsService:
                     self.remote_command_workflow.connect_command(app.config),
                 ),
                 lambda app: app.connection_workflow_service().toggle_build_host(app),
-                requires_ssh=True,
                 allow_during_job=True,
             ),
             MenuItem(
@@ -90,11 +109,19 @@ class MainMenuSetupItemsService:
                 allow_during_job=True,
             ),
             MenuItem(
-                "Select board host",
+                "Select board host" if has_board_hosts else "Add board host",
                 "sessions / board host",
-                "Choose the active board host profile used by flashing, TFTP/NFS deploy, and board shell commands.",
+                (
+                    "Choose the active board host profile used by flashing, TFTP/NFS deploy, and board shell commands."
+                    if has_board_hosts
+                    else "Open board host profile setup."
+                ),
                 lambda app: self._host_selection_preview(app.config, "active_board_host", "board_hosts"),
-                lambda app: app.config_workflow_controller().select_active_board_host(app),
+                (
+                    lambda app: app.config_workflow_controller().select_active_board_host(app)
+                    if has_board_hosts
+                    else app.config_workflow_controller().run_board_host_configurations_screen(app)
+                ),
                 allow_during_job=True,
             ),
         ]
@@ -116,7 +143,7 @@ class MainMenuSetupItemsService:
                 MenuItem(
                     "Prepare remote project",
                     "build",
-                    "Create or repair the configured target checkout when preflight detects a missing project, non-git directory, or Git origin mismatch.",
+                    "Set up the configured product checkout on the build host: create the project directory, clone the Git repository when missing, and repair an invalid checkout or origin mismatch.",
                     lambda app: shlex.join(self.remote_command_workflow.prepare_project_command(app.config)),
                     lambda app: app.command_workflow_service().run_commands(
                         app,
@@ -128,17 +155,20 @@ class MainMenuSetupItemsService:
                     requires_project=True,
                 )
             )
-        if preflight_actions["checkout_git_ref"]:
+        if preflight_actions["checkout_git_ref"] and not preflight_actions["prepare_remote_project"]:
             items.append(
                 MenuItem(
                     "Checkout project Git ref",
                     "build",
-                    "Switch the existing remote checkout to the configured project Git branch/ref when the working tree has no tracked local changes.",
-                    lambda app: shlex.join(self.remote_command_workflow.checkout_git_ref_command(app.config)),
+                    (
+                        "Switch the remote checkout to the configured project Git branch/ref. If needed, remove a stale Git index lock "
+                        "when no running process owns it, stage and stash local changes, fetch origin, then checkout the ref."
+                    ),
+                    lambda app: shlex.join(self.remote_command_workflow.repair_and_checkout_git_ref_command(app.config)),
                     lambda app: app.command_workflow_service().run_commands(
                         app,
                         "Checkout project Git ref",
-                        [self.remote_command_workflow.checkout_git_ref_command(app.config)],
+                        [self.remote_command_workflow.repair_and_checkout_git_ref_command(app.config)],
                     ),
                     confirm=True,
                     requires_remote=True,
@@ -146,6 +176,83 @@ class MainMenuSetupItemsService:
                 )
             )
         return items
+
+
+def setting_enabled_text(config: dict[str, Any], name: str) -> str:
+    ui = config.get("ui")
+    enabled = isinstance(ui, dict) and bool(ui.get(name))
+    return "yes" if enabled else "no"
+
+
+def set_ui_setting(config: dict[str, Any], name: str, enabled: bool) -> None:
+    ui = config.setdefault("ui", {})
+    if not isinstance(ui, dict):
+        ui = {}
+        config["ui"] = ui
+    ui[name] = bool(enabled)
+
+
+def toggle_ui_setting(app: Any, name: str, label: str) -> None:
+    ui = app.config.get("ui")
+    enabled = not (isinstance(ui, dict) and bool(ui.get(name)))
+    set_ui_setting(app.config, name, enabled)
+    app.dependencies.save_config(app.config)
+    app.status = f"{label}: {'yes' if enabled else 'no'}"
+    app.menu_dirty = True
+    app.main_full_redraw = True
+
+
+def run_general_settings_screen(app: Any) -> None:
+    index = 0
+    entries = [
+        {
+            "label": "Show commands in logs",
+            "key": "show_commands",
+            "description": "Show the exact command or script before each action runs.",
+        }
+    ]
+    app.screen.timeout(-1)
+    while True:
+        app.screen.erase()
+        height, width = app.screen.getmaxyx()
+        if height < 12 or width < 60:
+            app.add(0, 0, "Terminal is too small. Need at least 60x12.", app.warn_attr())
+            app.screen.refresh()
+            ch = app.read_key()
+            if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                app.screen.timeout(250)
+                return
+            continue
+
+        app.add(0, 0, "Settings"[:width], curses.A_BOLD)
+        app.add(1, 0, "Up/Down: select | Enter/Space: toggle | q/Esc: back"[:width], app.accent_attr())
+        app.draw_box(3, 0, height - 6, width, "General")
+        visible_width = max(1, width - 4)
+        for row_offset, entry in enumerate(entries):
+            row = 4 + row_offset
+            checked = setting_enabled_text(app.config, str(entry["key"])) == "yes"
+            marker = "[x]" if checked else "[ ]"
+            text = f"{marker} {entry['label']}"
+            attr = app.selected_attr() if row_offset == index else 0
+            app.add(row, 2, text[:visible_width].ljust(visible_width), attr)
+        detail_row = 6 + len(entries)
+        current = entries[index]
+        app.add(detail_row, 2, str(current["description"])[:visible_width])
+        app.add(height - 1, 0, app.status[:width].ljust(width), curses.A_REVERSE)
+        app.screen.refresh()
+
+        ch = app.read_key()
+        if ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+            index = max(0, index - 1)
+        elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j") or ch == ord("\t"):
+            index = min(len(entries) - 1, index + 1)
+        elif ch in (10, 13, ord(" ")):
+            current = entries[index]
+            toggle_ui_setting(app, str(current["key"]), str(current["label"]))
+        elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
+            app.screen.timeout(250)
+            app.status = "Settings closed"
+            return
 
 
 def main_menu_setup_items_service(

@@ -6,7 +6,6 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Callable
-from unittest.mock import patch
 
 from components.remote.api import transport
 from components.sync.api import display as sync_display_api
@@ -40,6 +39,10 @@ class commands:
     @staticmethod
     def display_command_lines(argv: list[str]) -> list[str]:
         return sync_display_api.sync_command_display_service().display_command_lines(argv)
+
+    @staticmethod
+    def display_command_lines_enabled(argv: list[str]) -> list[str]:
+        return sync_display_api.sync_command_display_service().display_command_lines(argv, show_commands=True)
 
     @staticmethod
     def sanitize_log_line(line: str) -> str:
@@ -405,7 +408,7 @@ class SyncCommandBehaviorTests(unittest.TestCase):
             )
 
             expected = transport.rsync_base_command(dry_run=False)
-            expected.extend(["--rsync-path", "mkdir -p /work/product && rsync", str(local_file), "builder@example:/work/product/prod.yaml"])
+            expected.extend(["--checksum", "--rsync-path", "mkdir -p /work/product && rsync", str(local_file), "builder@example:/work/product/prod.yaml"])
             self.assertEqual(argv, expected)
 
     def test_push_dry_run_for_pull_only_mapping_returns_log_command(self) -> None:
@@ -430,33 +433,29 @@ class SyncCommandBehaviorTests(unittest.TestCase):
             self.assertEqual(argv[:2], ["bash", "-lc"])
             self.assertIn("SKIP push dry-run: readonly", argv[2])
             self.assertEqual(commands.display_command_lines(argv), [])
-            with patch.dict("os.environ", {"MOULIN_TUI_SHOW_COMMANDS": "1"}):
-                self.assertEqual(commands.display_command_lines(argv), ["command: <log message>"])
+            self.assertEqual(commands.display_command_lines_enabled(argv), ["command: <log message>"])
 
     def test_display_command_lines_expands_multiline_script(self) -> None:
         argv = ["ssh", "board", "set -e\nx5h_flash\n"]
 
         self.assertEqual(commands.display_command_lines(argv), [])
-        with patch.dict("os.environ", {"MOULIN_TUI_SHOW_COMMANDS": "1"}):
-            self.assertEqual(
-                commands.display_command_lines(argv),
-                ["command: ssh board '<script>'", "script:", "  set -e", "  x5h_flash", ""],
-            )
+        self.assertEqual(
+            commands.display_command_lines_enabled(argv),
+            ["command: ssh board '<script>'", "script:", "  set -e", "  x5h_flash", ""],
+        )
 
     def test_display_command_lines_expands_nested_bash_login_script(self) -> None:
         script = "bash -lic " + shlex_quote("set -e\nx5h_boot\n")
         argv = ["ssh", "-tt", "board", script]
 
-        with patch.dict("os.environ", {"MOULIN_TUI_SHOW_COMMANDS": "1"}):
-            self.assertEqual(
-                commands.display_command_lines(argv),
-                ["command: ssh -tt board bash -lic '<script>'", "script:", "  set -e", "  x5h_boot", ""],
-            )
+        self.assertEqual(
+            commands.display_command_lines_enabled(argv),
+            ["command: ssh -tt board bash -lic '<script>'", "script:", "  set -e", "  x5h_boot", ""],
+        )
 
     def test_display_command_lines_wraps_long_script_lines(self) -> None:
         long_line = "x" * 120
-        with patch.dict("os.environ", {"MOULIN_TUI_SHOW_COMMANDS": "1"}):
-            lines = commands.display_command_lines(["bash", "-lc", long_line + "\n"])
+        lines = commands.display_command_lines_enabled(["bash", "-lc", long_line + "\n"])
 
         self.assertEqual(lines[0:2], ["command: bash -lc '<script>'", "script:"])
         self.assertEqual(lines[2], "  " + ("x" * 112))
@@ -673,6 +672,7 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                         "header": ["\n== push: meta ==", "role: source layer", "remote: layers/meta", "local:  layers/meta"],
                         "argv": [
                             *transport.rsync_base_command(dry_run=True),
+                            "--checksum",
                             "--rsync-path",
                             "mkdir -p /mnt/projects/meta-product/layers/meta && rsync",
                             str(local_base / "layers/meta") + "/",

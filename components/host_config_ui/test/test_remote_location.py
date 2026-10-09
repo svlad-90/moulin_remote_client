@@ -38,9 +38,11 @@ class FakeScreen:
 
 
 class FakeLocationPort:
-    def __init__(self, keys: list[int]) -> None:
+    def __init__(self, keys: list[int], *, prompts: list[str] | None = None) -> None:
         self.screen = FakeScreen(keys)
         self.status = ""
+        self.prompt_cancelled = False
+        self.prompts = prompts or []
         self.rows: list[tuple[int, int, str, int | None]] = []
         self.boxes: list[tuple[int, int, int, int, str]] = []
 
@@ -51,6 +53,11 @@ class FakeLocationPort:
 
     def add(self, row: int, col: int, text: str, attr: int | None = None) -> None:
         self.rows.append((row, col, text, attr))
+
+    def prompt(self, _label: str, _default: str = "") -> str:
+        if not self.prompts:
+            raise AssertionError("fake prompt queue is empty")
+        return self.prompts.pop(0)
 
     def draw_box(self, top: int, left: int, height: int, width: int, title: str) -> None:
         self.boxes.append((top, left, height, width, title))
@@ -139,6 +146,19 @@ class RemoteLocationBrowserServiceTests(unittest.TestCase):
 
         self.assertEqual(selected, "/home")
         self.assertEqual(calls, ["~", "/home"])
+
+    def test_browse_project_directory_falls_back_to_manual_input_on_fetch_error(self) -> None:
+        port = FakeLocationPort([], prompts=["/mnt/projects/meta-product"])
+        service = remote_location.RemoteLocationBrowser(
+            config(),
+            fetch_child_dirs=lambda _path: (_ for _ in ()).throw(RuntimeError("ssh failed")),
+            fetch_home=lambda: "/home/builder",
+            parent_dir=parent_dir,
+        )
+
+        selected = service.browse_project_directory(port, "~")
+
+        self.assertEqual(selected, "/mnt/projects/meta-product")
 
     def test_project_remote_dir_editor_applies_selected_directory(self) -> None:
         port = FakeLocationPort([ord(" ")])

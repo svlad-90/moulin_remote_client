@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from components.build_runtime.api import runtime as runtime_api
@@ -103,6 +104,11 @@ class FakeApp:
         self.config_workflow = FakeConfigWorkflow()
         self.dialog_workflow = FakeDialogWorkflow()
         self.reload_config_calls = 0
+        self.saved_configs: list[dict[str, Any]] = []
+        self.dependencies = SimpleNamespace(save_config=lambda config: self.saved_configs.append(config))
+        self.status = ""
+        self.menu_dirty = False
+        self.main_full_redraw = False
 
     def command_workflow_service(self) -> FakeWorkflow:
         return self.workflow
@@ -254,6 +260,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertNotIn("Rebuild impacted Yocto recipes", labels)
             build_host_labels = [item.label for item in menu_items if item.group == "build / build host"]
             build_configuration_labels = [item.label for item in menu_items if item.group == "build / configuration"]
+            configuration_labels = [item.label for item in menu_items if item.group == "configuration"]
             build_labels = [item.label for item in menu_items if item.group == "build / commands"]
             command_labels = [item.label for item in builder.command_items.build_items(FakeApp(_config(app_dir)))]
             self.assertEqual(
@@ -268,14 +275,26 @@ class MainMenuBuilderTests(unittest.TestCase):
             )
             self.assertEqual(build_configuration_labels, ["Select build targets"])
             self.assertEqual(
+                configuration_labels,
+                [
+                    "Build host configuration",
+                    "Board host configuration",
+                    "Project configuration",
+                    "Settings",
+                ],
+            )
+            self.assertEqual(
                 build_labels,
                 [
                     "Copy mapped files to build host",
                     "Build Docker image",
+                    "Clean-up BitBake server",
                     "Regenerate Moulin/Ninja",
                     "Run product build",
                     "Incremental build",
+                    "Reset incremental build state",
                     "Clean Moulin components",
+                    "Clean project folder",
                     "Stop running command",
                 ],
             )
@@ -312,6 +331,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Open U-Boot console",
                 ],
             )
+
             self.assertIn("Open board serial console", board_host_labels)
             self.assertIn("Open U-Boot console", board_host_labels)
             self.assertIn("Restart board", board_host_labels)
@@ -371,6 +391,57 @@ class MainMenuBuilderTests(unittest.TestCase):
                 ],
             )
 
+    def test_session_select_items_become_add_items_when_no_hosts_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            cfg = _config(app_dir)
+            cfg["remotes"] = []
+            cfg["board_hosts"] = []
+            app = FakeApp(cfg)
+            menu_items = builder.setup_items.build_items(app)
+
+            build_item = next(item for item in menu_items if item.label == "Add build host")
+            board_item = next(item for item in menu_items if item.label == "Add board host")
+
+            build_item.handler(app)
+            board_item.handler(app)
+
+            self.assertEqual(app.config_workflow.calls, ["remote", "board"])
+
+    def test_build_items_does_not_read_remote_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            remote_reads: list[str] = []
+
+            def read_remote_manifest(_config: dict[str, Any], path: str) -> str:
+                remote_reads.append(path)
+                return ""
+
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=read_remote_manifest,
+                manifest_cache={},
+            )
+
+            builder.build_items(FakeApp(_config(app_dir)))
+
+            self.assertEqual(remote_reads, [])
+
     def test_build_command_handler_uses_command_workflow_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
@@ -391,9 +462,11 @@ class MainMenuBuilderTests(unittest.TestCase):
             build_item.handler(app)
 
             self.assertEqual(app.reload_config_calls, 1)
-            self.assertEqual(app.workflow.build_calls[0]["title"], "Run product build")
-            self.assertEqual(app.workflow.build_calls[0]["targets"], "full_ufs.img.gz")
-            self.assertEqual(app.workflow.command_calls, [])
+            title, commands = app.workflow.command_calls[0]
+            self.assertEqual(title, "Run product build")
+            self.assertIn("ninja full_ufs.img.gz", commands[0][-1])
+            self.assertIn("mark_runtime_mapping_build_applied", commands[-1][-1])
+            self.assertEqual(app.workflow.build_calls, [])
 
     def test_build_tab_target_selector_delegates_to_config_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -483,9 +556,12 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(app.reload_config_calls, 1)
             title, commands = app.workflow.command_calls[0]
             self.assertEqual(title, "Incremental build")
-            self.assertEqual(len(commands), 6)
+            self.assertEqual(len(commands), 7)
             self.assertIn('ACTION = "clean"', commands[0][-1])
-            self.assertIn('IMAGE_RECIPES = "rcar-image-adas"', commands[0][-1])
+            self.assertIn('TARGETS = "rcar-image-adas".strip()', commands[0][-1])
+            self.assertNotIn('TARGETS = "full_ufs.img.gz"', commands[0][-1])
+            self.assertIn('IMAGE_RECIPES = ""', commands[0][-1])
+            self.assertIn('BUILD_DIRS = "yocto/build-domd"', commands[0][-1])
             self.assertIn('ALLOW_EMPTY = "1" == "1"', commands[0][-1])
             self.assertIn("moulin product.yaml", commands[1][-1])
             self.assertIn(
@@ -499,11 +575,251 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertIn("touch \"$p\"", commands[3][-1])
             self.assertIn("ninja doma_kernel doma", commands[4][-1])
             self.assertIn("ninja domd doma_kernel doma boot_artifacts", commands[5][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[6][-1])
             settings_path = app_dir / "state" / "build-settings.json"
             self.assertEqual(
                 json.loads(settings_path.read_text(encoding="utf-8"))["incremental_components"],
                 ["domd", "doma_kernel", "doma", "boot_artifacts"],
             )
+
+    def test_incremental_handler_limits_yocto_scan_to_selected_component_build_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  dom0:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-dom0",
+                    "      build_target: core-image-thin-initramfs",
+                    "  domd:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-domd",
+                    "      build_target: rcar-image-adas",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            command_items = builder.command_items.build_items(app)
+            builder.command_items.select_incremental_component_names = lambda _app, _components: ["dom0"]
+            yocto_item = next(item for item in command_items if item.label == "Incremental build")
+
+            yocto_item.handler(app)
+
+            _title, commands = app.workflow.command_calls[0]
+            self.assertIn('TARGETS = "core-image-thin-initramfs".strip()', commands[0][-1])
+            self.assertIn('IMAGE_RECIPES = ""', commands[0][-1])
+            self.assertIn('BUILD_DIRS = "yocto/build-dom0"', commands[0][-1])
+            self.assertNotIn("yocto/build-domd", commands[0][-1])
+
+    def test_incremental_yocto_clean_cancel_skips_build(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  dom0:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-dom0",
+                    "      build_target: core-image-thin-initramfs",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.dialog_workflow.confirm_result = False
+            builder.command_items.select_incremental_component_names = lambda _app, _components: ["dom0"]
+            incremental_item = next(item for item in builder.command_items.build_items(app) if item.label == "Incremental build")
+
+            incremental_item.handler(app)
+
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
+            self.assertEqual(app.dialog_workflow.confirm_calls[0].subject, "Clean impacted Yocto recipes")
+            self.assertEqual(app.workflow.command_calls, [])
+            self.assertEqual(app.status, "Incremental build cancelled")
+
+    def test_incremental_clean_includes_image_recipe_when_mapped_content_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            layer = local_base / "layers/meta-xt-dom0-gen5"
+            layer.mkdir(parents=True)
+            recipe = layer / "dom0.bbappend"
+            recipe.write_text("old\n", encoding="utf-8")
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  dom0:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-dom0",
+                    "      build_target: core-image-thin-initramfs",
+                ]
+            )
+            config = _config(app_dir)
+            config["state"] = {"build_settings": str(app_dir / "state/build-settings.json")}
+            project = config["projects"][0]
+            project["mappings"] = [
+                {
+                    "name": "layers-meta-xt-dom0-gen5",
+                    "role": "dom0",
+                    "remote": "layers/meta-xt-dom0-gen5",
+                    "local": "layers/meta-xt-dom0-gen5",
+                    "kind": "directory",
+                    "push": True,
+                }
+            ]
+            project["active_mappings"] = ["layers-meta-xt-dom0-gen5"]
+            runtime_api.save_runtime_mapping_snapshot(config, app_dir, project["mappings"])
+            runtime_api.mark_runtime_mapping_build_applied(config, app_dir, project["mappings"])
+            recipe.write_text("new\n", encoding="utf-8")
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(config)
+
+            commands = builder.command_items.incremental_product_build_commands(app, selected_names=["dom0"])
+
+            self.assertIn('IMAGE_RECIPES = "core-image-thin-initramfs"', commands[0][-1])
+            self.assertIn('USE_CHANGED_FILES = "1" == "1"', commands[0][-1])
+
+    def test_incremental_clean_skips_image_recipe_after_unchanged_copy_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            layer = local_base / "layers/meta-xt-dom0-gen5"
+            layer.mkdir(parents=True)
+            (layer / "dom0.bbappend").write_text("same\n", encoding="utf-8")
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  dom0:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-dom0",
+                    "      build_target: core-image-thin-initramfs",
+                ]
+            )
+            config = _config(app_dir)
+            config["state"] = {"build_settings": str(app_dir / "state/build-settings.json")}
+            project = config["projects"][0]
+            project["mappings"] = [
+                {
+                    "name": "layers-meta-xt-dom0-gen5",
+                    "role": "dom0",
+                    "remote": "layers/meta-xt-dom0-gen5",
+                    "local": "layers/meta-xt-dom0-gen5",
+                    "kind": "directory",
+                    "push": True,
+                }
+            ]
+            project["active_mappings"] = ["layers-meta-xt-dom0-gen5"]
+            runtime_api.save_runtime_mapping_snapshot(config, app_dir, project["mappings"])
+            runtime_api.mark_runtime_mapping_build_applied(config, app_dir, project["mappings"])
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(config)
+
+            commands = builder.command_items.incremental_product_build_commands(app, selected_names=["dom0"])
+
+            self.assertIn('TARGETS = "core-image-thin-initramfs".strip()', commands[0][-1])
+            self.assertIn('IMAGE_RECIPES = ""', commands[0][-1])
+            self.assertIn('CHANGED_FILES = json.loads(base64.b64decode("W10=")', commands[0][-1])
+
+    def test_incremental_selector_prefers_stored_selection_over_auto_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  dom0:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-dom0",
+                    "      build_target: core-image-thin-initramfs",
+                    "  domd:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-domd",
+                    "      build_target: rcar-image-adas",
+                    "  domu:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-domu",
+                    "      build_target: core-image-minimal",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [10])
+            runtime_api.save_runtime_incremental_components(app.config, app_dir, ["dom0"])
+            builder.command_items.incremental_change_state = lambda _app, _components: {
+                "mappings": ["layers-meta-xt-domd-gen5"],
+                "components": ["domd", "domu"],
+            }
+
+            selected = builder.command_items.select_incremental_component_names(
+                app,
+                builder.command_items.incremental_components(app),
+            )
+
+            self.assertEqual(selected, ["dom0"])
 
     def test_incremental_handler_ignores_android_components_when_android_is_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -551,7 +867,7 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             _title, commands = app.workflow.command_calls[0]
             command_text = "\n".join(command[-1] for command in commands if command)
-            self.assertIn('IMAGE_RECIPES = "rcar-image-adas"', command_text)
+            self.assertIn('IMAGE_RECIPES = ""', command_text)
             self.assertNotIn("tools/bazel", command_text)
             self.assertNotIn("ninja doma", command_text)
             self.assertNotIn("ninja doma_kernel", command_text)
@@ -616,7 +932,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             yocto_item.handler(app)
 
             _title, commands = app.workflow.command_calls[0]
-            self.assertEqual(len(commands), 6)
+            self.assertEqual(len(commands), 7)
             self.assertIn("moulin product.yaml", commands[1][-1])
             self.assertIn(
                 "tools/bazel --max_idle_secs=1 build //common-modules/xen-virtual-device:xen_virtual_device_aarch64/.config",
@@ -628,6 +944,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             )
             self.assertIn("ninja doma_kernel doma", commands[4][-1])
             self.assertIn("ninja doma_kernel doma", commands[5][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[6][-1])
 
     def test_incremental_handler_runs_yocto_impact_even_without_selected_yocto_component(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -660,13 +977,131 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             self.assertEqual(app.reload_config_calls, 1)
             _title, commands = app.workflow.command_calls[0]
-            self.assertEqual(len(commands), 4)
+            self.assertEqual(len(commands), 5)
             self.assertIn('ACTION = "clean"', commands[0][-1])
             self.assertIn('IMAGE_RECIPES = ""', commands[0][-1])
             self.assertIn('ALLOW_EMPTY = "1" == "1"', commands[0][-1])
             self.assertIn("moulin product.yaml", commands[1][-1])
             self.assertIn("ninja doma", commands[2][-1])
             self.assertIn("ninja doma", commands[3][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[4][-1])
+
+    def test_incremental_handler_runs_custom_script_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  boot_artifacts:",
+                    "    builder:",
+                    "      type: custom_script",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            components = builder.command_items.incremental_components(app)
+            builder.command_items.select_incremental_component_names = lambda _app, _components: ["boot_artifacts"]
+            incremental_item = next(item for item in builder.command_items.build_items(app) if item.label == "Incremental build")
+
+            incremental_item.handler(app)
+
+            self.assertEqual(components[0]["name"], "boot_artifacts")
+            self.assertTrue(components[0]["supported"])
+            _title, commands = app.workflow.command_calls[0]
+            self.assertIn("ninja boot_artifacts", commands[-2][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[-1][-1])
+
+    def test_reset_incremental_build_state_handler_runs_local_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            reset_item = next(item for item in builder.command_items.build_items(app) if item.label == "Reset incremental build state")
+
+            reset_item.handler(app)
+
+            self.assertEqual(app.reload_config_calls, 1)
+            title, commands = app.workflow.command_calls[0]
+            self.assertEqual(title, "Reset incremental build state")
+            self.assertEqual(len(commands), 1)
+            self.assertIn("reset_runtime_mapping_state", commands[0][-1])
+            self.assertIn("queued local workspace changes", commands[0][-1])
+
+    def test_bitbake_cleanup_uses_popup_confirm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  dom0:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-dom0",
+                    "      build_target: core-image-thin-initramfs",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            cleanup_item = next(item for item in builder.command_items.build_items(app) if item.label == "Clean-up BitBake server")
+
+            cleanup_item.handler(app)
+
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
+            self.assertEqual(app.dialog_workflow.confirm_calls[0].subject, "Clean-up BitBake server")
+            self.assertEqual(app.workflow.build_calls[0]["title"], "Clean-up BitBake server")
+
+    def test_bitbake_cleanup_cancel_skips_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.dialog_workflow.confirm_result = False
+            cleanup_item = next(item for item in builder.command_items.build_items(app) if item.label == "Clean-up BitBake server")
+
+            cleanup_item.handler(app)
+
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
+            self.assertEqual(app.workflow.build_calls, [])
+            self.assertEqual(app.status, "Clean-up BitBake server cancelled")
 
     def test_component_clean_popup_cancel_returns_to_component_selection(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1112,6 +1547,9 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "    builder:",
                     "      type: yocto",
                     "      build_target: core-image-thin-initramfs",
+                    "  boot_artifacts:",
+                    "    builder:",
+                    "      type: custom_script",
                     "  doma:",
                     "    builder:",
                     "      type: android",
@@ -1133,9 +1571,126 @@ class MainMenuBuilderTests(unittest.TestCase):
             state = builder.command_items.incremental_change_state(app, components)
 
             self.assertEqual(state["mappings"], ["layers-meta-xt-dom0-gen5"])
-            self.assertEqual(state["components"], ["dom0"])
+            self.assertEqual(state["components"], ["dom0", "boot_artifacts"])
 
-    def test_copy_mapped_files_handler_runs_explicit_mapping_push(self) -> None:
+    def test_incremental_change_state_ignores_push_disabled_changed_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            crate = local_base / "_synced/build-host/crates/vhost-0.14.0.crate"
+            crate.parent.mkdir(parents=True)
+            crate.write_text("old\n", encoding="utf-8")
+            config = _config(app_dir)
+            config["state"] = {"build_settings": str(app_dir / "state/build-settings.json")}
+            project = config["projects"][0]
+            project["mappings"] = [
+                {
+                    "name": "rust-vmm-vhost-crate",
+                    "role": "rust-vmm-vhost-crate",
+                    "remote": "yocto/common_data/downloads/vhost-0.14.0.crate",
+                    "local": "_synced/build-host/crates/vhost-0.14.0.crate",
+                    "kind": "file",
+                    "push": False,
+                }
+            ]
+            project["active_mappings"] = ["rust-vmm-vhost-crate"]
+            runtime_api.save_runtime_mapping_snapshot(config, app_dir, project["mappings"])
+            crate.write_text("new\n", encoding="utf-8")
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(config)
+
+            state = builder.command_items.incremental_change_state(app, [])
+
+            self.assertEqual(state["mappings"], [])
+            self.assertEqual(state["components"], [])
+
+    def test_copy_mapped_files_handler_runs_active_push_enabled_mappings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            (local_base / "layers/meta-xt-dom0-gen5").mkdir(parents=True)
+            (local_base / "layers/meta-xt-domd-gen5").mkdir(parents=True)
+            (local_base / "_synced/build-host/crates").mkdir(parents=True)
+            (local_base / "_synced/build-host/crates/vhost-0.14.0.crate").write_text("crate\n", encoding="utf-8")
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            config = _config(app_dir)
+            config["projects"][0]["mappings"] = [
+                {
+                    "name": "layers-meta-xt-dom0-gen5",
+                    "role": "dom0",
+                    "remote": "layers/meta-xt-dom0-gen5",
+                    "local": "layers/meta-xt-dom0-gen5",
+                    "kind": "directory",
+                    "push": True,
+                },
+                {
+                    "name": "layers-meta-xt-domd-gen5",
+                    "role": "domd",
+                    "remote": "layers/meta-xt-domd-gen5",
+                    "local": "layers/meta-xt-domd-gen5",
+                    "kind": "directory",
+                    "push": True,
+                },
+                {
+                    "name": "rust-vmm-vhost-crate",
+                    "role": "rust-vmm-vhost-crate",
+                    "remote": "yocto/common_data/downloads/vhost-0.14.0.crate",
+                    "local": "_synced/build-host/crates/vhost-0.14.0.crate",
+                    "kind": "file",
+                    "push": False,
+                },
+            ]
+            (app_dir / "mapping-selection.txt").write_text(
+                "layers-meta-xt-dom0-gen5\nlayers-meta-xt-domd-gen5\nrust-vmm-vhost-crate\n",
+                encoding="utf-8",
+            )
+            app = FakeApp(config)
+            command_items = builder.command_items.build_items(app)
+
+            def fail_component_selection(*_args: Any, **_kwargs: Any) -> list[str]:
+                raise AssertionError("copy mapped files should not open component selection")
+
+            builder.command_items.select_incremental_component_names = fail_component_selection
+            copy_item = next(item for item in command_items if item.label == "Copy mapped files to build host")
+
+            copy_item.handler(app)
+
+            self.assertEqual(app.reload_config_calls, 1)
+            self.assertEqual(app.workflow.command_calls[0][0], "Copy mapped files to build host")
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
+            self.assertEqual(app.dialog_workflow.confirm_calls[0].subject, "Copy mapped files")
+            self.assertIn("layers-meta-xt-dom0-gen5", app.dialog_workflow.confirm_calls[0].details)
+            self.assertIn("layers-meta-xt-domd-gen5", app.dialog_workflow.confirm_calls[0].details)
+            self.assertNotIn("rust-vmm-vhost-crate", app.dialog_workflow.confirm_calls[0].details)
+            commands = app.workflow.command_calls[0][1]
+            command_text = "\n".join(command[2] for command in commands[:2] if len(command) > 2)
+            command_args = [arg for command in commands for arg in command]
+            self.assertIn("layers-meta-xt-dom0-gen5", command_text)
+            self.assertIn("layers-meta-xt-domd-gen5", command_text)
+            self.assertNotIn("rust-vmm-vhost-crate", command_text)
+            self.assertTrue(any("layers/meta-xt-dom0-gen5" in arg for arg in command_args))
+            self.assertTrue(any("layers/meta-xt-domd-gen5" in arg for arg in command_args))
+            self.assertFalse(any("vhost-0.14.0.crate" in arg for arg in command_args))
+
+    def test_copy_mapped_files_handler_cancels_without_push_enabled_active_mappings(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
             builder = items.main_menu_builder(
@@ -1148,15 +1703,67 @@ class MainMenuBuilderTests(unittest.TestCase):
                 remote_read_project_file=lambda *_args, **_kwargs: "",
                 manifest_cache={},
             )
-            app = FakeApp(_config(app_dir))
+            config = _config(app_dir)
+            config["projects"][0]["mappings"] = [
+                {
+                    "name": "rust-vmm-vhost-crate",
+                    "role": "rust-vmm-vhost-crate",
+                    "remote": "yocto/common_data/downloads/vhost-0.14.0.crate",
+                    "local": "_synced/build-host/crates/vhost-0.14.0.crate",
+                    "kind": "file",
+                    "push": False,
+                },
+            ]
+            (app_dir / "mapping-selection.txt").write_text("rust-vmm-vhost-crate\n", encoding="utf-8")
+            app = FakeApp(config)
             command_items = builder.command_items.build_items(app)
             copy_item = next(item for item in command_items if item.label == "Copy mapped files to build host")
 
-            copy_item.handler(app)
+            result = copy_item.handler(app)
 
-            self.assertEqual(app.reload_config_calls, 1)
-            self.assertEqual(app.workflow.command_calls[0][0], "Copy mapped files to build host")
-            self.assertIn("Copy mapped files", app.workflow.command_calls[0][1][0][2])
+            self.assertEqual(result, 0)
+            self.assertEqual(app.status, "Copy mapped files cancelled: no push-enabled active mappings")
+            self.assertEqual(app.dialog_workflow.confirm_calls, [])
+            self.assertEqual(app.workflow.command_calls, [])
+
+    def test_copy_mapped_files_handler_cancels_after_confirm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            (local_base / "layers/meta-xt-dom0-gen5").mkdir(parents=True)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            config = _config(app_dir)
+            config["projects"][0]["mappings"] = [
+                {
+                    "name": "layers-meta-xt-dom0-gen5",
+                    "role": "dom0",
+                    "remote": "layers/meta-xt-dom0-gen5",
+                    "local": "layers/meta-xt-dom0-gen5",
+                    "kind": "directory",
+                    "push": True,
+                },
+            ]
+            (app_dir / "mapping-selection.txt").write_text("layers-meta-xt-dom0-gen5\n", encoding="utf-8")
+            app = FakeApp(config)
+            app.dialog_workflow.confirm_result = False
+            command_items = builder.command_items.build_items(app)
+            copy_item = next(item for item in command_items if item.label == "Copy mapped files to build host")
+
+            result = copy_item.handler(app)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(app.status, "Copy mapped files cancelled")
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
+            self.assertEqual(app.workflow.command_calls, [])
 
     def test_command_items_service_builds_board_command_handlers(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1196,12 +1803,76 @@ class MainMenuBuilderTests(unittest.TestCase):
             app = FakeApp(_config(app_dir))
             app.preflight_values = {"project": "missing", "origin": "mismatch", "ref": "mismatch"}
             setup_items = builder.setup_items.build_items(app)
+            labels = [item.label for item in setup_items]
             prepare_item = next(item for item in setup_items if item.label == "Prepare remote project")
 
+            self.assertNotIn("Checkout project Git ref", labels)
             prepare_item.handler(app)
 
             self.assertEqual(app.workflow.command_calls[0][0], "Prepare remote project")
             self.assertIn("git clone", app.workflow.command_calls[0][1][0][-1])
+
+    def test_command_items_service_adds_confirmed_clean_project_folder_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.preflight_values = {"project": "ok", "origin": "ok", "ref": "ok"}
+            command_items = builder.command_items.build_items(app)
+            clean_item = next(item for item in command_items if item.label == "Clean project folder")
+            stop_item = next(item for item in command_items if item.label == "Stop running command")
+
+            self.assertTrue(clean_item.confirm)
+            self.assertTrue(clean_item.requires_remote)
+            self.assertFalse(clean_item.requires_project)
+            self.assertLess(command_items.index(clean_item), command_items.index(stop_item))
+
+            clean_item.handler(app)
+
+            self.assertEqual(app.workflow.command_calls[0][0], "Clean project folder")
+            command = app.workflow.command_calls[0][1][0][-1]
+            self.assertIn("Clean project folder", command)
+            self.assertIn("rm -rf", command)
+            self.assertIn("refusing to remove unsafe project directory", command)
+
+    def test_setup_items_service_adds_single_checkout_repair_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.preflight_values = {"project": "ok", "origin": "ok", "ref": "mismatch:mirror"}
+            setup_items = builder.setup_items.build_items(app)
+            labels = [item.label for item in setup_items]
+            self.assertEqual(labels.count("Checkout project Git ref"), 1)
+            self.assertNotIn("Clear stale Git index lock", labels)
+            self.assertNotIn("Stash changes and checkout project Git ref", labels)
+            checkout_item = next(item for item in setup_items if item.label == "Checkout project Git ref")
+
+            checkout_item.handler(app)
+
+            self.assertEqual(app.workflow.command_calls[0][0], "Checkout project Git ref")
+            self.assertIn(".git/index.lock", app.workflow.command_calls[0][1][0][-1])
+            self.assertIn("rm -f", app.workflow.command_calls[0][1][0][-1])
+            self.assertIn("git add -A", app.workflow.command_calls[0][1][0][-1])
+            self.assertIn("git stash push", app.workflow.command_calls[0][1][0][-1])
 
     def test_shell_handlers_use_terminal_session_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1275,6 +1946,33 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(app.config_workflow.calls, ["board-artifacts"])
             self.assertEqual(app.workflow.command_calls, [])
 
+    def test_settings_screen_toggles_show_commands_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [ord(" "), ord("q")])
+            item = next(item for item in builder.build_items(app) if item.label == "Settings")
+
+            self.assertEqual(item.preview(app), "Show commands in logs: no")
+
+            item.handler(app)
+
+            self.assertEqual(app.config["ui"], {"show_commands": True})
+            self.assertEqual(item.preview(app), "Show commands in logs: yes")
+            self.assertEqual(app.status, "Settings closed")
+            self.assertEqual(app.saved_configs, [app.config])
+            self.assertTrue(app.menu_dirty)
+            self.assertTrue(app.main_full_redraw)
+
     def test_network_deploy_menu_keeps_individual_actions_visible(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
@@ -1331,6 +2029,9 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "      type: android",
                 ]
             )
+            (app_dir / "overlay").mkdir()
+            (app_dir / "overlay" / "product.yaml").write_text(manifest_text, encoding="utf-8")
+            remote_reads: list[str] = []
             builder = items.main_menu_builder(
                 app_dir=app_dir,
                 default_config_path=app_dir / "config.json",
@@ -1338,7 +2039,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 default_moulin_manifest="product.yaml",
                 flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
                 xt_imager_tool=app_dir / "xt-imager.py",
-                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                remote_read_project_file=lambda _config, path: remote_reads.append(path) or "",
                 manifest_cache={},
             )
             app = FakeApp(_config(app_dir))
@@ -1360,6 +2061,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Deploy full TFTP/NFS set",
                 ],
             )
+            self.assertEqual(remote_reads, [])
 
 
 if __name__ == "__main__":

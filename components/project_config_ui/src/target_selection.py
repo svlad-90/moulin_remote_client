@@ -113,7 +113,16 @@ class TargetSelectionController:
         saved_status: str,
         cancelled_status: str,
     ) -> str | None:
-        candidates = self.target_candidates(build_params)
+        try:
+            candidates = self.target_candidates(build_params)
+        except Exception as exc:
+            port.status = f"{title} discovery failed: {exc}"
+            value = port.prompt(title, selected_text or default_text).strip()
+            if ui_input_api.prompt_was_cancelled(port):
+                port.status = cancelled_status
+                return None
+            port.status = saved_status
+            return value
         selected = self.target_policy_service.selected_targets_from_text(selected_text)
         index = 0
         port.screen.timeout(-1)
@@ -134,17 +143,22 @@ class TargetSelectionController:
             port.draw_box(0, 0, height - 2, width, title)
             port.add(1, 2, "Manifest:", port.accent_attr())
             port.add(1, 18, ui_text_api.fit_text(config_accessor_api.moulin_manifest_name_for_config(self.config), width - 20))
-            port.add(2, 2, "Selected:", port.accent_attr())
+            source = str(getattr(port, "project_config_source", "")).strip()
+            selected_row = 3 if source else 2
+            top = 5 if source else 4
+            visible = max(1, height - (11 if source else 10))
+            if source:
+                port.add(2, 2, "Source:", port.accent_attr())
+                port.add(2, 18, ui_text_api.fit_text(source, width - 20))
+            port.add(selected_row, 2, "Selected:", port.accent_attr())
             display_selected = self.target_policy_service.target_display_text(
                 candidates,
                 selected,
                 current_text=selected_text,
                 default_text=default_text,
             )
-            port.add(2, 18, ui_text_api.fit_text(display_selected, width - 20))
+            port.add(selected_row, 18, ui_text_api.fit_text(display_selected, width - 20))
 
-            top = 4
-            visible = max(1, height - 10)
             if not candidates:
                 port.add(top, 2, empty_message, port.warn_attr())
                 top += 2

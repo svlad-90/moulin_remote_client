@@ -226,8 +226,10 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
         fields = project_screen.project_fields([{"name": "ENABLE_ANDROID"}])
 
         self.assertEqual(fields[0]["key"], "name")
-        self.assertIn("param:ENABLE_ANDROID", [field["key"] for field in fields])
-        self.assertEqual(fields[-1]["key"], "docker_image")
+        keys = [field["key"] for field in fields]
+        self.assertIn("param:ENABLE_ANDROID", keys)
+        self.assertLess(keys.index("docker_image"), keys.index("board_artifacts"))
+        self.assertEqual(fields[-1]["key"], "board_artifacts")
 
     def test_run_project_configurations_screen_quit_saves_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

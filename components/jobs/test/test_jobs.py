@@ -613,6 +613,90 @@ class JobsBehaviorTests(unittest.TestCase):
             },
         )
 
+    def test_prepare_command_step_start_labels_checkout_recovery_before_moulin_detection(self) -> None:
+        result = jobs.prepare_command_step_start(
+            {},
+            {
+                "command": [
+                    "ssh",
+                    "host",
+                    "cd repo; lock=.git/index.lock; rm -f \"$lock\"; git add -A; "
+                    "git stash push -m 'moulin remote client backup' -- .; "
+                    "git fetch origin --prune && git checkout mirror",
+                ],
+                "index": 0,
+                "total": 1,
+            },
+            display_command=lambda command: " ".join(command),
+            display_command_lines=lambda _command: [],
+        )
+
+        self.assertIn("Starting step 1/1: Checkout project Git ref", result["log_lines"])
+
+        result = jobs.prepare_command_step_start(
+            {},
+            {
+                "command": [
+                    "ssh",
+                    "host",
+                    "cd repo; git add -A; git stash push -m 'moulin remote client backup' -- .; "
+                    "git fetch origin --prune && git checkout mirror",
+                ],
+                "index": 0,
+                "total": 1,
+            },
+            display_command=lambda command: " ".join(command),
+            display_command_lines=lambda _command: [],
+        )
+
+        self.assertIn(
+            "Starting step 1/1: Stash changes and checkout project Git ref",
+            result["log_lines"],
+        )
+
+        result = jobs.prepare_command_step_start(
+            {},
+            {
+                "command": ["ssh", "host", "cd repo; git fetch origin --prune && git checkout mirror"],
+                "index": 0,
+                "total": 1,
+            },
+            display_command=lambda command: " ".join(command),
+            display_command_lines=lambda _command: [],
+        )
+
+        self.assertIn("Starting step 1/1: Checkout project Git ref", result["log_lines"])
+
+        result = jobs.prepare_command_step_start(
+            {},
+            {
+                "command": ["ssh", "host", "cd repo; lock=.git/index.lock; rm -f \"$lock\""],
+                "index": 0,
+                "total": 1,
+            },
+            display_command=lambda command: " ".join(command),
+            display_command_lines=lambda _command: [],
+        )
+
+        self.assertIn("Starting step 1/1: Clear stale Git index lock", result["log_lines"])
+
+        result = jobs.prepare_command_step_start(
+            {},
+            {
+                "command": [
+                    "ssh",
+                    "host",
+                    "project_dir=/tmp/project; printf 'Clean project folder'; rm -rf -- project",
+                ],
+                "index": 0,
+                "total": 1,
+            },
+            display_command=lambda command: " ".join(command),
+            display_command_lines=lambda _command: [],
+        )
+
+        self.assertIn("Starting step 1/1: Clean project folder", result["log_lines"])
+
     def test_prepare_command_step_start_labels_board_steps(self) -> None:
         cases = [
             ("printf '%s\\n' 'Prepare board artifacts directory'", "Prepare board artifacts directory"),
@@ -650,6 +734,23 @@ class JobsBehaviorTests(unittest.TestCase):
                 "last_exit": 0,
                 "status": "Prepare remote project: done; reconnect to refresh preflight",
                 "needs_preflight_reset": True,
+            },
+        )
+        self.assertEqual(
+            jobs.completed_command_sequence_state({"title": "Clean project folder", "rc": 0}),
+            {
+                "last_exit": 0,
+                "status": "Clean project folder: done; prepare remote project to fetch checkout",
+                "preflight": "project missing | disk ? | git ? | docker ? | origin ? | ref ?",
+                "preflight_values": {
+                    "project": "missing",
+                    "disk": "?",
+                    "git": "?",
+                    "docker": "?",
+                    "origin": "?",
+                    "ref": "?",
+                },
+                "menu_dirty": True,
             },
         )
 

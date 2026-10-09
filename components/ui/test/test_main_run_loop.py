@@ -84,8 +84,8 @@ class FakePort:
 
 
 class MainRunLoopControllerTests(unittest.TestCase):
-    def test_run_initializes_screen_autoconnects_and_handles_key(self) -> None:
-        port = FakePort([ord("q")])
+    def test_run_initializes_screen_autoconnects_after_first_idle_and_handles_key(self) -> None:
+        port = FakePort([-1, ord("q")])
         controller = main_run_loop.main_run_loop_controller(
             auto_connect_enabled=True,
             sleep=lambda _seconds: None,
@@ -101,11 +101,26 @@ class MainRunLoopControllerTests(unittest.TestCase):
         self.assertEqual(port.connection_workflow.auto_connect_calls, 1)
         self.assertEqual(port.events[:2], ["draw", "auto-connect"])
         self.assertEqual(port.key_calls, [ord("q")])
-        self.assertEqual(port.draw_calls, 2)
-        self.assertEqual(port.poll_calls, 1)
+        self.assertEqual(port.draw_calls, 3)
+        self.assertEqual(port.poll_calls, 2)
         self.assertEqual(port.flush_calls, 1)
         self.assertIn("draw-initial", port.profile_events)
+        self.assertIn("draw-auto-connect-slow", port.profile_events)
         self.assertIn("draw-after-input-slow", port.profile_events)
+
+    def test_first_key_can_exit_before_autoconnect_starts(self) -> None:
+        port = FakePort([ord("q")])
+        controller = main_run_loop.main_run_loop_controller(
+            auto_connect_enabled=True,
+            sleep=lambda _seconds: None,
+            monotonic=lambda: 1.0,
+        )
+
+        controller.run(port)
+
+        self.assertEqual(port.connection_workflow.auto_connect_calls, 0)
+        self.assertEqual(port.events, ["draw", "draw"])
+        self.assertEqual(port.key_calls, [ord("q")])
 
     def test_idle_timeout_redraws_and_sleeps_before_next_key(self) -> None:
         sleeps: list[float] = []

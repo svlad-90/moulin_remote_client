@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -186,11 +187,129 @@ class ConfigRuntimeBehaviorTests(unittest.TestCase):
             mappings = [{"name": "layers-meta-xt-dom0-gen5", "local": "layers/meta-xt-dom0-gen5"}]
 
             runtime.save_runtime_mapping_snapshot(config, app_dir, mappings)
+            runtime.mark_runtime_mapping_build_applied(config, app_dir, mappings)
             self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), [])
+            self.assertEqual(runtime.changed_runtime_mapping_files(config, app_dir, mappings), [])
 
             recipe.write_text("new\n", encoding="utf-8")
 
             self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), ["layers-meta-xt-dom0-gen5"])
+            self.assertEqual(runtime.changed_runtime_mapping_files(config, app_dir, mappings), ["layers/meta-xt-dom0-gen5/recipe.bbappend"])
+
+    def test_runtime_mapping_snapshot_preserves_copied_changes_until_cleared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            layer = local_base / "layers/meta-xt-dom0-gen5"
+            layer.mkdir(parents=True)
+            recipe = layer / "recipe.bbappend"
+            recipe.write_text("old\n", encoding="utf-8")
+            config = {
+                "state": {"build_settings": str(app_dir / "state/build-settings.json")},
+                "local": {"project_dir": str(local_base)},
+                "remotes": [{"name": "build", "user": "u", "host": "h"}],
+                "active_remote": "build",
+                "projects": [{"name": "prod", "project_dir": "meta-product"}],
+                "active_project": "prod",
+            }
+            profiles.normalize_remote_profiles(config)
+            profiles.normalize_project_profiles(config)
+            mappings = [{"name": "layers-meta-xt-dom0-gen5", "local": "layers/meta-xt-dom0-gen5"}]
+
+            runtime.save_runtime_mapping_snapshot(config, app_dir, mappings)
+            runtime.mark_runtime_mapping_build_applied(config, app_dir, mappings)
+            recipe.write_text("new\n", encoding="utf-8")
+            runtime.save_runtime_mapping_snapshot(config, app_dir, mappings)
+
+            self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), ["layers-meta-xt-dom0-gen5"])
+            self.assertEqual(
+                runtime.changed_runtime_mapping_files(config, app_dir, mappings),
+                ["layers/meta-xt-dom0-gen5/recipe.bbappend"],
+            )
+
+            runtime.clear_runtime_mapping_pending_changes(config, app_dir)
+
+            self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), [])
+            self.assertEqual(runtime.changed_runtime_mapping_files(config, app_dir, mappings), [])
+
+    def test_runtime_mapping_state_reset_queues_local_workspace_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            layer = local_base / "layers/meta-xt-dom0-gen5"
+            layer.mkdir(parents=True)
+            recipe = layer / "recipe.bbappend"
+            recipe.write_text("old\n", encoding="utf-8")
+            untouched = layer / "untouched.bbappend"
+            untouched.write_text("same\n", encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=app_dir, check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=app_dir, check=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=app_dir, check=True)
+            subprocess.run(["git", "add", "."], cwd=app_dir, check=True)
+            subprocess.run(["git", "commit", "-m", "baseline"], cwd=app_dir, check=True, stdout=subprocess.DEVNULL)
+            recipe.write_text("current\n", encoding="utf-8")
+            config = {
+                "state": {"build_settings": str(app_dir / "state/build-settings.json")},
+                "local": {"project_dir": str(local_base)},
+                "remotes": [{"name": "build", "user": "u", "host": "h"}],
+                "active_remote": "build",
+                "projects": [{"name": "prod", "project_dir": "meta-product"}],
+                "active_project": "prod",
+            }
+            profiles.normalize_remote_profiles(config)
+            profiles.normalize_project_profiles(config)
+            mappings = [{"name": "layers-meta-xt-dom0-gen5", "local": "layers/meta-xt-dom0-gen5"}]
+            runtime.save_runtime_mapping_snapshot(config, app_dir, mappings)
+
+            runtime.reset_runtime_mapping_state(config, app_dir, mappings)
+
+            self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), ["layers-meta-xt-dom0-gen5"])
+            self.assertEqual(
+                runtime.changed_runtime_mapping_files(config, app_dir, mappings),
+                ["layers/meta-xt-dom0-gen5/recipe.bbappend"],
+            )
+
+    def test_runtime_mapping_snapshot_ignores_generated_product_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            local_base.mkdir(parents=True)
+            recipe = local_base / "layers/meta-xt-dom0-gen5/recipe.bbappend"
+            recipe.parent.mkdir(parents=True)
+            recipe.write_text("old\n", encoding="utf-8")
+            config = {
+                "state": {"build_settings": str(app_dir / "state/build-settings.json")},
+                "local": {"project_dir": str(local_base)},
+                "remotes": [{"name": "build", "user": "u", "host": "h"}],
+                "active_remote": "build",
+                "projects": [{"name": "prod", "project_dir": "meta-product"}],
+                "active_project": "prod",
+            }
+            profiles.normalize_remote_profiles(config)
+            profiles.normalize_project_profiles(config)
+            mappings = [{"name": "workspace-root", "local": "."}]
+
+            runtime.save_runtime_mapping_snapshot(config, app_dir, mappings)
+            runtime.mark_runtime_mapping_build_applied(config, app_dir, mappings)
+            for generated in (
+                ".ninja_deps.bad-20261005-153130",
+                ".ninja_log",
+                ".moulin_boot_artifacts.d",
+                "defras-build-console.log",
+                "full_ufs.img.gz",
+                "yocto/build-dom0/tmp/work/stamp",
+                "android/out/target/product/image.img",
+            ):
+                path = local_base / generated
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("generated\n", encoding="utf-8")
+
+            self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), [])
+            self.assertEqual(runtime.changed_runtime_mapping_files(config, app_dir, mappings), [])
+
+            recipe.write_text("new\n", encoding="utf-8")
+
+            self.assertEqual(runtime.changed_runtime_mapping_files(config, app_dir, mappings), ["layers/meta-xt-dom0-gen5/recipe.bbappend"])
 
     def test_build_runtime_context_merges_config_settings_and_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

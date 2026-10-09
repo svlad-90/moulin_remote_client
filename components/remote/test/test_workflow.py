@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import unittest
 
 import moulin_remote_client as client
@@ -52,10 +53,35 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
             service.prepare_project_command(config),
             commands.build_remote_prepare_project_command_for_config(config),
         )
+        clean_project = shlex.join(service.clean_project_folder_command(config))
+        self.assertIn("Clean project folder", clean_project)
+        self.assertIn("rm -rf", clean_project)
+        self.assertIn("refusing to remove unsafe project directory", clean_project)
         self.assertEqual(
             service.checkout_git_ref_command(config),
             commands.build_remote_checkout_git_ref_command_for_config(config),
         )
+        self.assertIn(
+            "git stash push",
+            shlex.join(service.stash_and_checkout_git_ref_command(config)),
+        )
+        stash_checkout = shlex.join(service.stash_and_checkout_git_ref_command(config))
+        self.assertIn("git add -A", stash_checkout)
+        self.assertIn("git diff --cached --quiet", stash_checkout)
+        clear_lock = shlex.join(service.clear_git_index_lock_command(config))
+        self.assertIn(".git/index.lock", clear_lock)
+        self.assertIn("rm -f", clear_lock)
+        repair_checkout = shlex.join(service.repair_and_checkout_git_ref_command(config))
+        self.assertIn(".git/index.lock", repair_checkout)
+        self.assertIn("rm -f", repair_checkout)
+        self.assertIn("git add -A", repair_checkout)
+        self.assertIn("git stash push", repair_checkout)
+        self.assertIn("--include-untracked", repair_checkout)
+        self.assertIn("git stash did not create a backup", repair_checkout)
+        self.assertIn("working tree is still dirty", repair_checkout)
+        self.assertIn("git reset --hard", repair_checkout)
+        self.assertIn("git clean -fd", repair_checkout)
+        self.assertIn("git checkout", repair_checkout)
 
     def test_project_maintenance_service_owns_prepare_checkout_and_preflight(self) -> None:
         config = sample_config()
@@ -67,10 +93,35 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
             service.prepare_project_command_for_config(config),
             commands.build_remote_prepare_project_command_for_config(config),
         )
+        clean_project = shlex.join(service.clean_project_folder_command_for_config(config))
+        self.assertIn("Clean project folder", clean_project)
+        self.assertIn("rm -rf", clean_project)
+        self.assertIn("refusing to remove unsafe project directory", clean_project)
         self.assertEqual(
             service.checkout_git_ref_command_for_config(config),
             commands.build_remote_checkout_git_ref_command_for_config(config),
         )
+        self.assertIn(
+            "git stash push",
+            shlex.join(service.stash_and_checkout_git_ref_command_for_config(config)),
+        )
+        stash_checkout = shlex.join(service.stash_and_checkout_git_ref_command_for_config(config))
+        self.assertIn("git add -A", stash_checkout)
+        self.assertIn("git diff --cached --quiet", stash_checkout)
+        clear_lock = shlex.join(service.clear_git_index_lock_command_for_config(config))
+        self.assertIn(".git/index.lock", clear_lock)
+        self.assertIn("rm -f", clear_lock)
+        repair_checkout = shlex.join(service.repair_and_checkout_git_ref_command_for_config(config))
+        self.assertIn(".git/index.lock", repair_checkout)
+        self.assertIn("rm -f", repair_checkout)
+        self.assertIn("git add -A", repair_checkout)
+        self.assertIn("git stash push", repair_checkout)
+        self.assertIn("--include-untracked", repair_checkout)
+        self.assertIn("git stash did not create a backup", repair_checkout)
+        self.assertIn("working tree is still dirty", repair_checkout)
+        self.assertIn("git reset --hard", repair_checkout)
+        self.assertIn("git clean -fd", repair_checkout)
+        self.assertIn("git checkout", repair_checkout)
         self.assertEqual(
             service.preflight_command_for_config(config, "prod_img"),
             commands.build_remote_preflight_command_for_config(config, "prod_img"),
@@ -94,6 +145,15 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
                 config,
                 docker_image="prod_img",
                 default_dockerfile=client.DEFAULT_DOCKERFILE,
+            ),
+        )
+        components = [{"name": "domd", "builder_type": "yocto", "build_dir": "yocto", "work_dir": "build-domd"}]
+        self.assertEqual(
+            service.bitbake_cleanup_command(config, docker_image="prod_img", components=components),
+            commands.build_remote_bitbake_cleanup_command_for_config(
+                config,
+                docker_image="prod_img",
+                components=components,
             ),
         )
         self.assertEqual(
@@ -136,8 +196,39 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("scan available recipes in", yocto_impact[-1])
         self.assertIn("elapsed:", yocto_impact[-1])
         self.assertIn("== yocto impact {ACTION} ==", yocto_impact[-1])
-        self.assertIn("MOULIN_TUI_SHOW_COMMANDS", yocto_impact[-1])
+        self.assertIn('BUILD_DIRS = "".strip().split()', yocto_impact[-1])
         self.assertIn('ALLOW_EMPTY = "0" == "1"', yocto_impact[-1])
+        self.assertIn('USE_CHANGED_FILES = "0" == "1"', yocto_impact[-1])
+        self.assertIn(
+            'BUILD_DIRS = "yocto/build-dom0".strip().split()',
+            service.yocto_impact_command(
+                config,
+                docker_image="prod_img",
+                targets="core-image-thin-initramfs",
+                build_dirs=["yocto/build-dom0"],
+            )[-1],
+        )
+        explicit_scope_impact = service.yocto_impact_command(
+            config,
+            docker_image="prod_img",
+            targets="core-image-thin-initramfs",
+            image_recipes=["core-image-thin-initramfs"],
+            build_dirs=["yocto/build-dom0"],
+        )[-1]
+        self.assertIn("explicit_recipe_scope = bool(BUILD_DIRS and IMAGE_RECIPES)", explicit_scope_impact)
+        self.assertIn("elif (recipes or IMAGE_RECIPES) and build_dirs:", explicit_scope_impact)
+        self.assertIn(
+            'IMAGE_RECIPES = "core-image-thin-initramfs".strip().split()',
+            explicit_scope_impact,
+        )
+        changed_file_impact = service.yocto_impact_command(
+            config,
+            docker_image="prod_img",
+            targets="core-image-thin-initramfs",
+            changed_files=["layers/meta-xt-dom0-gen5/recipes-guests/domu/domu.bbappend"],
+        )[-1]
+        self.assertIn('USE_CHANGED_FILES = "1" == "1"', changed_file_impact)
+        self.assertIn("CHANGED_FILES = json.loads", changed_file_impact)
         self.assertIn(
             'ALLOW_EMPTY = "1" == "1"',
             service.yocto_impact_command(
@@ -196,6 +287,38 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
                     config,
                     docker_image="prod_img",
                     build_params={"ENABLE_ANDROID": "yes"},
+                )
+            ],
+        )
+
+    def test_workflow_routes_bitbake_cleanup_to_build_host_command(self) -> None:
+        config = sample_config()
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        service = self._service()
+        calls: list[list[str]] = []
+        context = {
+            "docker_image": "prod_img",
+            "build_params": {"ENABLE_ANDROID": "yes"},
+            "build_targets": "boot_artifacts full_ufs.img.gz",
+            "component_builders": [{"name": "domd", "builder_type": "yocto", "build_dir": "yocto", "work_dir": "build-domd"}],
+        }
+
+        service.run_cli_command(
+            config,
+            "cleanup-bitbake",
+            runtime_context=lambda: context,
+            structured_script=commands.build_structured_script,
+            runner=lambda argv: calls.append(argv),
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                service.bitbake_cleanup_command(
+                    config,
+                    docker_image="prod_img",
+                    components=[{"name": "domd", "builder_type": "yocto", "build_dir": "yocto", "work_dir": "build-domd"}],
                 )
             ],
         )

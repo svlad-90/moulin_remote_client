@@ -84,8 +84,10 @@ class MenuModelBehaviorTests(unittest.TestCase):
         self.assertEqual(menu.item_job_slot(MenuItem("Analyze Yocto", "build commands / yocto incremental build", "", lambda app: "", lambda app: None)), "build")
         self.assertEqual(menu.item_job_slot(MenuItem("Sync mapped files", "sync", "", lambda app: "", lambda app: None)), "build")
         self.assertEqual(menu.item_job_slot(MenuItem("Connect build host", "build host session", "", lambda app: "", lambda app: None)), "build")
+        self.assertEqual(menu.item_job_slot(MenuItem("Disconnect build host", "build host session", "", lambda app: "", lambda app: None)), "build")
         self.assertEqual(menu.item_job_slot(MenuItem("Flash UFS image", "board commands", "", lambda app: "", lambda app: None)), "board")
         self.assertEqual(menu.item_job_slot(MenuItem("Connect board host", "board host session", "", lambda app: "", lambda app: None)), "board")
+        self.assertEqual(menu.item_job_slot(MenuItem("Disconnect board host", "board host session", "", lambda app: "", lambda app: None)), "board")
         self.assertIsNone(menu.item_job_slot(MenuItem("Open local NFS workspace", "tftp/nfs / open local workspaces", "", lambda app: "", lambda app: None)))
         self.assertIsNone(menu.item_job_slot(MenuItem("Open board serial console", "flashing / board host", "", lambda app: "", lambda app: None)))
         self.assertIsNone(menu.item_job_slot(MenuItem("Open U-Boot console", "flashing / board host", "", lambda app: "", lambda app: None)))
@@ -406,6 +408,208 @@ class MenuModelBehaviorTests(unittest.TestCase):
         self.assertFalse(_item_enabled(stop_item, board_job=None))
         self.assertFalse(_item_enabled(stop_item, board_job=board_connect_job))
         self.assertTrue(_item_enabled(stop_item, board_job=board_command_job))
+
+    def test_connect_items_stay_enabled_without_configured_ssh_fields(self) -> None:
+        build_connect = MenuItem("Connect build host", "sessions / build host", "", lambda app: "", lambda app: None)
+        board_connect = MenuItem("Connect board host", "sessions / board host", "", lambda app: "", lambda app: None)
+        board_shell = MenuItem("Open board host shell", "sessions / board host", "", lambda app: "", lambda app: None)
+
+        self.assertTrue(_item_enabled(build_connect, remote_has_ssh=False))
+        self.assertTrue(_item_enabled(board_connect, board_host_has_ssh=False))
+        self.assertFalse(_item_enabled(board_shell, board_host_has_ssh=False))
+
+    def test_git_ref_recovery_item_stays_enabled_when_checkout_needed(self) -> None:
+        checkout = MenuItem(
+            "Checkout project Git ref",
+            "build",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_project=True,
+        )
+        build_item = MenuItem(
+            "Run product build",
+            "build",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_project=True,
+        )
+        build_shell = MenuItem(
+            "Open build host shell",
+            "sessions / build host",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_remote=True,
+            requires_project=True,
+        )
+        tftp_deploy = MenuItem(
+            "Deploy full TFTP/NFS set",
+            "tftp/nfs / deploy artifacts",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_remote=True,
+            requires_project=True,
+        )
+        tftp_setup = MenuItem(
+            "Apply U-Boot UFS env",
+            "tftp/nfs / board setup",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_project=True,
+        )
+        local_workspace = MenuItem(
+            "Open local NFS workspace",
+            "tftp/nfs / tftp/nfs workspace",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_project=True,
+        )
+
+        self.assertTrue(_item_enabled(checkout, checkout_git_ref_needed=True))
+        self.assertTrue(_item_enabled(build_shell, checkout_git_ref_needed=True))
+        self.assertTrue(_item_enabled(tftp_deploy, checkout_git_ref_needed=True))
+        self.assertTrue(_item_enabled(tftp_setup, checkout_git_ref_needed=True))
+        self.assertTrue(_item_enabled(local_workspace, checkout_git_ref_needed=True))
+        self.assertFalse(_item_enabled(build_item, checkout_git_ref_needed=True))
+
+    def test_only_checkout_dependent_items_block_on_project_preparation(self) -> None:
+        build_shell = MenuItem(
+            "Open build host shell",
+            "sessions / build host",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_remote=True,
+            requires_project=True,
+        )
+        select_targets = MenuItem(
+            "Select build targets",
+            "build / configuration",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_project=True,
+        )
+        reset_incremental = MenuItem(
+            "Reset incremental build state",
+            "build / commands",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_project=True,
+        )
+        copy_mapped_files = MenuItem(
+            "Copy mapped files to build host",
+            "build / commands",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_remote=True,
+            requires_project=True,
+        )
+        build_item = MenuItem(
+            "Run product build",
+            "build",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_remote=True,
+            requires_project=True,
+        )
+        tftp_deploy = MenuItem(
+            "Deploy full TFTP/NFS set",
+            "tftp/nfs / deploy artifacts",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_remote=True,
+            requires_project=True,
+        )
+        tftp_setup = MenuItem(
+            "Apply U-Boot UFS env",
+            "tftp/nfs / board setup",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_project=True,
+        )
+        tftp_workspace = MenuItem(
+            "Pull TFTP/NFS workspace",
+            "tftp/nfs / tftp/nfs workspace",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_project=True,
+        )
+        local_workspace = MenuItem(
+            "Open local NFS workspace",
+            "tftp/nfs / tftp/nfs workspace",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_project=True,
+        )
+        copy_artifacts = MenuItem(
+            "Copy build artifacts",
+            "flashing / commands",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_remote=True,
+            requires_project=True,
+        )
+
+        self.assertTrue(_item_enabled(build_shell, prepare_remote_project_needed=True))
+        self.assertFalse(_item_enabled(select_targets, prepare_remote_project_needed=True))
+        self.assertTrue(_item_enabled(reset_incremental, prepare_remote_project_needed=True))
+        self.assertTrue(_item_enabled(tftp_setup, prepare_remote_project_needed=True))
+        self.assertTrue(_item_enabled(tftp_workspace, prepare_remote_project_needed=True))
+        self.assertTrue(_item_enabled(local_workspace, prepare_remote_project_needed=True))
+        self.assertFalse(_item_enabled(copy_mapped_files, prepare_remote_project_needed=True))
+        self.assertFalse(_item_enabled(build_item, prepare_remote_project_needed=True))
+        self.assertFalse(_item_enabled(tftp_deploy, prepare_remote_project_needed=True))
+        self.assertFalse(_item_enabled(copy_artifacts, prepare_remote_project_needed=True))
+        self.assertEqual(
+            _disabled_reason(build_item, prepare_remote_project_needed=True),
+            "remote project needs preparation",
+        )
+
+    def test_project_recovery_items_do_not_require_existing_checkout(self) -> None:
+        prepare = MenuItem(
+            "Prepare remote project",
+            "build",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_ssh=True,
+            requires_project=True,
+        )
+        checkout = MenuItem(
+            "Checkout project Git ref",
+            "build",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_remote=True,
+            requires_project=True,
+        )
+        select_targets = MenuItem(
+            "Select build targets",
+            "build / configuration",
+            "",
+            lambda app: "",
+            lambda app: None,
+            requires_project=True,
+        )
+
+        self.assertTrue(_item_enabled(prepare, remote_has_project_dir=False))
+        self.assertTrue(_item_enabled(checkout, remote_has_project_dir=False))
+        self.assertFalse(_item_enabled(select_targets, prepare_remote_project_needed=True))
 
     def test_disabled_reason_preserves_current_messages(self) -> None:
         copy_item = MenuItem("Copy build artifacts", "board commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True)

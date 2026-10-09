@@ -58,6 +58,8 @@ class SyncMappingCommandService:
                     )
                 raise SystemExit(f"mapping {mapping['name']} is marked push=false")
             if not local_path.exists():
+                if mapping["kind"] == "file":
+                    return self.remote_file_delete_command(mapping, dry_run=dry_run, remote_base=remote_base)
                 if dry_run:
                     return self.local_log_command(
                         f"SKIP push dry-run: {mapping['name']}",
@@ -67,6 +69,7 @@ class SyncMappingCommandService:
                     )
                 raise SystemExit(f"local mapping path does not exist: {local_path}")
             remote_dir = self.remote_mapping_directory(mapping, remote_base=remote_base)
+            self.add_push_compare_options(argv)
             argv.extend(["--rsync-path", f"mkdir -p {shlex.quote(remote_dir)} && rsync"])
             argv.extend([str(local_path) + source_suffix, remote_path + target_suffix])
         else:
@@ -75,6 +78,10 @@ class SyncMappingCommandService:
 
     def local_log_command(self, *lines: str, exit_code: int = 0) -> list[str]:
         return self.script_service.local_log_command(*lines, exit_code=exit_code)
+
+    @staticmethod
+    def add_push_compare_options(argv: list[str]) -> None:
+        argv.append("--checksum")
 
     def remote_mapping_directory(self, mapping: dict[str, Any], *, remote_base: str) -> str:
         _remote, separator, base_path = remote_base.partition(":")
@@ -90,6 +97,22 @@ class SyncMappingCommandService:
             raise SystemExit(f"remote project path is not an rsync remote path: {remote_base}")
         return str(PurePosixPath(base_path))
 
+    def remote_file_path(self, mapping: dict[str, Any], *, remote_base: str) -> tuple[str, str]:
+        remote, separator, base_path = remote_base.partition(":")
+        if not separator:
+            raise SystemExit(f"remote project path is not an rsync remote path: {remote_base}")
+        return remote, str(PurePosixPath(base_path) / mapping["remote"])
+
+    def remote_file_delete_command(self, mapping: dict[str, Any], *, dry_run: bool, remote_base: str) -> list[str]:
+        remote, remote_path = self.remote_file_path(mapping, remote_base=remote_base)
+        if dry_run:
+            return self.local_log_command(
+                f"DELETE push dry-run: {mapping['name']}",
+                "reason: local file mapping does not exist",
+                f"remote: {mapping['remote']}",
+            )
+        return transport.ssh_command(remote, f"rm -f {shlex.quote(remote_path)}")
+
     def relative_local_mapping_path(self, mapping: dict[str, Any], *, local_base: Path) -> str:
         return f"{local_base}/./{mapping['local']}"
 
@@ -104,19 +127,48 @@ class SyncMappingCommandService:
     ) -> list[str]:
         if not mappings:
             raise SystemExit("no mappings selected")
+        delete_mappings: list[dict[str, Any]] = []
         missing: list[str] = []
         disabled: list[str] = []
         for mapping in mappings:
             if not mapping["push"]:
                 disabled.append(mapping["name"])
-            if not (local_base / mapping["local"]).exists():
+            local_path = local_base / mapping["local"]
+            if local_path.exists():
+                continue
+            if mapping["kind"] == "file":
+                delete_mappings.append(mapping)
+            else:
                 missing.append(str(local_base / mapping["local"]))
         if disabled:
             raise SystemExit("push disabled for mappings:\n" + "\n".join(disabled))
         if missing:
             raise SystemExit("local mapping paths do not exist:\n" + "\n".join(missing))
+        existing_mappings = [mapping for mapping in mappings if (local_base / mapping["local"]).exists()]
+        if delete_mappings:
+            command_lines: list[str] = []
+            if existing_mappings:
+                command_lines.append(
+                    transport.shell_command(
+                        self.rsync_mappings_push_command(
+                            existing_mappings,
+                            dry_run=dry_run,
+                            excludes=excludes,
+                            local_base=local_base,
+                            remote_base=remote_base,
+                        )
+                    )
+                )
+            command_lines.extend(
+                transport.shell_command(
+                    self.remote_file_delete_command(mapping, dry_run=dry_run, remote_base=remote_base)
+                )
+                for mapping in delete_mappings
+            )
+            return ["bash", "-lc", "set -e\n" + "\n".join(command_lines)]
         argv = transport.rsync_base_command(dry_run=dry_run, relative=True)
         argv.extend(excludes)
+        self.add_push_compare_options(argv)
         remote_project_dir = self.remote_project_directory(remote_base=remote_base)
         argv.extend(["--rsync-path", f"mkdir -p {shlex.quote(remote_project_dir)} && rsync"])
         argv.extend(self.relative_local_mapping_path(mapping, local_base=local_base) for mapping in mappings)

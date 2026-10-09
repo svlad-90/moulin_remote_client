@@ -410,6 +410,7 @@ class ProjectMappingBehaviorTests(unittest.TestCase):
                     [
                         {"name": "layer", "local": "layers/meta", "kind": "directory"},
                         {"name": "manifest", "local": "prod.yaml", "kind": "file"},
+                        {"name": "deleted-patch", "local": "deleted.patch", "kind": "file"},
                     ],
                 ),
                 [],

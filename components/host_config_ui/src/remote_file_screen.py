@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from components.config.api import accessors as config_accessor_api
+from components.config.api import profiles as config_profile_api
 from components.project_config.api import project_fields as project_fields_api
 from components.moulin.api import manifest as moulin_manifest_api
 from components.remote.api import discovery as remote_discovery_api
@@ -24,7 +25,9 @@ class RemoteFileSelectionController:
         app_dir: Path,
         *,
         fetch_git_tracked_files: Callable[[], list[str]],
+        fetch_git_remote_files: Callable[[], list[str]],
         read_project_file: Callable[[dict[str, Any], str], str],
+        read_git_remote_file: Callable[[dict[str, Any], str], str],
         manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
         default_moulin_manifest: str,
         save_config: Callable[[dict[str, Any]], Any],
@@ -33,7 +36,9 @@ class RemoteFileSelectionController:
         self.config = config
         self.app_dir = app_dir
         self.fetch_git_tracked_files = fetch_git_tracked_files
+        self.fetch_git_remote_files = fetch_git_remote_files
         self.read_project_file = read_project_file
+        self.read_git_remote_file = read_git_remote_file
         self.manifest_cache = manifest_cache
         self.default_moulin_manifest = default_moulin_manifest
         self.save_config = save_config
@@ -45,7 +50,9 @@ class RemoteFileSelectionController:
             self.config,
             self.app_dir,
             fetch_git_tracked_files=self.fetch_git_tracked_files,
+            fetch_git_remote_files=self.fetch_git_remote_files,
             read_project_file=self.read_project_file,
+            read_git_remote_file=self.read_git_remote_file,
             manifest_cache=self.manifest_cache,
             default_moulin_manifest=self.default_moulin_manifest,
             save_config=self.save_config,
@@ -57,7 +64,9 @@ class RemoteFileSelectionController:
             port,
             self.config,
             fetch_git_tracked_files=self.fetch_git_tracked_files,
+            fetch_git_remote_files=self.fetch_git_remote_files,
             read_project_file=self.read_project_file,
+            read_git_remote_file=self.read_git_remote_file,
             save_config=self.save_config,
             reset_preflight=self.reset_preflight,
         )
@@ -84,6 +93,14 @@ def validate_remote_project_file_candidate(
     except Exception as exc:
         return False, str(exc)
     return validate_text(text)
+
+
+def prompt_manual_remote_path(port: Any, label: str, current: str) -> str | None:
+    value = port.prompt(label, current).strip()
+    if ui_input_api.prompt_was_cancelled(port):
+        port.status = f"{label} unchanged"
+        return None
+    return value or None
 
 
 def run_select_remote_candidate_screen(
@@ -161,7 +178,9 @@ def run_select_remote_moulin_manifest(
     app_dir: Path,
     *,
     fetch_git_tracked_files: Callable[[], list[str]],
+    fetch_git_remote_files: Callable[[], list[str]],
     read_project_file: Callable[[dict[str, Any], str], str],
+    read_git_remote_file: Callable[[dict[str, Any], str], str],
     manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
     default_moulin_manifest: str,
     save_config: Callable[[dict[str, Any]], Any],
@@ -169,25 +188,50 @@ def run_select_remote_moulin_manifest(
 ) -> None:
     if not port.remote_project_config_ready():
         return
+    searched_remote_git = False
     try:
         draw_loading_message(port, "Select Moulin manifest", "Searching tracked root YAML files...")
         paths = remote_discovery_api.remote_project_discovery_service().root_yaml_candidates(fetch_git_tracked_files())
     except Exception as exc:
         port.status = f"Manifest search failed: {exc}"
-        return
-    candidates = [{"path": path, "valid": None, "detail": "press Enter to validate"} for path in paths[:200]]
-    selected = run_select_remote_candidate_screen(
-        port,
-        config,
-        "Select Moulin manifest",
-        candidates,
-        lambda path: validate_remote_project_file_candidate(
+        searched_remote_git = True
+        try:
+            draw_loading_message(port, "Select Moulin manifest", "Searching remote Git root YAML files...")
+            paths = remote_discovery_api.remote_project_discovery_service().root_yaml_candidates(fetch_git_remote_files())
+            read_candidate_file = read_git_remote_file
+        except Exception as fallback_exc:
+            port.status = f"Manifest search failed: {exc}; remote Git failed: {fallback_exc}"
+            paths = []
+            read_candidate_file = read_project_file
+    else:
+        read_candidate_file = read_project_file
+    if not paths and not searched_remote_git:
+        try:
+            draw_loading_message(port, "Select Moulin manifest", "Searching remote Git root YAML files...")
+            paths = remote_discovery_api.remote_project_discovery_service().root_yaml_candidates(fetch_git_remote_files())
+            read_candidate_file = read_git_remote_file
+        except Exception as fallback_exc:
+            port.status = f"Remote Git manifest search failed: {fallback_exc}"
+    if not paths:
+        selected = prompt_manual_remote_path(
+            port,
+            "Moulin manifest",
+            str(config_profile_api.active_project(config).get("moulin_manifest", "")),
+        )
+    else:
+        candidates = [{"path": path, "valid": None, "detail": "press Enter to validate"} for path in paths[:200]]
+        selected = run_select_remote_candidate_screen(
+            port,
             config,
-            path,
-            moulin_manifest_api.validate_manifest_text,
-            read_project_file=read_project_file,
-        ),
-    )
+            "Select Moulin manifest",
+            candidates,
+            lambda path: validate_remote_project_file_candidate(
+                config,
+                path,
+                moulin_manifest_api.validate_manifest_text,
+                read_project_file=read_candidate_file,
+            ),
+        )
     if not selected:
         port.status = "Moulin manifest unchanged"
         return
@@ -217,7 +261,9 @@ def remote_file_selection_controller(
     app_dir: Path,
     *,
     fetch_git_tracked_files: Callable[[], list[str]],
+    fetch_git_remote_files: Callable[[], list[str]],
     read_project_file: Callable[[dict[str, Any], str], str],
+    read_git_remote_file: Callable[[dict[str, Any], str], str],
     manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
     default_moulin_manifest: str,
     save_config: Callable[[dict[str, Any]], Any],
@@ -227,7 +273,9 @@ def remote_file_selection_controller(
         config,
         app_dir,
         fetch_git_tracked_files=fetch_git_tracked_files,
+        fetch_git_remote_files=fetch_git_remote_files,
         read_project_file=read_project_file,
+        read_git_remote_file=read_git_remote_file,
         manifest_cache=manifest_cache,
         default_moulin_manifest=default_moulin_manifest,
         save_config=save_config,
@@ -240,31 +288,58 @@ def run_select_remote_dockerfile(
     config: dict[str, Any],
     *,
     fetch_git_tracked_files: Callable[[], list[str]],
+    fetch_git_remote_files: Callable[[], list[str]],
     read_project_file: Callable[[dict[str, Any], str], str],
+    read_git_remote_file: Callable[[dict[str, Any], str], str],
     save_config: Callable[[dict[str, Any]], Any],
     reset_preflight: Callable[[], Any],
 ) -> None:
     if not port.remote_project_config_ready():
         return
+    searched_remote_git = False
     try:
         draw_loading_message(port, "Select Dockerfile", "Searching tracked Dockerfiles...")
         paths = remote_discovery_api.remote_project_discovery_service().dockerfile_candidates(fetch_git_tracked_files())
     except Exception as exc:
         port.status = f"Dockerfile search failed: {exc}"
-        return
-    candidates = [{"path": path, "valid": None, "detail": "press Enter to validate"} for path in paths[:200]]
-    selected = run_select_remote_candidate_screen(
-        port,
-        config,
-        "Select Dockerfile",
-        candidates,
-        lambda path: validate_remote_project_file_candidate(
+        searched_remote_git = True
+        try:
+            draw_loading_message(port, "Select Dockerfile", "Searching remote Git Dockerfiles...")
+            paths = remote_discovery_api.remote_project_discovery_service().dockerfile_candidates(fetch_git_remote_files())
+            read_candidate_file = read_git_remote_file
+        except Exception as fallback_exc:
+            port.status = f"Dockerfile search failed: {exc}; remote Git failed: {fallback_exc}"
+            paths = []
+            read_candidate_file = read_project_file
+    else:
+        read_candidate_file = read_project_file
+    if not paths and not searched_remote_git:
+        try:
+            draw_loading_message(port, "Select Dockerfile", "Searching remote Git Dockerfiles...")
+            paths = remote_discovery_api.remote_project_discovery_service().dockerfile_candidates(fetch_git_remote_files())
+            read_candidate_file = read_git_remote_file
+        except Exception as fallback_exc:
+            port.status = f"Remote Git Dockerfile search failed: {fallback_exc}"
+    if not paths:
+        selected = prompt_manual_remote_path(
+            port,
+            "Dockerfile",
+            str(config_profile_api.active_project(config).get("dockerfile", "")),
+        )
+    else:
+        candidates = [{"path": path, "valid": None, "detail": "press Enter to validate"} for path in paths[:200]]
+        selected = run_select_remote_candidate_screen(
+            port,
             config,
-            path,
-            remote_discovery_api.remote_project_discovery_service().validate_dockerfile_text,
-            read_project_file=read_project_file,
-        ),
-    )
+            "Select Dockerfile",
+            candidates,
+            lambda path: validate_remote_project_file_candidate(
+                config,
+                path,
+                remote_discovery_api.remote_project_discovery_service().validate_dockerfile_text,
+                read_project_file=read_candidate_file,
+            ),
+        )
     if not selected:
         port.status = "Dockerfile unchanged"
         return

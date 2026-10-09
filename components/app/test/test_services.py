@@ -141,6 +141,10 @@ class AppServicesControllerTests(unittest.TestCase):
             )
             session_factory.assert_called()
             self.assertEqual(session_factory.call_args.kwargs["docker_image"], "image")
+            display_lines = session_factory.call_args.kwargs["display_command_lines"]
+            self.assertEqual(display_lines(["echo", "hidden"]), [])
+            port.config["ui"] = {"show_commands": True}
+            self.assertEqual(display_lines(["echo", "visible"]), ["command: echo visible"])
 
     def test_config_sync_terminal_and_dialog_workflows_are_wired(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

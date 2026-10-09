@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import shlex
 import base64
 import json
+import shlex
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
@@ -60,6 +60,168 @@ class RemoteBuildCommandService:
                 config,
                 docker_image=docker_image,
                 default_dockerfile=default_dockerfile,
+            )
+        )
+
+    def bitbake_cleanup_command(
+        self,
+        remote: str,
+        project_dir: str,
+        docker_image: str,
+        components: list[dict[str, Any]],
+    ) -> list[str]:
+        if not docker_image:
+            raise SystemExit("Docker image name is not configured")
+        payload = base64.b64encode(json.dumps(components, sort_keys=True).encode("utf-8")).decode("ascii")
+        script = r'''
+from __future__ import annotations
+
+import base64
+import json
+import shlex
+import subprocess
+from pathlib import Path, PurePosixPath
+
+
+DOCKER_IMAGE = "__DOCKER_IMAGE__"
+COMPONENTS = json.loads(base64.b64decode("__COMPONENTS_B64__").decode("utf-8"))
+
+
+def run(command: str, *, label: str, check: bool = False) -> int:
+    print()
+    print(label)
+    print("$", command)
+    rc = subprocess.run(command, shell=True, executable="/bin/bash", check=False).returncode
+    print("exit:", rc)
+    if check and rc != 0:
+        raise SystemExit(rc)
+    return rc
+
+
+def timeout_command(seconds: int, command: str) -> str:
+    quoted = shlex.quote(command)
+    return (
+        f"if command -v timeout >/dev/null 2>&1; then "
+        f"timeout {seconds}s bash -lc {quoted}; "
+        f"else bash -lc {quoted}; fi"
+    )
+
+
+def safe_relative_path(raw: str) -> str:
+    text = raw.strip()
+    if not text or text.startswith("/") or text.startswith("~"):
+        return ""
+    path = PurePosixPath(text)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return ""
+    return str(path)
+
+
+def component_build_dir(component: dict[str, object]) -> str:
+    if component.get("builder_type") != "yocto":
+        return ""
+    build_dir = safe_relative_path(str(component.get("build_dir", "")))
+    work_dir = safe_relative_path(str(component.get("work_dir", "")))
+    if work_dir:
+        return str(PurePosixPath(build_dir or "yocto") / work_dir)
+    if build_dir and PurePosixPath(build_dir).name.startswith("build-"):
+        return build_dir
+    name = safe_relative_path(str(component.get("name", "")))
+    return str(PurePosixPath(build_dir or "yocto") / f"build-{name}") if name else ""
+
+
+build_dirs: list[str] = []
+seen: set[str] = set()
+for component in COMPONENTS:
+    build_dir = component_build_dir(component)
+    if build_dir and build_dir not in seen:
+        seen.add(build_dir)
+        build_dirs.append(build_dir)
+
+for conf in sorted(Path("yocto").glob("build-*/conf/bblayers.conf")):
+    build_dir = str(conf.parent.parent)
+    if build_dir not in seen:
+        seen.add(build_dir)
+        build_dirs.append(build_dir)
+
+print("docker image:", DOCKER_IMAGE)
+print("bitbake build dirs:", " ".join(build_dirs) or "<none>")
+
+image_filters = [DOCKER_IMAGE]
+if ":" not in DOCKER_IMAGE:
+    image_filters.append(DOCKER_IMAGE + ":latest")
+docker_ps_commands = " ".join(
+    "docker ps -q --filter ancestor=" + shlex.quote(image) + " 2>/dev/null;"
+    for image in image_filters
+)
+run(
+    "ids=$( { " + docker_ps_commands + " } | sort -u); "
+    "if [ -n \"$ids\" ]; then docker kill $ids; else echo 'no running containers for image'; fi",
+    label="kill running Docker containers for configured image",
+)
+
+for build_dir in build_dirs:
+    path = Path(build_dir)
+    if not (path / "conf/bblayers.conf").exists():
+        print()
+        print("skip missing Yocto build dir:", build_dir)
+        continue
+    setup = f". yocto/openembedded-core/oe-init-build-env {shlex.quote(build_dir)} >/dev/null"
+    run(timeout_command(10, setup + " && bitbake -m"), label=f"ask BitBake server to stop in {build_dir} with timeout")
+    run(
+        "pkill -f "
+        + shlex.quote(f"bitbake.*{build_dir}|bitbake-server.*{build_dir}|bitbake-worker.*{build_dir}|hashserv.*{build_dir}")
+        + " || true",
+        label=f"kill stuck BitBake processes for {build_dir}",
+    )
+    run(
+        "find "
+        + shlex.quote(build_dir)
+        + r" -maxdepth 2 \( -name 'bitbake.lock' -o -name '.lock' -o -name 'bitbake.sock' -o -name 'hashserve.sock' -o -name 'bitbake-cookerdaemon.log' \) -print -delete",
+        label=f"remove BitBake locks and sockets in {build_dir}",
+    )
+
+if not build_dirs:
+    raise SystemExit(1)
+'''
+        inner_script = (
+            script.replace("__DOCKER_IMAGE__", docker_image.replace("\\", "\\\\").replace('"', '\\"'))
+            .replace("__COMPONENTS_B64__", payload)
+        )
+        command = "python3 -u - <<'PY'\n" + inner_script + "\nPY"
+        return self.session_service.remote_shell_command(
+            remote,
+            project_dir,
+            command,
+        )
+
+    def bitbake_cleanup_command_for_config(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        components: list[dict[str, Any]],
+    ) -> list[str]:
+        return self.bitbake_cleanup_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            docker_image,
+            components,
+        )
+
+    def run_bitbake_cleanup_for_config(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        components: list[dict[str, Any]],
+        runner: Callable[[list[str]], Any],
+    ) -> None:
+        runner(
+            self.bitbake_cleanup_command_for_config(
+                config,
+                docker_image=docker_image,
+                components=components,
             )
         )
 
@@ -571,11 +733,15 @@ raise SystemExit(main())
         *,
         action: str = "analyze",
         image_recipes: list[str] | None = None,
+        build_dirs: list[str] | None = None,
         allow_empty: bool = False,
+        changed_files: list[str] | None = None,
     ) -> list[str]:
         script = r'''
 from __future__ import annotations
 
+import base64
+import json
 import subprocess
 import sys
 import selectors
@@ -587,7 +753,10 @@ from pathlib import Path
 ACTION = "__ACTION__"
 TARGETS = "__TARGETS__".strip()
 IMAGE_RECIPES = "__IMAGE_RECIPES__".strip().split()
+BUILD_DIRS = "__BUILD_DIRS__".strip().split()
 ALLOW_EMPTY = "__ALLOW_EMPTY__" == "1"
+USE_CHANGED_FILES = "__USE_CHANGED_FILES__" == "1"
+CHANGED_FILES = json.loads(base64.b64decode("__CHANGED_FILES_B64__").decode() or "[]")
 
 
 def run_lines(argv: list[str]) -> list[str]:
@@ -636,8 +805,6 @@ def run_shell(command: str, *, label: str, step: int, total: int, heartbeat_s: i
     print(f"== yocto impact {ACTION} ==")
     print(f"step: {step}/{total}")
     print("label:", label)
-    if os.environ.get("MOULIN_TUI_SHOW_COMMANDS", "").strip().lower() in {"1", "true", "yes", "on"}:
-        print("cmd:", command)
     started = time.monotonic()
     next_heartbeat = started + heartbeat_s
     process = subprocess.Popen(
@@ -726,8 +893,11 @@ def recipes_for_path(raw: str) -> set[str]:
     return {recipe for recipe in recipes if recipe}
 
 
-changed = run_lines(["git", "diff", "--name-only", "HEAD", "--"])
-changed.extend(run_lines(["git", "ls-files", "--others", "--exclude-standard"]))
+if USE_CHANGED_FILES:
+    changed = [str(path) for path in CHANGED_FILES if str(path).strip()]
+else:
+    changed = run_lines(["git", "diff", "--name-only", "HEAD", "--"])
+    changed.extend(run_lines(["git", "ls-files", "--others", "--exclude-standard"]))
 changed = sorted(set(changed))
 
 recipes_by_path: dict[str, set[str]] = {}
@@ -737,11 +907,25 @@ for item in changed:
         recipes_by_path[item] = recipes
 
 recipes = sorted({recipe for values in recipes_by_path.values() for recipe in values})
-build_dirs = sorted(path for path in Path("yocto").glob("build-*") if (path / "conf/bblayers.conf").exists())
+if BUILD_DIRS:
+    build_dirs = [Path(raw) for raw in BUILD_DIRS if raw]
+else:
+    build_dirs = sorted(path for path in Path("yocto").glob("build-*") if (path / "conf/bblayers.conf").exists())
 available_by_build_dir: dict[Path, set[str]] = {}
 recipes_by_build_dir: dict[Path, list[str]] = {}
-if (recipes or IMAGE_RECIPES) and build_dirs:
+explicit_recipe_scope = bool(BUILD_DIRS and IMAGE_RECIPES)
+if explicit_recipe_scope:
     for build_dir in build_dirs:
+        if not (build_dir / "conf/bblayers.conf").exists():
+            print(f"skip missing Yocto build dir: {build_dir}")
+            continue
+        available_by_build_dir[build_dir] = set(IMAGE_RECIPES)
+        recipes_by_build_dir[build_dir] = [recipe for recipe in recipes if recipe in IMAGE_RECIPES]
+elif (recipes or IMAGE_RECIPES) and build_dirs:
+    for build_dir in build_dirs:
+        if not (build_dir / "conf/bblayers.conf").exists():
+            print(f"skip missing Yocto build dir: {build_dir}")
+            continue
         print(f"Scanning available recipes in {build_dir}...")
         available = available_recipes(build_dir)
         available_by_build_dir[build_dir] = available
@@ -842,15 +1026,23 @@ raise SystemExit(0)
 '''
         quoted_targets = " ".join(shlex.quote(target) for target in shlex.split(targets))
         quoted_image_recipes = " ".join(shlex.quote(recipe) for recipe in (image_recipes or []))
+        quoted_build_dirs = " ".join(shlex.quote(build_dir) for build_dir in (build_dirs or []))
+        changed_files_payload = json.dumps(changed_files or [], sort_keys=True)
+        changed_files_b64 = base64.b64encode(changed_files_payload.encode()).decode()
         script_targets = quoted_targets.replace("\\", "\\\\").replace('"', '\\"')
         script_action = action.replace("\\", "\\\\").replace('"', '\\"')
         script_image_recipes = quoted_image_recipes.replace("\\", "\\\\").replace('"', '\\"')
+        script_build_dirs = quoted_build_dirs.replace("\\", "\\\\").replace('"', '\\"')
         script_allow_empty = "1" if allow_empty else "0"
+        script_use_changed_files = "1" if changed_files is not None else "0"
         inner_script = (
             script.replace("__TARGETS__", script_targets)
             .replace("__ACTION__", script_action)
             .replace("__IMAGE_RECIPES__", script_image_recipes)
+            .replace("__BUILD_DIRS__", script_build_dirs)
             .replace("__ALLOW_EMPTY__", script_allow_empty)
+            .replace("__USE_CHANGED_FILES__", script_use_changed_files)
+            .replace("__CHANGED_FILES_B64__", changed_files_b64)
         )
         inner = "python3 -u - <<'PY'\n" + inner_script + "\nPY"
         return self.session_service.remote_shell_command(
@@ -867,7 +1059,9 @@ raise SystemExit(0)
         targets: str,
         action: str = "analyze",
         image_recipes: list[str] | None = None,
+        build_dirs: list[str] | None = None,
         allow_empty: bool = False,
+        changed_files: list[str] | None = None,
     ) -> list[str]:
         return self.yocto_impact_command(
             config_accessors.remote_spec_for_config(config),
@@ -876,7 +1070,9 @@ raise SystemExit(0)
             targets,
             action=action,
             image_recipes=image_recipes if image_recipes is not None else config_accessors.yocto_image_recipes_for_config(config),
+            build_dirs=build_dirs,
             allow_empty=allow_empty,
+            changed_files=changed_files,
         )
 
     def status_command_for_config(

@@ -17,6 +17,15 @@ class MappingStatusBehaviorTests(unittest.TestCase):
 
             self.assertIn("layer: local path missing:", issue or "")
 
+    def test_local_mapping_issue_allows_missing_file_for_remote_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            issue = mapping_status.local_mapping_issue(
+                Path(tmpdir),
+                {"name": "old-patch", "local": "layers/meta/old.patch", "kind": "file"},
+            )
+
+            self.assertIsNone(issue)
+
     def test_local_mapping_issue_reports_empty_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             local = Path(tmpdir) / "layers/meta"

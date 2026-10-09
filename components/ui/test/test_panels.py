@@ -235,6 +235,18 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertTrue(any("Docker image: image" in text for text in rendered))
         self.assertTrue(any("Build params: ENABLE_ANDROID=yes" in text for text in rendered))
 
+    def test_draw_details_panel_uses_project_recovery_context_for_prepare_action(self) -> None:
+        port = FakePanelPort()
+        port.items[0] = FakeMenuItem("Prepare remote project", "Set up project checkout.", "build")
+
+        panels.main_panels_controller().draw_details_panel(port, 0, 0, 16, 100, port.items[0])
+
+        rendered = [row[2] for row in port.rows]
+        self.assertFalse(any("Targets:" in text for text in rendered))
+        self.assertTrue(any("Build host:  builder@10.0.0.1" in text for text in rendered))
+        self.assertTrue(any("Project dir: /mnt/projects/prod" in text for text in rendered))
+        self.assertTrue(any("Preflight:   ssh ok" in text for text in rendered))
+
     def test_draw_details_panel_uses_network_context_for_tftp_nfs_items(self) -> None:
         port = FakePanelPort()
         port.items[0] = FakeMenuItem(
