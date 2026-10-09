@@ -269,6 +269,67 @@ class ConfigRuntimeBehaviorTests(unittest.TestCase):
                 ["layers/meta-xt-dom0-gen5/recipe.bbappend"],
             )
 
+    def test_incremental_state_workflow_keeps_pending_files_until_build_applies_them(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            dom0 = local_base / "layers/meta-xt-dom0-gen5"
+            domu = local_base / "layers/meta-xt-domu-gen5"
+            dom0.mkdir(parents=True)
+            domu.mkdir(parents=True)
+            dom0_recipe = dom0 / "recipe.bbappend"
+            domu_recipe = domu / "recipe.bbappend"
+            dom0_recipe.write_text("old-dom0\n", encoding="utf-8")
+            domu_recipe.write_text("old-domu\n", encoding="utf-8")
+            config = {
+                "state": {"build_settings": str(app_dir / "state/build-settings.json")},
+                "local": {"project_dir": str(local_base)},
+                "remotes": [{"name": "build", "user": "u", "host": "h"}],
+                "active_remote": "build",
+                "projects": [{"name": "prod", "project_dir": "meta-product"}],
+                "active_project": "prod",
+            }
+            profiles.normalize_remote_profiles(config)
+            profiles.normalize_project_profiles(config)
+            mappings = [
+                {"name": "dom0-layer", "local": "layers/meta-xt-dom0-gen5"},
+                {"name": "domu-layer", "local": "layers/meta-xt-domu-gen5"},
+            ]
+
+            runtime.save_runtime_mapping_snapshot(config, app_dir, mappings)
+            runtime.mark_runtime_mapping_build_applied(config, app_dir, mappings)
+            dom0_recipe.write_text("new-dom0\n", encoding="utf-8")
+            domu_recipe.write_text("new-domu\n", encoding="utf-8")
+
+            runtime.save_runtime_mapping_snapshot(config, app_dir, mappings)
+
+            self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), ["dom0-layer", "domu-layer"])
+            self.assertEqual(
+                runtime.changed_runtime_mapping_files(config, app_dir, mappings),
+                [
+                    "layers/meta-xt-dom0-gen5/recipe.bbappend",
+                    "layers/meta-xt-domu-gen5/recipe.bbappend",
+                ],
+            )
+
+            runtime.mark_runtime_mapping_build_applied(
+                config,
+                app_dir,
+                mappings,
+                applied_files=["layers/meta-xt-dom0-gen5/recipe.bbappend"],
+            )
+
+            self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), ["domu-layer"])
+            self.assertEqual(
+                runtime.changed_runtime_mapping_files(config, app_dir, mappings),
+                ["layers/meta-xt-domu-gen5/recipe.bbappend"],
+            )
+
+            runtime.mark_runtime_mapping_build_applied(config, app_dir, mappings)
+
+            self.assertEqual(runtime.changed_runtime_mappings(config, app_dir, mappings), [])
+            self.assertEqual(runtime.changed_runtime_mapping_files(config, app_dir, mappings), [])
+
     def test_runtime_mapping_snapshot_ignores_generated_product_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)

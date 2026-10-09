@@ -123,6 +123,14 @@ class TargetSelectionController:
                 return None
             port.status = saved_status
             return value
+        if not candidates:
+            port.status = empty_message
+            value = port.prompt(title, selected_text or default_text).strip()
+            if ui_input_api.prompt_was_cancelled(port):
+                port.status = cancelled_status
+                return None
+            port.status = saved_status
+            return value
         selected = self.target_policy_service.selected_targets_from_text(selected_text)
         index = 0
         port.screen.timeout(-1)

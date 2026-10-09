@@ -44,6 +44,29 @@ class MenuItem:
     allow_during_job: bool = False
 
 
+@dataclass(frozen=True)
+class MenuAvailabilityContext:
+    active_job: dict[str, Any] | None = None
+    board_job: dict[str, Any] | None = None
+    board_host_user: str = ""
+    board_host_host: str = ""
+    board_connected: bool = False
+    build_connected: bool = False
+    remote_has_user: bool = False
+    remote_has_host: bool = False
+    remote_project_dir_configured: bool = False
+    prepare_remote_project_needed: bool = False
+    checkout_git_ref_needed: bool = False
+
+    @property
+    def board_host_has_ssh(self) -> bool:
+        return bool(self.board_host_user and self.board_host_host)
+
+    @property
+    def remote_has_ssh(self) -> bool:
+        return bool(self.remote_has_user and self.remote_has_host)
+
+
 def item_job_slot(item: MenuItem) -> str | None:
     if is_open_item(item):
         return None
@@ -408,36 +431,55 @@ def item_enabled(
     prepare_remote_project_needed: bool,
     checkout_git_ref_needed: bool,
 ) -> bool:
-    if item.label == "Stop running command" and stoppable_command_job(active_job) is None:
+    return item_enabled_for_context(
+        item,
+        MenuAvailabilityContext(
+            active_job=active_job,
+            board_job=board_job,
+            board_host_user="configured" if board_host_has_ssh else "",
+            board_host_host="configured" if board_host_has_ssh else "",
+            board_connected=board_connected,
+            build_connected=build_connected,
+            remote_has_user=remote_has_ssh,
+            remote_has_host=remote_has_ssh,
+            remote_project_dir_configured=remote_has_project_dir,
+            prepare_remote_project_needed=prepare_remote_project_needed,
+            checkout_git_ref_needed=checkout_git_ref_needed,
+        ),
+    )
+
+
+def item_enabled_for_context(item: MenuItem, context: MenuAvailabilityContext) -> bool:
+    if item.label == "Stop running command" and stoppable_command_job(context.active_job) is None:
         return False
     if item.label == "Stop running command":
         return True
-    if item.label == "Stop current board command" and stoppable_command_job(board_job) is None:
+    if item.label == "Stop current board command" and stoppable_command_job(context.board_job) is None:
         return False
     if item.label == "Stop current board command":
         return True
-    jobs = [job for job in (active_job, board_job) if job is not None]
+    jobs = [job for job in (context.active_job, context.board_job) if job is not None]
     if job_for_item(item, jobs) is not None:
         return True
     slot = item_job_slot(item)
-    if slot is not None and active_job_for_slot(slot, active_job=active_job, board_job=board_job) is not None:
+    if slot is not None and active_job_for_slot(slot, active_job=context.active_job, board_job=context.board_job) is not None:
         return False
-    if item.label == "Open board host shell" and not board_host_has_ssh:
+    if item.label == "Open board host shell" and not context.board_host_has_ssh:
         return False
-    if item.label == "Open board host shell" and not board_connected:
+    if item.label == "Open board host shell" and not context.board_connected:
         return False
     if is_board_command_item(item):
-        if not board_host_has_ssh or not board_connected:
+        if not context.board_host_has_ssh or not context.board_connected:
             return False
-    if item.requires_ssh and not remote_has_ssh:
+    if item.requires_ssh and not context.remote_has_ssh:
         return False
-    if item.requires_remote and not build_connected:
+    if item.requires_remote and not context.build_connected:
         return False
-    if item.requires_project and not remote_has_project_dir and not is_project_recovery_item(item):
+    if item.requires_project and not context.remote_project_dir_configured and not is_project_recovery_item(item):
         return False
-    if prepare_remote_project_needed and blocks_on_prepare_remote_project(item):
+    if context.prepare_remote_project_needed and blocks_on_prepare_remote_project(item):
         return False
-    if checkout_git_ref_needed and blocks_on_checkout_git_ref(item):
+    if context.checkout_git_ref_needed and blocks_on_checkout_git_ref(item):
         return False
     return True
 
@@ -457,39 +499,58 @@ def disabled_reason(
     prepare_remote_project_needed: bool,
     checkout_git_ref_needed: bool,
 ) -> str:
-    if item.label == "Stop running command" and stoppable_command_job(active_job) is None:
+    return disabled_reason_for_context(
+        item,
+        MenuAvailabilityContext(
+            active_job=active_job,
+            board_job=board_job,
+            board_host_user=board_host_user,
+            board_host_host=board_host_host,
+            board_connected=board_connected,
+            build_connected=build_connected,
+            remote_has_user=remote_has_user,
+            remote_has_host=remote_has_host,
+            remote_project_dir_configured=remote_has_project_dir,
+            prepare_remote_project_needed=prepare_remote_project_needed,
+            checkout_git_ref_needed=checkout_git_ref_needed,
+        ),
+    )
+
+
+def disabled_reason_for_context(item: MenuItem, context: MenuAvailabilityContext) -> str:
+    if item.label == "Stop running command" and stoppable_command_job(context.active_job) is None:
         return "no build or sync command is running"
     if item.label == "Stop running command":
         return ""
-    if item.label == "Stop current board command" and stoppable_command_job(board_job) is None:
+    if item.label == "Stop current board command" and stoppable_command_job(context.board_job) is None:
         return "no board command is running"
     if item.label == "Stop current board command":
         return ""
-    jobs = [job for job in (active_job, board_job) if job is not None]
+    jobs = [job for job in (context.active_job, context.board_job) if job is not None]
     slot = item_job_slot(item)
-    slot_job = active_job_for_slot(slot, active_job=active_job, board_job=board_job)
+    slot_job = active_job_for_slot(slot, active_job=context.active_job, board_job=context.board_job)
     if slot is not None and slot_job is not None and job_for_item(item, jobs) is None:
         return f"{slot} command is already running"
     is_board_item = item.label == "Open board host shell" or is_board_command_item(item)
-    if is_board_item and not board_host_user:
+    if is_board_item and not context.board_host_user:
         return "set board SSH user first"
-    if is_board_item and not board_host_host:
+    if is_board_item and not context.board_host_host:
         return "set board SSH host first"
-    if is_board_command_item(item) and not board_connected:
+    if is_board_command_item(item) and not context.board_connected:
         return "connect to the board host first"
-    if item.label == "Open board host shell" and not board_connected:
+    if item.label == "Open board host shell" and not context.board_connected:
         return "connect to the board host first"
-    if item.requires_ssh and not remote_has_user:
+    if item.requires_ssh and not context.remote_has_user:
         return "set SSH user first"
-    if item.requires_ssh and not remote_has_host:
+    if item.requires_ssh and not context.remote_has_host:
         return "set SSH host first"
-    if item.requires_remote and not build_connected:
+    if item.requires_remote and not context.build_connected:
         return "connect to the build host first"
-    if item.requires_project and not remote_has_project_dir and not is_project_recovery_item(item):
+    if item.requires_project and not context.remote_project_dir_configured and not is_project_recovery_item(item):
         return "select remote project directory first"
-    if prepare_remote_project_needed and blocks_on_prepare_remote_project(item):
+    if context.prepare_remote_project_needed and blocks_on_prepare_remote_project(item):
         return "remote project needs preparation"
-    if checkout_git_ref_needed and blocks_on_checkout_git_ref(item):
+    if context.checkout_git_ref_needed and blocks_on_checkout_git_ref(item):
         return "remote project Git ref mismatch"
     return "disabled"
 

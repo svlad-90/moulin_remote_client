@@ -239,6 +239,30 @@ class TargetSelectionControllerTests(unittest.TestCase):
         self.assertEqual(result, "boot dom0")
         self.assertEqual(port.status, "saved")
 
+    def test_select_targets_falls_back_to_manual_input_when_no_candidates_exist(self) -> None:
+        port = FakeTargetPort([], prompts=["boot dom0"])
+        controller = target_selection.TargetSelectionController(
+            config(),
+            target_candidates=lambda _build_params: [],
+            app_dir=Path("/tmp"),
+            default_config_path=Path("/tmp/config.json"),
+            save_config=lambda _config: None,
+        )
+
+        result = controller.select_targets(
+            port,
+            title="Build Targets",
+            selected_text=port.build_targets,
+            default_text=port.build_targets,
+            build_params=port.build_params,
+            empty_message="No build targets found in Moulin manifest.",
+            saved_status="saved",
+            cancelled_status="cancelled",
+        )
+
+        self.assertEqual(result, "boot dom0")
+        self.assertEqual(port.status, "saved")
+
 
 if __name__ == "__main__":
     unittest.main()
