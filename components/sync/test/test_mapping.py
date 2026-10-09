@@ -32,6 +32,7 @@ class SyncMappingCommandServiceTests(unittest.TestCase):
                 [
                     "--exclude",
                     "*.pyc",
+                    "--checksum",
                     "--rsync-path",
                     "mkdir -p /mnt/projects/meta-product/layers/meta && rsync",
                     str(local_path) + "/",
@@ -66,6 +67,55 @@ class SyncMappingCommandServiceTests(unittest.TestCase):
 
         self.assertEqual(remote_dir, "/mnt/projects/meta-product/android_kernel/common-modules/xen-virtual-device")
 
+    def test_rsync_mapping_command_deletes_remote_file_when_local_file_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_base = Path(tmpdir) / "overlay"
+            service = mapping.sync_mapping_command_service()
+
+            argv = service.rsync_mapping_command(
+                {
+                    "name": "qemu-patch",
+                    "kind": "file",
+                    "push": True,
+                    "remote": "layers/meta/recipes/qemu/qemu/0017-old.patch",
+                    "local": "layers/meta/recipes/qemu/qemu/0017-old.patch",
+                },
+                direction="push",
+                dry_run=False,
+                excludes=[],
+                local_base=local_base,
+                remote_base="builder@10.0.0.1:/mnt/projects/meta-product",
+            )
+
+            expected = transport.ssh_command(
+                "builder@10.0.0.1",
+                "rm -f /mnt/projects/meta-product/layers/meta/recipes/qemu/qemu/0017-old.patch",
+            )
+            self.assertEqual(argv, expected)
+
+    def test_rsync_mapping_command_dry_run_logs_remote_file_delete_when_local_file_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_base = Path(tmpdir) / "overlay"
+            service = mapping.sync_mapping_command_service()
+
+            argv = service.rsync_mapping_command(
+                {
+                    "name": "qemu-patch",
+                    "kind": "file",
+                    "push": True,
+                    "remote": "layers/meta/recipes/qemu/qemu/0017-old.patch",
+                    "local": "layers/meta/recipes/qemu/qemu/0017-old.patch",
+                },
+                direction="push",
+                dry_run=True,
+                excludes=[],
+                local_base=local_base,
+                remote_base="builder@10.0.0.1:/mnt/projects/meta-product",
+            )
+
+            self.assertIn("DELETE push dry-run: qemu-patch", argv[2])
+            self.assertIn("remote: layers/meta/recipes/qemu/qemu/0017-old.patch", argv[2])
+
     def test_rsync_mappings_push_command_batches_directory_and_file_mappings(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
@@ -99,6 +149,7 @@ class SyncMappingCommandServiceTests(unittest.TestCase):
                 [
                     "--exclude",
                     "*.pyc",
+                    "--checksum",
                     "--rsync-path",
                     "mkdir -p /mnt/projects/meta-product && rsync",
                     str(local_base) + "/./layers/meta",
@@ -107,6 +158,36 @@ class SyncMappingCommandServiceTests(unittest.TestCase):
                 ]
             )
             self.assertEqual(argv, expected)
+
+    def test_rsync_mappings_push_command_deletes_missing_file_mappings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_base = Path(tmpdir) / "overlay"
+            layer = local_base / "layers/meta"
+            layer.mkdir(parents=True)
+            service = mapping.sync_mapping_command_service()
+
+            argv = service.rsync_mappings_push_command(
+                [
+                    {"name": "layer", "kind": "directory", "push": True, "remote": "layers/meta", "local": "layers/meta"},
+                    {
+                        "name": "old-patch",
+                        "kind": "file",
+                        "push": True,
+                        "remote": "layers/meta/recipes/qemu/qemu/0017-old.patch",
+                        "local": "layers/meta/recipes/qemu/qemu/0017-old.patch",
+                    },
+                ],
+                dry_run=False,
+                excludes=[],
+                local_base=local_base,
+                remote_base="builder@10.0.0.1:/mnt/projects/meta-product",
+            )
+
+            self.assertEqual(argv[:2], ["bash", "-lc"])
+            self.assertIn("rsync", argv[2])
+            self.assertIn(str(local_base) + "/./layers/meta", argv[2])
+            self.assertIn("ssh -F /dev/null", argv[2])
+            self.assertIn("rm -f /mnt/projects/meta-product/layers/meta/recipes/qemu/qemu/0017-old.patch", argv[2])
 
     def test_mapping_sync_plan_owns_header_and_argv_use_case(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

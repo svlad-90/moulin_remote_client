@@ -141,6 +141,69 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
         settings_factory.assert_called_once()
         settings_controller.run_action.assert_called_once_with(port, action)
 
+    def test_project_file_reader_falls_back_to_remote_git_when_checkout_read_fails(self) -> None:
+        cfg = {
+            "active_remote": "build",
+            "remotes": [{"name": "build", "user": "builder", "host": "10.0.0.1"}],
+            "active_project": "prod",
+            "projects": [{"name": "prod", "git_url": "git@example:prod", "git_ref": "mirror"}],
+        }
+        capture_command = Mock(return_value="remote content")
+        controller = workflow.config_workflow_controller(
+            cfg,
+            app_dir=Path("/app"),
+            default_config_path=Path("/app/config.json"),
+            default_build_targets="target-a",
+            default_moulin_manifest="product.yaml",
+            default_dockerfile="doc/Dockerfile",
+            save_config=Mock(),
+            capture_command=capture_command,
+            remote_read_project_file=Mock(side_effect=RuntimeError("missing checkout file")),
+            manifest_cache={},
+            confirm_action=Mock(return_value=True),
+            reload_runtime=Mock(),
+            restore_project_menu_input=Mock(),
+            reset_preflight=Mock(),
+        )
+
+        port = FakePort()
+
+        result = controller._read_project_file_with_git_fallback(port, cfg, "prod.yaml")
+
+        self.assertEqual(result, "remote content")
+        self.assertEqual(port.project_config_source, "Git remote")
+        self.assertIn("git --no-pager archive --remote=git@example:prod mirror prod.yaml | tar -xO", capture_command.call_args.args[0][-1])
+
+    def test_project_file_reader_records_build_host_source_when_checkout_read_succeeds(self) -> None:
+        cfg = {
+            "active_remote": "build",
+            "remotes": [{"name": "build", "user": "builder", "host": "10.0.0.1"}],
+            "active_project": "prod",
+            "projects": [{"name": "prod", "git_url": "git@example:prod", "git_ref": "mirror"}],
+        }
+        controller = workflow.config_workflow_controller(
+            cfg,
+            app_dir=Path("/app"),
+            default_config_path=Path("/app/config.json"),
+            default_build_targets="target-a",
+            default_moulin_manifest="product.yaml",
+            default_dockerfile="doc/Dockerfile",
+            save_config=Mock(),
+            capture_command=Mock(),
+            remote_read_project_file=Mock(return_value="checkout content"),
+            manifest_cache={},
+            confirm_action=Mock(return_value=True),
+            reload_runtime=Mock(),
+            restore_project_menu_input=Mock(),
+            reset_preflight=Mock(),
+        )
+        port = FakePort()
+
+        result = controller._read_project_file_with_git_fallback(port, cfg, "prod.yaml")
+
+        self.assertEqual(result, "checkout content")
+        self.assertEqual(port.project_config_source, "build-host checkout")
+
     def test_select_active_remote_uses_profile_picker(self) -> None:
         cfg = {
             "active_remote": "build-a",

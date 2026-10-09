@@ -16,6 +16,7 @@ def build_parser(description: str | None, default_config: Path) -> argparse.Argu
     sub.add_parser("menu")
     sub.add_parser("remote-status")
     sub.add_parser("build-docker")
+    sub.add_parser("cleanup-bitbake")
     sub.add_parser("regen-moulin")
     sub.add_parser("build")
     sub.add_parser("yocto-impact")

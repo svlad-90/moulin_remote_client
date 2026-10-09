@@ -25,8 +25,11 @@ class RemoteProjectMaintenanceService:
             script = (
                 f"if [ -d {shlex.quote(project_dir + '/.git')} ]; then "
                 f"cd {shlex.quote(project_dir)} && git remote -v; "
+                f"elif [ -d {shlex.quote(project_dir)} ] && [ -z \"$(find {shlex.quote(project_dir)} -mindepth 1 -maxdepth 1 -print -quit)\" ]; then "
+                f"cd {shlex.quote(parent)} && git clone {shlex.quote(git_url)} {shlex.quote(name)}{checkout_ref}; "
                 f"elif [ -e {shlex.quote(project_dir)} ]; then "
-                f"printf 'target exists but is not a git checkout: %s\\n' {shlex.quote(project_dir)} >&2; exit 2; "
+                f"printf 'target exists but is not a git checkout: %s\\n' {shlex.quote(project_dir)} >&2; "
+                f"printf 'remove or clean the non-empty project directory, then run Prepare remote project again\\n' >&2; exit 2; "
                 f"else mkdir -p {shlex.quote(parent)} && cd {shlex.quote(parent)} && "
                 f"git clone {shlex.quote(git_url)} {shlex.quote(name)}{checkout_ref}; fi"
             )
@@ -46,6 +49,36 @@ class RemoteProjectMaintenanceService:
             config_accessors.project_git_ref_for_config(config),
         )
 
+    def clean_project_folder_command(self, remote: str, project_dir: str) -> list[str]:
+        if not project_dir:
+            raise SystemExit("Remote project directory is not configured")
+        quoted_dir = shlex.quote(project_dir)
+        script = (
+            f"project_dir={quoted_dir}; "
+            "if [ -z \"$project_dir\" ] || [ \"$project_dir\" = / ]; then "
+            "printf 'refusing to remove unsafe project directory: %s\\n' \"$project_dir\" >&2; exit 2; fi; "
+            "home_dir=${HOME:-}; "
+            "if [ -n \"$home_dir\" ] && [ \"$project_dir\" = \"$home_dir\" ]; then "
+            "printf 'refusing to remove HOME as project directory: %s\\n' \"$project_dir\" >&2; exit 2; fi; "
+            "parent=$(dirname -- \"$project_dir\"); "
+            "name=$(basename -- \"$project_dir\"); "
+            "if [ -z \"$name\" ] || [ \"$name\" = . ] || [ \"$name\" = .. ]; then "
+            "printf 'refusing to remove unsafe project directory basename: %s\\n' \"$name\" >&2; exit 2; fi; "
+            "if [ ! -e \"$project_dir\" ]; then printf 'project directory already absent: %s\\n' \"$project_dir\"; exit 0; fi; "
+            "if [ ! -d \"$project_dir\" ]; then printf 'project path is not a directory: %s\\n' \"$project_dir\" >&2; exit 2; fi; "
+            "printf 'Clean project folder: %s\\n' \"$project_dir\"; "
+            "cd \"$parent\" || exit 2; "
+            "rm -rf -- \"$name\"; "
+            "printf 'removed project directory: %s\\n' \"$project_dir\""
+        )
+        return transport.ssh_command(remote, script)
+
+    def clean_project_folder_command_for_config(self, config: dict[str, Any]) -> list[str]:
+        return self.clean_project_folder_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+        )
+
     def checkout_git_ref_command(self, remote: str, project_dir: str, git_ref: str) -> list[str]:
         if not git_ref:
             raise SystemExit("Git branch/ref is not configured")
@@ -62,11 +95,109 @@ class RemoteProjectMaintenanceService:
         )
         return transport.ssh_command(remote, script)
 
+    def stash_and_checkout_git_ref_command(self, remote: str, project_dir: str, git_ref: str) -> list[str]:
+        if not git_ref:
+            raise SystemExit("Git branch/ref is not configured")
+        quoted_dir = shlex.quote(project_dir)
+        quoted_ref = shlex.quote(git_ref)
+        stash_message = shlex.quote("remote client checkout backup before " + git_ref)
+        script = (
+            f"cd {quoted_dir} || exit 2; "
+            "if [ ! -d .git ]; then printf 'target is not a git checkout\\n' >&2; exit 2; fi; "
+            "git add -A || exit $?; "
+            "if ! git diff --cached --quiet; then "
+            f"git stash push -m {stash_message} -- .; "
+            "else printf 'no local changes to stash\\n'; fi; "
+            "git fetch origin --prune && "
+            f"git checkout {quoted_ref} && "
+            "git status --short --branch"
+        )
+        return transport.ssh_command(remote, script)
+
+    def repair_and_checkout_git_ref_command(self, remote: str, project_dir: str, git_ref: str) -> list[str]:
+        if not git_ref:
+            raise SystemExit("Git branch/ref is not configured")
+        quoted_dir = shlex.quote(project_dir)
+        quoted_ref = shlex.quote(git_ref)
+        stash_message = shlex.quote("remote client checkout backup before " + git_ref)
+        script = (
+            f"cd {quoted_dir} || exit 2; "
+            "if [ ! -d .git ]; then printf 'target is not a git checkout\\n' >&2; exit 2; fi; "
+            "lock=.git/index.lock; "
+            "if [ -e \"$lock\" ]; then "
+            "if command -v fuser >/dev/null 2>&1 && fuser \"$lock\" >/dev/null 2>&1; then "
+            "printf 'Git index lock is held by a running process; refusing to remove it\\n' >&2; "
+            "fuser -v \"$lock\" >&2 || true; "
+            "exit 2; "
+            "fi; "
+            "printf 'removing stale Git index lock: %s\\n' \"$lock\"; "
+            "rm -f \"$lock\"; "
+            "else printf 'no Git index lock present\\n'; fi; "
+            "stash_before=$(git rev-parse -q --verify refs/stash || true); "
+            "git add -A || exit $?; "
+            "if ! git diff --cached --quiet; then "
+            "stash_rc=0; "
+            f"git stash push --include-untracked -m {stash_message} -- . || stash_rc=$?; "
+            "stash_after=$(git rev-parse -q --verify refs/stash || true); "
+            "if [ \"$stash_after\" = \"$stash_before\" ]; then "
+            "printf 'git stash did not create a backup; refusing checkout\\n' >&2; "
+            "exit \"${stash_rc:-1}\"; "
+            "fi; "
+            "if [ -n \"$(git status --porcelain)\" ]; then "
+            "printf 'stash backup was created but working tree is still dirty; cleaning backed-up state\\n' >&2; "
+            "git reset --hard || exit $?; "
+            "git clean -fd || exit $?; "
+            "fi; "
+            "else printf 'no local changes to stash\\n'; fi; "
+            "git fetch origin --prune && "
+            f"git checkout {quoted_ref} && "
+            "git status --short --branch"
+        )
+        return transport.ssh_command(remote, script)
+
+    def clear_git_index_lock_command(self, remote: str, project_dir: str) -> list[str]:
+        quoted_dir = shlex.quote(project_dir)
+        script = (
+            f"cd {quoted_dir} || exit 2; "
+            "if [ ! -d .git ]; then printf 'target is not a git checkout\\n' >&2; exit 2; fi; "
+            "lock=.git/index.lock; "
+            "if [ ! -e \"$lock\" ]; then printf 'no Git index lock present\\n'; exit 0; fi; "
+            "if command -v fuser >/dev/null 2>&1 && fuser \"$lock\" >/dev/null 2>&1; then "
+            "printf 'Git index lock is held by a running process; refusing to remove it\\n' >&2; "
+            "fuser -v \"$lock\" >&2 || true; "
+            "exit 2; "
+            "fi; "
+            "printf 'removing stale Git index lock: %s\\n' \"$lock\"; "
+            "rm -f \"$lock\"; "
+            "git status --short --branch"
+        )
+        return transport.ssh_command(remote, script)
+
     def checkout_git_ref_command_for_config(self, config: dict[str, Any]) -> list[str]:
         return self.checkout_git_ref_command(
             config_accessors.remote_spec_for_config(config),
             config_accessors.remote_project_dir_for_config(config),
             config_accessors.project_git_ref_for_config(config),
+        )
+
+    def stash_and_checkout_git_ref_command_for_config(self, config: dict[str, Any]) -> list[str]:
+        return self.stash_and_checkout_git_ref_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            config_accessors.project_git_ref_for_config(config),
+        )
+
+    def repair_and_checkout_git_ref_command_for_config(self, config: dict[str, Any]) -> list[str]:
+        return self.repair_and_checkout_git_ref_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            config_accessors.project_git_ref_for_config(config),
+        )
+
+    def clear_git_index_lock_command_for_config(self, config: dict[str, Any]) -> list[str]:
+        return self.clear_git_index_lock_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
         )
 
     def preflight_command(

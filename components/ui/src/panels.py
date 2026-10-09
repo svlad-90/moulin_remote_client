@@ -39,6 +39,14 @@ def _details_context_lines(port: Any, item: Any) -> list[str]:
         selection = ", ".join(port.mapping_selection_cache) or "none"
         return [f"Selected mappings: {selection}"]
     if parent == "build":
+        if item.label in {"Prepare remote project", "Checkout project Git ref"}:
+            return [
+                f"Build host:  {config_accessor_api.remote_spec_for_config(port.config)}",
+                f"Project dir: {config_accessor_api.remote_project_dir_for_config(port.config)}",
+                f"Git URL:     {config_accessor_api.project_git_url_for_config(port.config) or '<not set>'}",
+                f"Git ref:     {config_accessor_api.project_git_ref_for_config(port.config) or '<not set>'}",
+                f"Preflight:   {getattr(port, 'preflight', '') or '<not run>'}",
+            ]
         params = " ".join(f"{key}={value}" for key, value in sorted(getattr(port, "build_params", {}).items()))
         return [
             f"Targets:      {getattr(port, 'build_targets', '') or '<not set>'}",

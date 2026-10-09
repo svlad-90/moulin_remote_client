@@ -32,9 +32,11 @@ class FakeScreen:
 
 
 class FakeTargetPort:
-    def __init__(self, keys: list[int]) -> None:
+    def __init__(self, keys: list[int], *, prompts: list[str] | None = None) -> None:
         self.screen = FakeScreen(keys)
         self.status = ""
+        self.prompt_cancelled = False
+        self.prompts = prompts or []
         self.build_params = {"ENABLE_ANDROID": "yes"}
         self.build_targets = "boot"
         self.docker_image = "builder:latest"
@@ -48,6 +50,11 @@ class FakeTargetPort:
 
     def add(self, row: int, col: int, text: str, attr: int | None = None) -> None:
         self.rows.append((row, col, text, attr))
+
+    def prompt(self, _label: str, _default: str = "") -> str:
+        if not self.prompts:
+            raise AssertionError("fake prompt queue is empty")
+        return self.prompts.pop(0)
 
     def draw_box(self, top: int, left: int, height: int, width: int, title: str) -> None:
         self.boxes.append((top, left, height, width, title))
@@ -150,6 +157,32 @@ class TargetSelectionControllerTests(unittest.TestCase):
         self.assertEqual(port.status, "cancelled")
         self.assertEqual(port.screen.timeouts[-1], 250)
 
+    def test_select_targets_shows_manifest_source_when_available(self) -> None:
+        port = FakeTargetPort([ord("q")])
+        port.project_config_source = "Git remote"
+        controller = target_selection.TargetSelectionController(
+            config(),
+            target_candidates=candidates,
+            app_dir=Path("/tmp"),
+            default_config_path=Path("/tmp/config.json"),
+            save_config=lambda _config: None,
+        )
+
+        controller.select_targets(
+            port,
+            title="Build Targets",
+            selected_text=port.build_targets,
+            default_text=port.build_targets,
+            build_params=port.build_params,
+            empty_message="No build targets found in Moulin manifest.",
+            saved_status="saved",
+            cancelled_status="cancelled",
+        )
+
+        rendered = [row[2].strip() for row in port.rows]
+        self.assertIn("Source:", rendered)
+        self.assertIn("Git remote", rendered)
+
     def test_build_target_text_for_params_uses_current_manifest_candidates(self) -> None:
         controller = target_selection.TargetSelectionController(
             config(),
@@ -181,6 +214,30 @@ class TargetSelectionControllerTests(unittest.TestCase):
         result = controller.build_target_text_for_params({}, current_text=["old", "target"])
 
         self.assertEqual(result, "old target")
+
+    def test_select_targets_falls_back_to_manual_input_when_candidates_fail(self) -> None:
+        port = FakeTargetPort([], prompts=["boot dom0"])
+        controller = target_selection.TargetSelectionController(
+            config(),
+            target_candidates=lambda _build_params: (_ for _ in ()).throw(RuntimeError("manifest read failed")),
+            app_dir=Path("/tmp"),
+            default_config_path=Path("/tmp/config.json"),
+            save_config=lambda _config: None,
+        )
+
+        result = controller.select_targets(
+            port,
+            title="Build Targets",
+            selected_text=port.build_targets,
+            default_text=port.build_targets,
+            build_params=port.build_params,
+            empty_message="No build targets found in Moulin manifest.",
+            saved_status="saved",
+            cancelled_status="cancelled",
+        )
+
+        self.assertEqual(result, "boot dom0")
+        self.assertEqual(port.status, "saved")
 
 
 if __name__ == "__main__":

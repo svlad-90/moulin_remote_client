@@ -33,7 +33,10 @@ class AppJobController:
             docker_image=port.docker_image,
             terminate_process_group=self.terminate_process_group,
             display_command=self.display_command,
-            display_command_lines=self.display_command_lines,
+            display_command_lines=lambda command: self.display_command_lines(
+                command,
+                show_commands=_show_commands_in_logs(port.config),
+            ),
             format_preflight=self.format_preflight,
             confirm_dialog=lambda content: self.confirm_dialog(port, content),
             draw=port.draw,
@@ -79,3 +82,8 @@ def app_job_controller(
         format_preflight=format_preflight,
         confirm_dialog=confirm_dialog,
     )
+
+
+def _show_commands_in_logs(config: dict[str, Any]) -> bool:
+    ui = config.get("ui")
+    return isinstance(ui, dict) and bool(ui.get("show_commands"))

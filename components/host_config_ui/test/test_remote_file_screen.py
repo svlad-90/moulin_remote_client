@@ -30,10 +30,12 @@ class FakeScreen:
 
 
 class FakeRemoteFilePort:
-    def __init__(self, keys: list[int], *, ready: bool = True) -> None:
+    def __init__(self, keys: list[int], *, ready: bool = True, prompts: list[str] | None = None) -> None:
         self.screen = FakeScreen(keys)
         self.status = ""
         self.ready = ready
+        self.prompt_cancelled = False
+        self.prompts = prompts or []
         self.build_params: dict[str, Any] = {}
         self.rows: list[tuple[int, int, str, int | None]] = []
         self.boxes: list[tuple[int, int, int, int, str]] = []
@@ -45,6 +47,11 @@ class FakeRemoteFilePort:
 
     def add(self, row: int, col: int, text: str, attr: int | None = None) -> None:
         self.rows.append((row, col, text, attr))
+
+    def prompt(self, _label: str, _default: str = "") -> str:
+        if not self.prompts:
+            raise AssertionError("fake prompt queue is empty")
+        return self.prompts.pop(0)
 
     def draw_box(self, top: int, left: int, height: int, width: int, title: str) -> None:
         self.boxes.append((top, left, height, width, title))
@@ -135,7 +142,9 @@ class RemoteFileScreenControllerTests(unittest.TestCase):
             port,
             config,
             fetch_git_tracked_files=lambda: ["doc/Dockerfile", "README.md"],
+            fetch_git_remote_files=lambda: (_ for _ in ()).throw(AssertionError("remote fallback should not run")),
             read_project_file=lambda _config, path: "FROM ubuntu:22.04\n" if path == "doc/Dockerfile" else "",
+            read_git_remote_file=lambda _config, _path: "",
             save_config=saved.append,
             reset_preflight=lambda: reset_calls.append(True),
         )
@@ -154,13 +163,82 @@ class RemoteFileScreenControllerTests(unittest.TestCase):
             port,
             config,
             fetch_git_tracked_files=lambda: (_ for _ in ()).throw(AssertionError("fetch should not run")),
+            fetch_git_remote_files=lambda: (_ for _ in ()).throw(AssertionError("fetch should not run")),
             read_project_file=lambda _config, _path: "",
+            read_git_remote_file=lambda _config, _path: "",
             save_config=saved.append,
             reset_preflight=lambda: None,
         )
 
         self.assertEqual(config["projects"][0]["dockerfile"], "doc/Dockerfile")
         self.assertEqual(saved, [])
+
+    def test_select_remote_dockerfile_falls_back_to_manual_path_on_search_failure(self) -> None:
+        port = FakeRemoteFilePort([], prompts=["manual/Dockerfile"])
+        config = config_with_active_project()
+        saved: list[dict[str, Any]] = []
+        reset_calls: list[bool] = []
+
+        remote_file_screen.run_select_remote_dockerfile(
+            port,
+            config,
+            fetch_git_tracked_files=lambda: (_ for _ in ()).throw(RuntimeError("git failed")),
+            fetch_git_remote_files=lambda: (_ for _ in ()).throw(RuntimeError("remote git failed")),
+            read_project_file=lambda _config, _path: "",
+            read_git_remote_file=lambda _config, _path: "",
+            save_config=saved.append,
+            reset_preflight=lambda: reset_calls.append(True),
+        )
+
+        self.assertEqual(config["projects"][0]["dockerfile"], "manual/Dockerfile")
+        self.assertEqual(port.status, "Dockerfile: manual/Dockerfile")
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(reset_calls, [True])
+
+    def test_select_remote_dockerfile_falls_back_to_remote_git_when_checkout_has_no_candidates(self) -> None:
+        port = FakeRemoteFilePort([10])
+        config = config_with_active_project()
+        saved: list[dict[str, Any]] = []
+
+        remote_file_screen.run_select_remote_dockerfile(
+            port,
+            config,
+            fetch_git_tracked_files=lambda: ["README.md"],
+            fetch_git_remote_files=lambda: ["remote/Dockerfile"],
+            read_project_file=lambda _config, _path: (_ for _ in ()).throw(AssertionError("checkout read should not run")),
+            read_git_remote_file=lambda _config, path: "FROM ubuntu:24.04\n" if path == "remote/Dockerfile" else "",
+            save_config=saved.append,
+            reset_preflight=lambda: None,
+        )
+
+        self.assertEqual(config["projects"][0]["dockerfile"], "remote/Dockerfile")
+        self.assertEqual(port.status, "Dockerfile: remote/Dockerfile")
+        self.assertEqual(len(saved), 1)
+
+    def test_select_remote_moulin_manifest_falls_back_to_manual_path_when_no_candidates(self) -> None:
+        port = FakeRemoteFilePort([], prompts=["manual.yaml"])
+        config = config_with_active_project()
+        saved: list[dict[str, Any]] = []
+        reset_calls: list[bool] = []
+
+        remote_file_screen.run_select_remote_moulin_manifest(
+            port,
+            config,
+            Path("/app"),
+            fetch_git_tracked_files=lambda: ["README.md"],
+            fetch_git_remote_files=lambda: [],
+            read_project_file=lambda _config, _path: "",
+            read_git_remote_file=lambda _config, _path: "",
+            manifest_cache={("old", "cache", "entry"): {}},
+            default_moulin_manifest="product.yaml",
+            save_config=saved.append,
+            reset_preflight=lambda: reset_calls.append(True),
+        )
+
+        self.assertEqual(config["projects"][0]["moulin_manifest"], "manual.yaml")
+        self.assertEqual(port.status, "Moulin manifest: manual.yaml")
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(reset_calls, [True])
 
     def test_remote_file_selection_controller_selects_dockerfile(self) -> None:
         port = FakeRemoteFilePort([10])
@@ -171,7 +249,9 @@ class RemoteFileScreenControllerTests(unittest.TestCase):
             config,
             app_dir=Path("/app"),
             fetch_git_tracked_files=lambda: ["doc/Dockerfile"],
+            fetch_git_remote_files=lambda: (_ for _ in ()).throw(AssertionError("remote fallback should not run")),
             read_project_file=lambda _config, _path: "FROM ubuntu:22.04\n",
+            read_git_remote_file=lambda _config, _path: "",
             manifest_cache={},
             default_moulin_manifest="product.yaml",
             save_config=saved.append,

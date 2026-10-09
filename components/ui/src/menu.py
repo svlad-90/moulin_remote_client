@@ -47,9 +47,9 @@ class MenuItem:
 def item_job_slot(item: MenuItem) -> str | None:
     if is_open_item(item):
         return None
-    if is_board_command_item(item) or item.label == "Connect board host":
+    if is_board_command_item(item) or item.label in {"Connect board host", "Disconnect board host"}:
         return "board"
-    if is_build_command_group(item.group) or item.group == "sync" or item.label == "Connect build host":
+    if is_build_command_group(item.group) or item.group == "sync" or item.label in {"Connect build host", "Disconnect build host"}:
         return "build"
     return None
 
@@ -70,6 +70,43 @@ def is_board_command_item(item: MenuItem) -> bool:
 
 def is_open_item(item: MenuItem) -> bool:
     return item.label.startswith("Open ")
+
+
+def is_project_recovery_item(item: MenuItem) -> bool:
+    return item.label in {
+        "Prepare remote project",
+        "Checkout project Git ref",
+        "Stash changes and checkout project Git ref",
+        "Clear stale Git index lock",
+    }
+
+
+def blocks_on_checkout_git_ref(item: MenuItem) -> bool:
+    if is_project_recovery_item(item) or item.label == "Open build host shell":
+        return False
+    if is_open_item(item):
+        return False
+    parent, _child = split_group(item.group)
+    return item.requires_project and parent in {"build", "build commands", "sync"}
+
+
+def blocks_on_prepare_remote_project(item: MenuItem) -> bool:
+    if not item.requires_project:
+        return False
+    if item.label in {
+        "Prepare remote project",
+        "Open build host shell",
+        "Reset incremental build state",
+    }:
+        return False
+    if is_open_item(item):
+        return False
+    parent, child = split_group(item.group)
+    if parent == "tftp/nfs":
+        return child == "deploy artifacts"
+    if parent == "flashing":
+        return item.label == "Copy build artifacts"
+    return parent in {"build", "build commands", "sync"}
 
 
 def split_group(group: str) -> tuple[str, str]:
@@ -385,7 +422,7 @@ def item_enabled(
     slot = item_job_slot(item)
     if slot is not None and active_job_for_slot(slot, active_job=active_job, board_job=board_job) is not None:
         return False
-    if item.label in {"Connect board host", "Open board host shell"} and not board_host_has_ssh:
+    if item.label == "Open board host shell" and not board_host_has_ssh:
         return False
     if item.label == "Open board host shell" and not board_connected:
         return False
@@ -396,11 +433,11 @@ def item_enabled(
         return False
     if item.requires_remote and not build_connected:
         return False
-    if item.requires_project and not remote_has_project_dir:
+    if item.requires_project and not remote_has_project_dir and not is_project_recovery_item(item):
         return False
-    if item.label != "Prepare remote project" and item.requires_project and prepare_remote_project_needed:
+    if prepare_remote_project_needed and blocks_on_prepare_remote_project(item):
         return False
-    if item.label != "Checkout project Git ref" and item.requires_project and checkout_git_ref_needed:
+    if checkout_git_ref_needed and blocks_on_checkout_git_ref(item):
         return False
     return True
 
@@ -433,7 +470,7 @@ def disabled_reason(
     slot_job = active_job_for_slot(slot, active_job=active_job, board_job=board_job)
     if slot is not None and slot_job is not None and job_for_item(item, jobs) is None:
         return f"{slot} command is already running"
-    is_board_item = item.label in {"Connect board host", "Open board host shell"} or is_board_command_item(item)
+    is_board_item = item.label == "Open board host shell" or is_board_command_item(item)
     if is_board_item and not board_host_user:
         return "set board SSH user first"
     if is_board_item and not board_host_host:
@@ -448,11 +485,11 @@ def disabled_reason(
         return "set SSH host first"
     if item.requires_remote and not build_connected:
         return "connect to the build host first"
-    if item.requires_project and not remote_has_project_dir:
+    if item.requires_project and not remote_has_project_dir and not is_project_recovery_item(item):
         return "select remote project directory first"
-    if item.label != "Prepare remote project" and item.requires_project and prepare_remote_project_needed:
+    if prepare_remote_project_needed and blocks_on_prepare_remote_project(item):
         return "remote project needs preparation"
-    if item.label != "Checkout project Git ref" and item.requires_project and checkout_git_ref_needed:
+    if checkout_git_ref_needed and blocks_on_checkout_git_ref(item):
         return "remote project Git ref mismatch"
     return "disabled"
 

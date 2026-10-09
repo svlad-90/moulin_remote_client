@@ -55,6 +55,11 @@ class RemoteLocationBrowser:
                     index = 0
                 except Exception as exc:
                     error = str(exc)
+                    manual = port.prompt("Remote directory", current_path).strip()
+                    if ui_input_api.prompt_was_cancelled(port):
+                        port.status = error
+                        return None
+                    return manual or None
                 pending_path = None
             entries = [".."] + dirs
             index = ui_menu_api.clamp_index(index, len(entries))

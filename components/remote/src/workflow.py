@@ -15,6 +15,7 @@ REMOTE_CLI_COMMANDS = {
     "server-tui",
     "remote-status",
     "build-docker",
+    "cleanup-bitbake",
     "regen-moulin",
     "build",
     "yocto-impact",
@@ -85,8 +86,20 @@ class RemoteCommandWorkflowService:
     def prepare_project_command(self, config: dict[str, Any]) -> list[str]:
         return self.project_service.prepare_project_command_for_config(config)
 
+    def clean_project_folder_command(self, config: dict[str, Any]) -> list[str]:
+        return self.project_service.clean_project_folder_command_for_config(config)
+
     def checkout_git_ref_command(self, config: dict[str, Any]) -> list[str]:
         return self.project_service.checkout_git_ref_command_for_config(config)
+
+    def stash_and_checkout_git_ref_command(self, config: dict[str, Any]) -> list[str]:
+        return self.project_service.stash_and_checkout_git_ref_command_for_config(config)
+
+    def repair_and_checkout_git_ref_command(self, config: dict[str, Any]) -> list[str]:
+        return self.project_service.repair_and_checkout_git_ref_command_for_config(config)
+
+    def clear_git_index_lock_command(self, config: dict[str, Any]) -> list[str]:
+        return self.project_service.clear_git_index_lock_command_for_config(config)
 
     def docker_image_command(
         self,
@@ -98,6 +111,19 @@ class RemoteCommandWorkflowService:
             config,
             docker_image=docker_image,
             default_dockerfile=self.default_dockerfile,
+        )
+
+    def bitbake_cleanup_command(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        components: list[dict[str, Any]],
+    ) -> list[str]:
+        return self.build_service.bitbake_cleanup_command_for_config(
+            config,
+            docker_image=docker_image,
+            components=components,
         )
 
     def moulin_regen_command(
@@ -191,7 +217,9 @@ class RemoteCommandWorkflowService:
         targets: str,
         action: str = "analyze",
         image_recipes: list[str] | None = None,
+        build_dirs: list[str] | None = None,
         allow_empty: bool = False,
+        changed_files: list[str] | None = None,
     ) -> list[str]:
         return self.build_service.yocto_impact_command_for_config(
             config,
@@ -199,7 +227,9 @@ class RemoteCommandWorkflowService:
             targets=targets,
             action=action,
             image_recipes=image_recipes,
+            build_dirs=build_dirs,
             allow_empty=allow_empty,
+            changed_files=changed_files,
         )
 
     def run_docker_image(
@@ -210,6 +240,22 @@ class RemoteCommandWorkflowService:
         runner: Callable[[list[str]], Any],
     ) -> None:
         runner(self.docker_image_command(config, docker_image=docker_image))
+
+    def run_bitbake_cleanup(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        components: list[dict[str, Any]],
+        runner: Callable[[list[str]], Any],
+    ) -> None:
+        runner(
+            self.bitbake_cleanup_command(
+                config,
+                docker_image=docker_image,
+                components=components,
+            )
+        )
 
     def run_moulin_regen(
         self,
@@ -318,6 +364,14 @@ class RemoteCommandWorkflowService:
             return
         if command == "build-docker":
             self.run_docker_image(config, docker_image=docker_image, runner=runner)
+            return
+        if command == "cleanup-bitbake":
+            self.run_bitbake_cleanup(
+                config,
+                docker_image=docker_image,
+                components=list(context.get("component_builders", [])),
+                runner=runner,
+            )
             return
         if command == "regen-moulin":
             self.run_moulin_regen(

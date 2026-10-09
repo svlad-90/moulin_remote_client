@@ -69,7 +69,11 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(
             commands.build_interactive_remote_shell_command_for_config(config),
-            transport.ssh_command("builder@10.0.0.1", "cd /mnt/projects/meta-product && exec bash -l", tty="-t"),
+            transport.ssh_command(
+                "builder@10.0.0.1",
+                "mkdir -p /mnt/projects/meta-product && cd /mnt/projects/meta-product && exec bash -l",
+                tty="-t",
+            ),
         )
 
     def test_project_file_read_and_status_probe_commands_match_current_shape(self) -> None:
@@ -228,6 +232,17 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             commands.build_git_tracked_files_fetch_command_for_config(config),
             transport.ssh_command("builder@10.0.0.1", "cd /mnt/projects/meta-product && git ls-files"),
         )
+        self.assertEqual(
+            commands.build_git_remote_files_fetch_command_for_config(config),
+            transport.ssh_command("builder@10.0.0.1", "git archive --remote=git@example:prod mirror | tar -t"),
+        )
+        self.assertEqual(
+            commands.build_git_remote_file_read_command_for_config(config, "doc/Dockerfile"),
+            transport.ssh_command(
+                "builder@10.0.0.1",
+                "git --no-pager archive --remote=git@example:prod mirror doc/Dockerfile | tar -xO",
+            ),
+        )
         files = commands.parse_git_tracked_files(output)
 
         self.assertEqual(
@@ -249,6 +264,14 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         self.assertEqual(
             commands.fetch_git_tracked_files_for_config(config, lambda argv: output),
             files,
+        )
+        self.assertEqual(
+            commands.fetch_git_remote_files_for_config(config, lambda argv: output),
+            files,
+        )
+        self.assertEqual(
+            commands.read_git_remote_file_for_config(config, "doc/Dockerfile", lambda argv: "FROM ubuntu\n"),
+            "FROM ubuntu\n",
         )
 
     def test_git_branch_fetch_command_and_parser_match_current_shape(self) -> None:
@@ -291,6 +314,9 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
                 config_accessors.project_git_ref_for_config(config),
             ),
         )
+        command = commands.build_remote_prepare_project_command_for_config(config)[-1]
+        self.assertIn("find /mnt/projects/meta-product -mindepth 1 -maxdepth 1 -print -quit", command)
+        self.assertIn("remove or clean the non-empty project directory", command)
 
     def test_read_project_file_for_config_delegates_fetch_command_to_runner(self) -> None:
         config = sample_config()
@@ -330,6 +356,38 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
                 config_accessors.remote_project_dir_for_config(config),
                 docker_image,
                 config_accessors.configured_dockerfile_for_config(config),
+            ),
+        )
+
+    def test_bitbake_cleanup_command_kills_containers_and_removes_locks(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        components = [
+            {"name": "domd", "builder_type": "yocto", "build_dir": "yocto", "work_dir": "build-domd"},
+            {"name": "doma", "builder_type": "android", "build_dir": "android"},
+        ]
+
+        argv = commands.build_remote_bitbake_cleanup_command_for_config(config, docker_image="prod_img", components=components)
+
+        self.assertEqual(argv[0], "ssh")
+        self.assertIn("builder@10.0.0.1", argv)
+        self.assertIn("cd /mnt/projects/meta-product && python3 -u - <<'PY'", argv[-1])
+        self.assertIn("docker kill $ids", argv[-1])
+        self.assertIn("timeout_command(10", argv[-1])
+        self.assertIn("timeout {seconds}s", argv[-1])
+        self.assertIn("bitbake -m", argv[-1])
+        self.assertIn("pkill -f", argv[-1])
+        self.assertIn("bitbake.lock", argv[-1])
+        self.assertIn("bitbake.sock", argv[-1])
+        self.assertIn("component_build_dir", argv[-1])
+        self.assertEqual(clean_command_components(argv), components)
+        self.assertEqual(
+            argv,
+            commands.build_remote_bitbake_cleanup_command(
+                config_accessors.remote_spec_for_config(config),
+                config_accessors.remote_project_dir_for_config(config),
+                "prod_img",
+                components,
             ),
         )
 
@@ -678,6 +736,13 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             default_dockerfile=client.DEFAULT_DOCKERFILE,
             runner=ran.append,
         )
+        components = [{"name": "domd", "builder_type": "yocto", "build_dir": "yocto", "work_dir": "build-domd"}]
+        commands.run_remote_bitbake_cleanup_for_config(
+            config,
+            docker_image=docker_image,
+            components=components,
+            runner=ran.append,
+        )
         commands.run_remote_moulin_for_config(
             config,
             docker_image=docker_image,
@@ -700,8 +765,9 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(ran[0], commands.build_interactive_remote_shell_command_for_config(config))
         self.assertEqual(ran[1], commands.build_remote_docker_command_for_config(config, docker_image=docker_image, default_dockerfile=client.DEFAULT_DOCKERFILE))
+        self.assertEqual(ran[2], commands.build_remote_bitbake_cleanup_command_for_config(config, docker_image=docker_image, components=components))
         self.assertEqual(
-            ran[2],
+            ran[3],
             commands.build_remote_moulin_command_for_config(
                 config,
                 docker_image=docker_image,
@@ -709,10 +775,10 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
                 build_params=build_params,
             ),
         )
-        self.assertEqual(ran[3], commands.build_remote_build_command_for_config(config, docker_image=docker_image, targets=build_targets))
-        self.assertEqual(ran[4][0], "ssh")
-        self.assertIn("builder@10.0.0.1", ran[4])
-        self.assertIn("Docker image", ran[4][-1])
+        self.assertEqual(ran[4], commands.build_remote_build_command_for_config(config, docker_image=docker_image, targets=build_targets))
+        self.assertEqual(ran[5][0], "ssh")
+        self.assertIn("builder@10.0.0.1", ran[5])
+        self.assertIn("Docker image", ran[5][-1])
 
     def test_run_cli_remote_command_for_config_routes_build_commands(self) -> None:
         config = sample_config()

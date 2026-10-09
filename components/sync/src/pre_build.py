@@ -138,14 +138,20 @@ class SyncPreBuildService:
         *,
         selection_path: Path,
         app_dir: Path,
+        names: list[str] | None = None,
     ) -> list[list[str]]:
-        names = self.selection_service.read_mapping_selection_for_config(config, selection_path, required=False)
+        if names is None:
+            names = self.selection_service.read_mapping_selection_for_config(config, selection_path, required=False)
         if not names:
             return self.pre_build_sync_commands([], [], [], rsync_command=lambda _mapping: [])
         try:
             active_mappings = self.selection_service.select_mappings_for_config(config, names)
         except SystemExit as exc:
             return self.pre_build_selection_error_command(exc)
+        active_mappings = [mapping for mapping in active_mappings if mapping.get("push", True)]
+        names = [str(mapping["name"]) for mapping in active_mappings]
+        if not active_mappings:
+            return self.pre_build_sync_commands([], [], [], rsync_command=lambda _mapping: [])
         local_base = config_accessors.local_project_dir_for_config(config, app_dir)
         issues = self.overlay_validation_service.local_mapping_issues(local_base, active_mappings)
         if issues:

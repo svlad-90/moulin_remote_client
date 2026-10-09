@@ -221,12 +221,51 @@ class RemoteProjectDiscoveryService:
         script = f"cd {shlex.quote(config_accessors.remote_project_dir_for_config(config))} && git ls-files"
         return transport.ssh_command(config_accessors.remote_spec_for_config(config), script)
 
+    def build_git_remote_files_fetch_command(self, remote: str, git_url: str, git_ref: str) -> list[str]:
+        script = f"git archive --remote={shlex.quote(git_url)} {shlex.quote(git_ref)} | tar -t"
+        return transport.ssh_command(remote, script)
+
+    def build_git_remote_files_fetch_command_for_config(self, config: dict[str, Any]) -> list[str]:
+        return self.build_git_remote_files_fetch_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.project_git_url_for_config(config),
+            config_accessors.project_git_ref_for_config(config),
+        )
+
     def fetch_git_tracked_files_for_config(
         self,
         config: dict[str, Any],
         runner: Callable[[list[str]], str],
     ) -> list[str]:
         return self.parse_git_tracked_files(runner(self.build_git_tracked_files_fetch_command_for_config(config)))
+
+    def fetch_git_remote_files_for_config(
+        self,
+        config: dict[str, Any],
+        runner: Callable[[list[str]], str],
+    ) -> list[str]:
+        return self.parse_git_tracked_files(runner(self.build_git_remote_files_fetch_command_for_config(config)))
+
+    def build_git_remote_file_read_command(self, remote: str, git_url: str, git_ref: str, path: str) -> list[str]:
+        git_path = path.lstrip("./")
+        script = f"git --no-pager archive --remote={shlex.quote(git_url)} {shlex.quote(git_ref)} {shlex.quote(git_path)} | tar -xO"
+        return transport.ssh_command(remote, script)
+
+    def build_git_remote_file_read_command_for_config(self, config: dict[str, Any], path: str) -> list[str]:
+        return self.build_git_remote_file_read_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.project_git_url_for_config(config),
+            config_accessors.project_git_ref_for_config(config),
+            path,
+        )
+
+    def read_git_remote_file_for_config(
+        self,
+        config: dict[str, Any],
+        path: str,
+        runner: Callable[[list[str]], str],
+    ) -> str:
+        return runner(self.build_git_remote_file_read_command_for_config(config, path))
 
     def root_yaml_candidates(self, paths: list[str]) -> list[str]:
         return [

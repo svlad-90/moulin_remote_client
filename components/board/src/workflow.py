@@ -94,9 +94,14 @@ class BoardCommandWorkflowService:
         config: dict[str, Any],
         *,
         build_params: dict[str, str] | None = None,
+        allow_remote_manifest: bool = True,
     ) -> list[board_type_base_api.BoardAction]:
         actions = self._adapter_for_config(config).actions(config)
-        domains = self.active_domains_for_config(config, build_params=build_params)
+        domains = self.active_domains_for_config(
+            config,
+            build_params=build_params,
+            allow_remote_manifest=allow_remote_manifest,
+        )
         if not domains:
             return actions
         return [action for action in actions if self.action_matches_active_domains(action, domains)]
@@ -184,12 +189,18 @@ class BoardCommandWorkflowService:
         config: dict[str, Any],
         *,
         build_params: dict[str, str] | None = None,
+        allow_remote_manifest: bool = True,
     ) -> frozenset[str]:
+        remote_read_project_file = self.remote_read_project_file
+        if not allow_remote_manifest:
+            def remote_read_project_file(_config: dict[str, Any], _path: str) -> str:
+                raise RuntimeError("remote manifest reads are disabled for this menu refresh")
+
         try:
             components = moulin_manifest_api.component_builders_for_config(
                 config,
                 app_dir=self.app_dir,
-                remote_read_project_file=self.remote_read_project_file,
+                remote_read_project_file=remote_read_project_file,
                 cache=self.manifest_cache,
                 default_moulin_manifest=self.default_moulin_manifest,
                 build_params=build_params,

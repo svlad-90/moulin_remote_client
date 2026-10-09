@@ -438,6 +438,16 @@ def record_command_step_start(
 
 def command_step_label(command: list[str]) -> str:
     text = " ".join(command)
+    if ".git/index.lock" in text and "git add -A" in text and "git checkout " in text:
+        return "Checkout project Git ref"
+    if "git add -A" in text and "git stash push" in text and "git checkout " in text:
+        return "Stash changes and checkout project Git ref"
+    if "git checkout " in text and "git fetch origin --prune" in text:
+        return "Checkout project Git ref"
+    if ".git/index.lock" in text and "rm -f" in text:
+        return "Clear stale Git index lock"
+    if "Clean project folder" in text and "rm -rf" in text:
+        return "Clean project folder"
     if 'ACTION = "clean"' in text:
         return "Clean impacted Yocto recipes"
     if 'ACTION = "rebuild"' in text:
@@ -511,6 +521,18 @@ def completed_command_sequence_state(job: dict[str, Any]) -> dict[str, Any]:
     if title == "Prepare remote project" and rc == 0:
         state["needs_preflight_reset"] = True
         state["status"] = "Prepare remote project: done; reconnect to refresh preflight"
+    if title == "Clean project folder" and rc == 0:
+        state["preflight"] = "project missing | disk ? | git ? | docker ? | origin ? | ref ?"
+        state["preflight_values"] = {
+            "project": "missing",
+            "disk": "?",
+            "git": "?",
+            "docker": "?",
+            "origin": "?",
+            "ref": "?",
+        }
+        state["menu_dirty"] = True
+        state["status"] = "Clean project folder: done; prepare remote project to fetch checkout"
     return state
 
 

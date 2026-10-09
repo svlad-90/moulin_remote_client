@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import curses
+import json
 from pathlib import Path
 from pathlib import PurePosixPath
 import shlex
@@ -80,7 +81,6 @@ class MainMenuCommandItemsService:
                     self.sync_command_workflow.mapped_files_push_sequence(app.config)
                 ),
                 lambda app: self.run_sync_mapping_push(app),
-                confirm=True,
                 requires_remote=True,
                 requires_project=True,
             ),
@@ -103,6 +103,21 @@ class MainMenuCommandItemsService:
                     ),
                 ),
                 confirm=True,
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Clean-up BitBake server",
+                "build / commands",
+                "Kill build containers for the configured Docker image and remove BitBake server locks.",
+                lambda app: shlex.join(
+                    self.remote_command_workflow.bitbake_cleanup_command(
+                        app.config,
+                        docker_image=app.docker_image,
+                        components=self.incremental_components(app),
+                    )
+                ),
+                lambda app: self.run_bitbake_cleanup(app),
                 requires_remote=True,
                 requires_project=True,
             ),
@@ -141,15 +156,7 @@ class MainMenuCommandItemsService:
                         targets=app.build_targets,
                     )
                 ),
-                lambda app: self.run_build_command(
-                    app,
-                    "Run product build",
-                    self.remote_command_workflow.product_build_command(
-                        app.config,
-                        docker_image=app.docker_image,
-                        targets=app.build_targets,
-                    ),
-                ),
+                lambda app: self.run_product_build(app),
                 confirm=True,
                 requires_remote=True,
                 requires_project=True,
@@ -166,6 +173,15 @@ class MainMenuCommandItemsService:
                 requires_project=True,
             ),
             MenuItem(
+                "Reset incremental build state",
+                "build / commands",
+                "Rebuild the mapped-file baseline and queue current local workspace changes for the next incremental build.",
+                lambda app: shlex.join(self.reset_incremental_build_state_command(app)),
+                lambda app: self.run_reset_incremental_build_state(app),
+                confirm=True,
+                requires_project=True,
+            ),
+            MenuItem(
                 "Clean Moulin components",
                 "build / commands",
                 "Choose a cleanup mode, then select Moulin components to clean.",
@@ -173,6 +189,19 @@ class MainMenuCommandItemsService:
                 lambda app: self.run_component_clean_menu(app),
                 requires_remote=True,
                 requires_project=True,
+            ),
+            MenuItem(
+                "Clean project folder",
+                "build / commands",
+                "Delete the configured project directory on the build host.",
+                lambda app: shlex.join(self.remote_command_workflow.clean_project_folder_command(app.config)),
+                lambda app: app.command_workflow_service().run_commands(
+                    app,
+                    "Clean project folder",
+                    [self.remote_command_workflow.clean_project_folder_command(app.config)],
+                ),
+                confirm=True,
+                requires_remote=True,
             ),
             MenuItem(
                 "Stop running command",
@@ -433,12 +462,151 @@ class MainMenuCommandItemsService:
         if not selected_names:
             app.status = "Incremental build cancelled: no components selected"
             return None
+        if not self.confirm_incremental_build_clean(app, selected_names=selected_names):
+            app.status = "Incremental build cancelled"
+            return None
         config_runtime_api.save_runtime_incremental_components(app.config, self.app_dir, selected_names)
         return app.command_workflow_service().run_commands(
             app,
             "Incremental build",
             self.incremental_product_build_commands(app, selected_names=selected_names),
         )
+
+    def run_bitbake_cleanup(self, app: Any) -> int:
+        app.reload_config_from_disk()
+        components = self.incremental_components(app)
+        if not self.confirm_bitbake_cleanup(app, components=components):
+            app.status = "Clean-up BitBake server cancelled"
+            return 0
+        return app.command_workflow_service().run_build_command(
+            app,
+            "Clean-up BitBake server",
+            self.remote_command_workflow.bitbake_cleanup_command(
+                app.config,
+                docker_image=app.docker_image,
+                components=components,
+            ),
+            config=app.config,
+            parameters=app.build_params,
+            targets=app.build_targets,
+            docker_image=app.docker_image,
+            build_command_sequence=self.sync_command_workflow.build_command_sequence,
+        )
+
+    def confirm_bitbake_cleanup(self, app: Any, *, components: list[dict[str, Any]]) -> bool:
+        build_dirs = [
+            str(component.get("build_dir", "")).strip()
+            for component in components
+            if str(component.get("builder_type", "")) == "yocto" and str(component.get("build_dir", "")).strip()
+        ]
+        details = "BitBake build dirs: " + (", ".join(build_dirs) if build_dirs else "none detected")
+        return app.dialog_workflow_controller().run_confirm_dialog(
+            app,
+            ui_dialog_api.ConfirmContent(
+                title="Confirm",
+                warning="This action can kill remote build containers and remove BitBake locks.",
+                subject="Clean-up BitBake server",
+                details=details,
+                footer="Enter/y: clean | n/q/Esc: back",
+            ),
+            redraw_background=False,
+        )
+
+    def confirm_incremental_build_clean(self, app: Any, *, selected_names: list[str]) -> bool:
+        components = {
+            str(component.get("name", "")): component
+            for component in self.incremental_components(app)
+        }
+        selected = [components[name] for name in selected_names if name in components]
+        yocto_targets = [
+            str(component.get("target", "")).strip()
+            for component in selected
+            if str(component.get("builder_type", "")) == "yocto" and str(component.get("target", "")).strip()
+        ]
+        selected_components = ", ".join(selected_names)
+        yocto_target_text = ", ".join(yocto_targets) if yocto_targets else "none"
+        return app.dialog_workflow_controller().run_confirm_dialog(
+            app,
+            ui_dialog_api.ConfirmContent(
+                title="Confirm",
+                warning="Incremental build will clean impacted Yocto recipes before rebuilding.",
+                subject="Clean impacted Yocto recipes",
+                details=f"Selected components: {selected_components}. Yocto targets: {yocto_target_text}",
+                footer="Enter/y: clean and build | n/q/Esc: back",
+            ),
+            redraw_background=False,
+        )
+
+    def mark_incremental_mapping_build_applied_command(
+        self,
+        app: Any,
+        *,
+        applied_files: list[str] | None = None,
+    ) -> list[str]:
+        config_json = json.dumps(app.config, sort_keys=True)
+        mappings_json = json.dumps(self.push_enabled_active_mappings(app), sort_keys=True)
+        files_json = json.dumps(applied_files, sort_keys=True) if applied_files is not None else "null"
+        script = "\n".join(
+            [
+                "import json",
+                "import sys",
+                "from pathlib import Path",
+                f"sys.path.insert(0, {str(self.app_dir)!r})",
+                "from components.build_runtime.api import runtime",
+                f"config = json.loads({config_json!r})",
+                f"mappings = json.loads({mappings_json!r})",
+                f"applied_files = json.loads({files_json!r})",
+                f"runtime.mark_runtime_mapping_build_applied(config, Path({str(self.app_dir)!r}), mappings, applied_files)",
+                "print('Incremental build: marked mapped-file changes as applied by build')",
+            ]
+        )
+        return ["python3", "-c", script]
+
+    def reset_incremental_build_state_command(self, app: Any) -> list[str]:
+        config_json = json.dumps(app.config, sort_keys=True)
+        mappings_json = json.dumps(self.push_enabled_active_mappings(app), sort_keys=True)
+        script = "\n".join(
+            [
+                "import json",
+                "import sys",
+                "from pathlib import Path",
+                f"sys.path.insert(0, {str(self.app_dir)!r})",
+                "from components.build_runtime.api import runtime",
+                f"config = json.loads({config_json!r})",
+                f"mappings = json.loads({mappings_json!r})",
+                f"runtime.reset_runtime_mapping_state(config, Path({str(self.app_dir)!r}), mappings)",
+                "pending_mappings, pending_files = runtime.load_runtime_mapping_pending_changes(config, Path(%r))" % str(self.app_dir),
+                "print('Reset incremental build state: rebuilt baseline and queued local workspace changes')",
+                "print('pending mappings: ' + (', '.join(pending_mappings) if pending_mappings else 'none'))",
+                "print('pending files: ' + str(len(pending_files)))",
+            ]
+        )
+        return ["python3", "-c", script]
+
+    def run_reset_incremental_build_state(self, app: Any) -> int:
+        app.reload_config_from_disk()
+        return app.command_workflow_service().run_commands(
+            app,
+            "Reset incremental build state",
+            [self.reset_incremental_build_state_command(app)],
+        )
+
+    def run_product_build(self, app: Any) -> int:
+        app.reload_config_from_disk()
+        product_build = self.remote_command_workflow.product_build_command(
+            app.config,
+            docker_image=app.docker_image,
+            targets=app.build_targets,
+        )
+        commands = self.sync_command_workflow.build_command_sequence(
+            app.config,
+            product_build,
+            parameters=app.build_params,
+            targets=app.build_targets,
+            docker_image=app.docker_image,
+        )
+        commands.append(self.mark_incremental_mapping_build_applied_command(app))
+        return app.command_workflow_service().run_commands(app, "Run product build", commands)
 
     def incremental_product_build_commands(self, app: Any, selected_names: list[str] | None = None) -> list[list[str]]:
         components = self.incremental_components(app)
@@ -452,6 +620,13 @@ class MainMenuCommandItemsService:
             for component in selected
             if component["builder_type"] == "yocto" and str(component["target"]).strip()
         ]
+        yocto_build_dirs = [
+            build_dir
+            for component in selected
+            if component["builder_type"] == "yocto"
+            for build_dir in [self.yocto_incremental_build_dir(component)]
+            if build_dir
+        ]
         ninja_components = [
             str(component["name"])
             for component in selected
@@ -460,18 +635,55 @@ class MainMenuCommandItemsService:
         bazel_components = [component for component in selected if component["builder_type"] == "bazel"]
         bazel_config_targets = self.bazel_config_targets_for_components(selected)
         selected_product_targets = " ".join(str(component["name"]) for component in selected)
+        changed_files = self.changed_incremental_files(app)
+        applied_files = self.applied_incremental_files(app, selected, changed_files)
 
         commands: list[list[str]] = []
-        commands.append(
-            self.remote_command_workflow.yocto_impact_command(
-                app.config,
-                docker_image=app.docker_image,
-                targets=app.build_targets,
-                action="clean",
-                image_recipes=yocto_recipes,
-                allow_empty=True,
+        if changed_files:
+            added_yocto_clean = False
+            for component in selected:
+                if component["builder_type"] != "yocto" or not str(component["target"]).strip():
+                    continue
+                build_dir = self.yocto_incremental_build_dir(component)
+                commands.append(
+                    self.remote_command_workflow.yocto_impact_command(
+                        app.config,
+                        docker_image=app.docker_image,
+                        targets=str(component["target"]),
+                        action="clean",
+                        image_recipes=[str(component["target"])],
+                        build_dirs=[build_dir] if build_dir else [],
+                        allow_empty=True,
+                        changed_files=changed_files,
+                    )
+                )
+                added_yocto_clean = True
+            if not added_yocto_clean:
+                commands.append(
+                    self.remote_command_workflow.yocto_impact_command(
+                        app.config,
+                        docker_image=app.docker_image,
+                        targets="",
+                        action="clean",
+                        image_recipes=[],
+                        build_dirs=[],
+                        allow_empty=True,
+                        changed_files=changed_files,
+                    )
+                )
+        else:
+            commands.append(
+                self.remote_command_workflow.yocto_impact_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                    targets=" ".join(yocto_recipes),
+                    action="clean",
+                    image_recipes=[],
+                    build_dirs=yocto_build_dirs,
+                    allow_empty=True,
+                    changed_files=changed_files,
+                )
             )
-        )
         commands.append(
             self.remote_command_workflow.moulin_regen_command(
                 app.config,
@@ -510,6 +722,7 @@ class MainMenuCommandItemsService:
                 targets=selected_product_targets,
             )
         )
+        commands.append(self.mark_incremental_mapping_build_applied_command(app, applied_files=applied_files))
         return commands
 
     def run_component_clean_menu(self, app: Any) -> Any:
@@ -839,6 +1052,18 @@ class MainMenuCommandItemsService:
             target = target[: -len("_dist")]
         return f"{target}/.config"
 
+    @classmethod
+    def yocto_incremental_build_dir(cls, component: dict[str, Any]) -> str:
+        build_dir = cls.safe_relative_path(str(component.get("build_dir", ""))) or "yocto"
+        work_dir = cls.safe_relative_path(str(component.get("work_dir", "")))
+        if work_dir:
+            return str(PurePosixPath(build_dir) / work_dir)
+        build_path = PurePosixPath(build_dir)
+        if build_path.name.startswith("build-"):
+            return str(build_path)
+        name = cls.safe_relative_path(str(component.get("name", "")))
+        return str(build_path / f"build-{name}") if name else ""
+
     def incremental_components(self, app: Any) -> list[dict[str, Any]]:
         components = moulin_manifest_api.component_builders_for_config(
             app.config,
@@ -848,7 +1073,7 @@ class MainMenuCommandItemsService:
             default_moulin_manifest=self.default_moulin_manifest,
             build_params=app.build_params,
         )
-        supported_types = {"yocto", "bazel", "android"}
+        supported_types = {"yocto", "bazel", "android", "custom_script"}
         return [
             {
                 **component,
@@ -904,6 +1129,8 @@ class MainMenuCommandItemsService:
                     for name, component in by_name.items()
                     if component["builder_type"] == "android"
                 )
+        if "boot_artifacts" in by_name and selected.intersection({"dom0", "domd"}):
+            selected.add("boot_artifacts")
         return [str(component["name"]) for component in supported if str(component["name"]) in selected]
 
     def incremental_change_state(self, app: Any, components: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -914,9 +1141,58 @@ class MainMenuCommandItemsService:
         }
 
     def changed_incremental_mappings(self, app: Any) -> list[dict[str, Any]]:
-        mappings = self.active_incremental_mappings(app)
+        mappings = self.push_enabled_active_mappings(app)
         changed_names = config_runtime_api.changed_runtime_mappings(app.config, self.app_dir, mappings) if mappings else []
         return [mapping for mapping in mappings if str(mapping.get("name", "")) in set(changed_names)]
+
+    def changed_incremental_files(self, app: Any) -> list[str]:
+        mappings = self.push_enabled_active_mappings(app)
+        return config_runtime_api.changed_runtime_mapping_files(app.config, self.app_dir, mappings) if mappings else []
+
+    def mapping_contains_file(self, mapping: dict[str, Any], path: str) -> bool:
+        local = str(mapping.get("local", "")).strip().strip("/")
+        if not local or local == ".":
+            return True
+        return path == local or path.startswith(local + "/")
+
+    def applied_incremental_files(
+        self,
+        app: Any,
+        selected_components: list[dict[str, Any]],
+        changed_files: list[str],
+    ) -> list[str]:
+        selected_names = {str(component["name"]) for component in selected_components}
+        if not selected_names:
+            return []
+        all_components = self.incremental_components(app)
+        applied_mappings = [
+            mapping
+            for mapping in self.push_enabled_active_mappings(app)
+            if selected_names.intersection(self.auto_incremental_component_names(all_components, [mapping]))
+        ]
+        return sorted(
+            {
+                path
+                for path in changed_files
+                if any(self.mapping_contains_file(mapping, path) for mapping in applied_mappings)
+            }
+        )
+
+    def clear_incremental_mapping_changes_command(self, app: Any) -> list[str]:
+        config_json = json.dumps(app.config, sort_keys=True)
+        script = "\n".join(
+            [
+                "import json",
+                "import sys",
+                "from pathlib import Path",
+                f"sys.path.insert(0, {str(self.app_dir)!r})",
+                "from components.build_runtime.api import runtime",
+                f"config = json.loads({config_json!r})",
+                f"runtime.clear_runtime_mapping_pending_changes(config, Path({str(self.app_dir)!r}))",
+                "print('Incremental build: cleared consumed mapped-file changes')",
+            ]
+        )
+        return ["python3", "-c", script]
 
     def select_incremental_component_names(
         self,
@@ -927,13 +1203,23 @@ class MainMenuCommandItemsService:
         prompt: str = "Select Moulin components to rebuild, then press Enter.",
         supported_description: str = "Incremental rebuild is supported for {builder_type}.",
         unsupported_description: str = "Incremental rebuild is not supported for {builder_type} yet.",
+        use_stored_selection: bool = True,
+        use_auto_selection: bool = True,
     ) -> list[str] | None:
         supported = [component for component in components if component["supported"]]
         supported_names = {str(component["name"]) for component in supported}
         change_state = self.incremental_change_state(app, components)
-        auto_names = [name for name in change_state["components"] if name in supported_names]
-        stored_names = config_runtime_api.load_runtime_incremental_components(app.config, self.app_dir)
-        selected = set(auto_names or stored_names or supported_names) & supported_names
+        auto_names = (
+            [name for name in change_state["components"] if name in supported_names]
+            if use_auto_selection
+            else []
+        )
+        stored_names = (
+            config_runtime_api.load_runtime_incremental_components(app.config, self.app_dir)
+            if use_stored_selection
+            else []
+        )
+        selected = set(stored_names or auto_names or supported_names) & supported_names
         index = 0
         app.screen.timeout(-1)
         try:
@@ -954,7 +1240,7 @@ class MainMenuCommandItemsService:
                 app.add(2, 2, ui_text_api.fit_text(f"Final targets: {app.build_targets}", width - 4))
                 app.add(3, 2, ui_text_api.fit_text("Selected: " + " ".join(name for name in selected if name), width - 4))
 
-                changed_text = "Changed since last copy: " + (
+                changed_text = "Changed for incremental build: " + (
                     ", ".join(change_state["mappings"]) if change_state["mappings"] else "none"
                 )
                 selected_text = "Auto-selected: " + (", ".join(auto_names) if auto_names else "none")
@@ -1076,11 +1362,42 @@ class MainMenuCommandItemsService:
 
     def run_sync_mapping_push(self, app: Any) -> int:
         app.reload_config_from_disk()
+        mapping_names = self.push_enabled_active_mapping_names(app)
+        if not mapping_names:
+            app.status = "Copy mapped files cancelled: no push-enabled active mappings"
+            return 0
+        if not self.confirm_mapping_push(app, mapping_names=mapping_names):
+            app.status = "Copy mapped files cancelled"
+            return 0
         return app.command_workflow_service().run_commands(
             app,
             "Copy mapped files to build host",
-            self.sync_command_workflow.mapped_files_push_sequence(app.config),
+            self.sync_command_workflow.mapped_files_push_sequence(app.config, names=mapping_names),
         )
+
+    def confirm_mapping_push(
+        self,
+        app: Any,
+        *,
+        mapping_names: list[str],
+    ) -> bool:
+        return app.dialog_workflow_controller().run_confirm_dialog(
+            app,
+            ui_dialog_api.ConfirmContent(
+                title="Confirm",
+                warning="This action can change local or remote mapped files.",
+                subject="Copy mapped files",
+                details="Mappings: " + ", ".join(mapping_names),
+                footer="Enter/y: copy | n/q/Esc: back",
+            ),
+            redraw_background=False,
+        )
+
+    def push_enabled_active_mapping_names(self, app: Any) -> list[str]:
+        return [str(mapping["name"]) for mapping in self.push_enabled_active_mappings(app)]
+
+    def push_enabled_active_mappings(self, app: Any) -> list[dict[str, Any]]:
+        return [mapping for mapping in self.active_incremental_mappings(app) if mapping.get("push", True)]
 
     def copy_build_artifacts_commands(self, app: Any) -> list[list[str]]:
         return self.board_command_workflow.copy_build_artifacts_commands(
@@ -1111,6 +1428,7 @@ class MainMenuCommandItemsService:
             for action in self.board_command_workflow.board_actions(
                 app.config,
                 build_params=getattr(app, "build_params", {}),
+                allow_remote_manifest=False,
             )
         ]
 

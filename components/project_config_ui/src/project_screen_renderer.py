@@ -227,7 +227,12 @@ class ProjectScreenRenderer:
                 row += 1
                 continue
             if display_row.kind == "heading":
-                port.add(row, detail_x, str(display_row.label).upper()[:detail_w], port.accent_attr())
+                label = str(display_row.label).upper()
+                if label == "BUILD":
+                    source = str(getattr(port, "project_config_source", "")).strip()
+                    if source:
+                        label = f"{label} (source: {source})"
+                port.add(row, detail_x, label[:detail_w], port.accent_attr())
                 row += 1
                 continue
             field = display_row.field or {}

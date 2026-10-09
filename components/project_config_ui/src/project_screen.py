@@ -35,8 +35,8 @@ def project_fields(params: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {"label": "Moulin manifest", "key": "moulin_manifest", "kind": "manifest"},
             {"label": "Dockerfile", "key": "dockerfile", "kind": "dockerfile"},
             {"label": "Build targets", "key": "targets", "kind": "targets"},
-            {"label": "Board artifacts", "key": "board_artifacts", "kind": "board_artifacts"},
             {"label": "Docker image name", "key": "docker_image", "kind": "text"},
+            {"label": "Board artifacts", "key": "board_artifacts", "kind": "board_artifacts"},
         ]
     )
     return fields

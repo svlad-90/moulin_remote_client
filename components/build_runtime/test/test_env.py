@@ -36,7 +36,8 @@ class ConfigEnvBehaviorTests(unittest.TestCase):
         for value in ("0", "false", "no", "off", " OFF "):
             self.assertFalse(config_env.auto_connect_enabled({"MOULIN_REMOTE_AUTO_CONNECT": value}))
         self.assertTrue(config_env.auto_connect_enabled({}))
-        self.assertTrue(config_env.auto_connect_enabled({"MOULIN_REMOTE_AUTO_CONNECT": "yes"}))
+        for value in ("1", "true", "yes", "on", " YES "):
+            self.assertTrue(config_env.auto_connect_enabled({"MOULIN_REMOTE_AUTO_CONNECT": value}))
 
     def test_apply_env_overrides_updates_active_remote_and_project(self) -> None:
         config = sample_config()
