@@ -171,8 +171,10 @@ hosts, user names, and product settings.
 4. Return to the main menu and connect the build host.
 
    The header and details panel show project, SSH, Git, Docker, origin, and ref
-   status after preflight. If the checkout does not exist or points at a wrong
-   origin, the menu offers **Prepare remote project**.
+   status after preflight. If the checkout is missing, empty, not a Git
+   checkout, or points at a wrong origin, the menu offers **Prepare remote
+   project**. If only the checked-out ref differs, it offers **Checkout project
+   Git ref**.
 
 5. Optional: open **Sync mapped files** when you want to edit selected source
    paths locally.
@@ -222,13 +224,17 @@ type.
 
 | Item | Purpose |
 | --- | --- |
-| Prepare remote project | Clone or repair the configured checkout when preflight requires it. |
-| Checkout project Git ref | Checkout the configured Git ref when preflight requires it. |
+| Prepare remote project | Create or repair the configured checkout when preflight requires it. Empty existing directories are accepted; non-empty non-Git directories must be cleaned or removed first. |
+| Checkout project Git ref | Remove a stale Git index lock when safe, stash local changes, fetch origin, and checkout the configured Git ref. |
 | Copy mapped files to build host | Push selected local mapped files to the configured build host. |
 | Build Docker image | Run `docker build` on the build host. |
+| Clean-up BitBake server | Ask the remote BitBake server to stop before regeneration or rebuild. |
 | Regenerate Moulin/Ninja | Run `moulin <manifest>` inside the product Docker container. |
 | Run product build | Run `ninja <targets>` inside the product Docker container. |
 | Incremental build | Rebuild configured Moulin components using supported builder-specific incremental flows, regenerate Moulin/Ninja, then run the configured Ninja targets. |
+| Reset incremental build state | Forget the stored mapped-file build state so active mappings are treated as not yet applied by a successful build. |
+| Clean Moulin components | Clean selected component artifacts, build output, Yocto state, or component directories. |
+| Clean project folder | Remove the configured remote project checkout directory after confirmation. |
 | Stop running command | Stop the active build/sync command, then force-kill if needed. |
 
 Build commands are multi-step jobs. They stop on the first non-zero step exit.
@@ -244,6 +250,22 @@ for example `rcar-image-adas xt-rcar-image`.
 When **Incremental build** starts, the TUI opens a component selector. `yocto`,
 `bazel`, and `android` builders are supported. Other builder types are shown
 disabled until a builder-specific incremental flow is added.
+
+### Menu Availability
+
+The menu keeps configuration actions available even when hosts are disconnected.
+Build actions that require a live build host are disabled until the build host
+is connected.
+
+When preflight says the remote project needs preparation, build, sync, and
+artifact-copy actions that depend on the checkout are disabled. **Prepare
+remote project**, **Open build host shell**, **Clean project folder**, and board
+flashing actions remain available so a user can inspect or recover the build
+host and still use previously copied board artifacts.
+
+When only the Git ref mismatches, **Checkout project Git ref** is shown and
+build/sync actions are blocked until the checkout is repaired. Board flashing
+actions remain available because they can use already copied artifacts.
 
 ### Board Host Session
 
@@ -348,6 +370,20 @@ Project profiles live under `projects` and the active profile name is stored in
 | `mappings` | Saved source mapping definitions for this project. |
 | `active_mappings` | Active mapping names used by pull, push, and explicit mapped-file copy. |
 
+### Configuration Discovery
+
+Project configuration screens prefer discovered values but keep a manual
+fallback:
+
+1. Read the configured checkout on the build host.
+2. If that fails or returns no useful candidates, query the configured Git
+   remote/ref directly.
+3. If discovery still cannot produce candidates, prompt for manual text input.
+
+This applies to Moulin manifest selection, Dockerfile selection, build target
+selection, and board artifact selection. Screens that use discovered values
+show the source, for example `(source: Git remote)`, when that context is known.
+
 ## Environment Overrides
 
 The following variables override loaded config values for one run:
@@ -409,9 +445,17 @@ directory mapping deletes the corresponding file on the build host during push.
 
 Build commands are run on the build host but driven from the local TUI.
 
-1. Optional: run **Copy mapped files to build host** when local overlay changes
+1. Connect the build host. The connection step also runs project preflight.
+2. If preflight offers **Prepare remote project**, run it before build/sync
+   commands. It clones missing checkouts and accepts empty existing target
+   directories. It refuses non-empty non-Git directories and tells the user to
+   clean or remove the directory first.
+3. If preflight offers **Checkout project Git ref**, run it before build/sync
+   commands. The checkout flow handles a stale `.git/index.lock`, stages and
+   stashes local changes, fetches origin, and checks out the configured ref.
+4. Optional: run **Copy mapped files to build host** when local overlay changes
    should be pushed to the remote checkout.
-2. The requested build command runs on the build host. Build commands do not
+5. The requested build command runs on the build host. Build commands do not
    copy mapped files automatically.
 
 The command shapes are:
@@ -590,8 +634,11 @@ Configuration screens show the currently available key hints in the footer.
 - Review dry-run output before the first push of a new mapping.
 - Active directory mappings use `rsync --delete`; remote files can be removed
   when they no longer exist in the local overlay.
-- Build and board commands are confirmed before execution.
+- Destructive cleanup commands ask for confirmation before execution.
 - Multi-step command sequences stop on the first non-zero step exit.
+- **Clean project folder** removes the configured remote project checkout
+  directory. The command refuses empty, root, home, non-directory, and unsafe
+  basename targets, but it is still destructive for a valid project directory.
 - UFS flashing is destructive by design. Confirm the active board host and
   board artifacts before running **Flash UFS image**.
 - Board helper scripts are vendored in `board_tools/` and deployed to the board
@@ -626,6 +673,26 @@ overlay does not contain the mapped paths.
 
 For a first build with no source mappings yet, there is nothing to pull or push:
 run the build directly in the build-host checkout.
+
+### Only `Prepare remote project` is available
+
+Preflight detected that the configured checkout is missing, inaccessible,
+not a Git checkout, or has a wrong origin. Run **Prepare remote project** when
+the directory is absent or empty. If the details/log output says the target
+exists but is not a Git checkout, use **Clean project folder** or remove the
+directory manually, then run **Prepare remote project** again.
+
+### Only `Checkout project Git ref` is available
+
+The configured checkout exists and has the expected origin, but the current ref
+does not match the project profile. Run **Checkout project Git ref**. The action
+stashes local changes before switching refs.
+
+### Build target discovery finds nothing
+
+Use manual input in the target selector. The selector first tries the build
+host checkout, then the Git remote/ref. If both paths fail or produce no
+candidates, it prompts for a space-separated target list.
 
 ### Build host can reach board host directly
 

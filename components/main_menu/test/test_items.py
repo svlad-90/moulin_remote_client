@@ -9,6 +9,7 @@ from typing import Any
 
 from components.build_runtime.api import runtime as runtime_api
 from components.main_menu.api import items
+from components.main_menu.api import state
 from components.ui.api import menu as menu_api
 
 
@@ -96,6 +97,8 @@ class FakeApp:
         self.preflight_values: dict[str, str] = {}
         self.connection_state = "connected"
         self.board_connection_state = "connected"
+        self.active_job = None
+        self.board_job = None
         self.docker_image = "demo-image"
         self.build_params = {"ENABLE_ANDROID": "yes"}
         self.build_targets = "full_ufs.img.gz"
@@ -1996,6 +1999,115 @@ class MainMenuBuilderTests(unittest.TestCase):
                 ),
                 "remote project Git ref mismatch",
             )
+
+    def test_project_preflight_state_matrix_matches_tui_workflow_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            controller = state.main_menu_state_controller(app_dir=app_dir)
+            labels = (
+                "Prepare remote project",
+                "Checkout project Git ref",
+                "Open build host shell",
+                "Select build targets",
+                "Copy mapped files to build host",
+                "Run product build",
+                "Clean project folder",
+                "Flash UFS image",
+                "Open board host shell",
+            )
+            cases = [
+                (
+                    "missing project dir",
+                    {"project": "missing", "origin": "missing", "ref": "missing"},
+                    True,
+                    {
+                        "Prepare remote project": (True, ""),
+                        "Checkout project Git ref": None,
+                        "Open build host shell": (True, ""),
+                        "Select build targets": (False, "remote project needs preparation"),
+                        "Copy mapped files to build host": (False, "remote project needs preparation"),
+                        "Run product build": (False, "remote project needs preparation"),
+                        "Clean project folder": (True, ""),
+                        "Flash UFS image": (True, ""),
+                        "Open board host shell": (True, ""),
+                    },
+                ),
+                (
+                    "non-git project dir",
+                    {"project": "not-git", "origin": "missing", "ref": "missing"},
+                    True,
+                    {
+                        "Prepare remote project": (True, ""),
+                        "Checkout project Git ref": None,
+                        "Open build host shell": (True, ""),
+                        "Select build targets": (False, "remote project needs preparation"),
+                        "Copy mapped files to build host": (False, "remote project needs preparation"),
+                        "Run product build": (False, "remote project needs preparation"),
+                        "Clean project folder": (True, ""),
+                        "Flash UFS image": (True, ""),
+                        "Open board host shell": (True, ""),
+                    },
+                ),
+                (
+                    "wrong git ref",
+                    {"project": "ok", "origin": "ok", "ref": "mismatch:mirror"},
+                    True,
+                    {
+                        "Prepare remote project": None,
+                        "Checkout project Git ref": (True, ""),
+                        "Open build host shell": (True, ""),
+                        "Select build targets": (False, "remote project Git ref mismatch"),
+                        "Copy mapped files to build host": (False, "remote project Git ref mismatch"),
+                        "Run product build": (False, "remote project Git ref mismatch"),
+                        "Clean project folder": (True, ""),
+                        "Flash UFS image": (True, ""),
+                        "Open board host shell": (True, ""),
+                    },
+                ),
+                (
+                    "no build-host connection",
+                    {},
+                    False,
+                    {
+                        "Prepare remote project": None,
+                        "Checkout project Git ref": None,
+                        "Open build host shell": (False, "connect to the build host first"),
+                        "Select build targets": (True, ""),
+                        "Copy mapped files to build host": (False, "connect to the build host first"),
+                        "Run product build": (False, "connect to the build host first"),
+                        "Clean project folder": (False, "connect to the build host first"),
+                        "Flash UFS image": (True, ""),
+                        "Open board host shell": (True, ""),
+                    },
+                ),
+            ]
+            for name, preflight_values, connected, expected in cases:
+                with self.subTest(name=name):
+                    app = FakeApp(_config(app_dir))
+                    app.preflight_values = preflight_values
+                    app.connection_state = "connected" if connected else "disconnected"
+                    menu_items = {item.label: item for item in builder.build_items(app)}
+                    for label in labels:
+                        expectation = expected[label]
+                        if expectation is None:
+                            self.assertNotIn(label, menu_items)
+                            continue
+                        self.assertIn(label, menu_items)
+                        enabled, reason = expectation
+                        item = menu_items[label]
+                        self.assertEqual(controller.item_enabled(app, item), enabled)
+                        if not enabled:
+                            self.assertEqual(controller.disabled_reason(app, item), reason)
 
     def test_shell_handlers_use_terminal_session_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
