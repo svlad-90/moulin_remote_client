@@ -54,7 +54,7 @@ class MenuAvailabilityContext:
     build_connected: bool = False
     remote_has_user: bool = False
     remote_has_host: bool = False
-    remote_has_project_dir: bool = False
+    remote_project_dir_configured: bool = False
     prepare_remote_project_needed: bool = False
     checkout_git_ref_needed: bool = False
 
@@ -442,7 +442,7 @@ def item_enabled(
             build_connected=build_connected,
             remote_has_user=remote_has_ssh,
             remote_has_host=remote_has_ssh,
-            remote_has_project_dir=remote_has_project_dir,
+            remote_project_dir_configured=remote_has_project_dir,
             prepare_remote_project_needed=prepare_remote_project_needed,
             checkout_git_ref_needed=checkout_git_ref_needed,
         ),
@@ -475,7 +475,7 @@ def item_enabled_for_context(item: MenuItem, context: MenuAvailabilityContext) -
         return False
     if item.requires_remote and not context.build_connected:
         return False
-    if item.requires_project and not context.remote_has_project_dir and not is_project_recovery_item(item):
+    if item.requires_project and not context.remote_project_dir_configured and not is_project_recovery_item(item):
         return False
     if context.prepare_remote_project_needed and blocks_on_prepare_remote_project(item):
         return False
@@ -510,7 +510,7 @@ def disabled_reason(
             build_connected=build_connected,
             remote_has_user=remote_has_user,
             remote_has_host=remote_has_host,
-            remote_has_project_dir=remote_has_project_dir,
+            remote_project_dir_configured=remote_has_project_dir,
             prepare_remote_project_needed=prepare_remote_project_needed,
             checkout_git_ref_needed=checkout_git_ref_needed,
         ),
@@ -546,7 +546,7 @@ def disabled_reason_for_context(item: MenuItem, context: MenuAvailabilityContext
         return "set SSH host first"
     if item.requires_remote and not context.build_connected:
         return "connect to the build host first"
-    if item.requires_project and not context.remote_has_project_dir and not is_project_recovery_item(item):
+    if item.requires_project and not context.remote_project_dir_configured and not is_project_recovery_item(item):
         return "select remote project directory first"
     if context.prepare_remote_project_needed and blocks_on_prepare_remote_project(item):
         return "remote project needs preparation"

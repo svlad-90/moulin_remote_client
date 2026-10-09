@@ -15,11 +15,12 @@ def _item_enabled(item: MenuItem, **overrides: object) -> bool:
         "board_connected": True,
         "build_connected": True,
         "remote_has_ssh": True,
-        "remote_has_project_dir": True,
+        "remote_project_dir_configured": True,
         "prepare_remote_project_needed": False,
         "checkout_git_ref_needed": False,
     }
     values.update(overrides)
+    values["remote_has_project_dir"] = values.pop("remote_project_dir_configured")
     return menu.item_enabled(item, **values)
 
 
@@ -33,11 +34,12 @@ def _disabled_reason(item: MenuItem, **overrides: object) -> str:
         "build_connected": True,
         "remote_has_user": True,
         "remote_has_host": True,
-        "remote_has_project_dir": True,
+        "remote_project_dir_configured": True,
         "prepare_remote_project_needed": False,
         "checkout_git_ref_needed": False,
     }
     values.update(overrides)
+    values["remote_has_project_dir"] = values.pop("remote_project_dir_configured")
     return menu.disabled_reason(item, **values)
 
 
@@ -104,7 +106,7 @@ class MenuModelBehaviorTests(unittest.TestCase):
             build_connected=True,
             remote_has_user=True,
             remote_has_host=True,
-            remote_has_project_dir=True,
+            remote_project_dir_configured=True,
             prepare_remote_project_needed=True,
         )
 
@@ -132,7 +134,7 @@ class MenuModelBehaviorTests(unittest.TestCase):
             "build_connected": True,
             "remote_has_user": True,
             "remote_has_host": True,
-            "remote_has_project_dir": True,
+            "remote_project_dir_configured": True,
         }
         cases = [
             (
@@ -151,7 +153,7 @@ class MenuModelBehaviorTests(unittest.TestCase):
             ),
             (
                 "project directory not configured",
-                {"remote_has_project_dir": False},
+                {"remote_project_dir_configured": False},
                 {"prepare", "checkout", "flash_ufs", "board_shell"},
             ),
             (
@@ -704,8 +706,8 @@ class MenuModelBehaviorTests(unittest.TestCase):
             requires_project=True,
         )
 
-        self.assertTrue(_item_enabled(prepare, remote_has_project_dir=False))
-        self.assertTrue(_item_enabled(checkout, remote_has_project_dir=False))
+        self.assertTrue(_item_enabled(prepare, remote_project_dir_configured=False))
+        self.assertTrue(_item_enabled(checkout, remote_project_dir_configured=False))
         self.assertFalse(_item_enabled(select_targets, prepare_remote_project_needed=True))
 
     def test_disabled_reason_preserves_current_messages(self) -> None:
@@ -718,11 +720,11 @@ class MenuModelBehaviorTests(unittest.TestCase):
             "set board SSH user first",
         )
         self.assertEqual(
-            _disabled_reason(copy_item, board_host_host="", board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_has_project_dir=False),
+            _disabled_reason(copy_item, board_host_host="", board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_project_dir_configured=False),
             "set board SSH host first",
         )
         self.assertEqual(
-            _disabled_reason(copy_item, board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_has_project_dir=False),
+            _disabled_reason(copy_item, board_connected=False, build_connected=False, remote_has_user=False, remote_has_host=False, remote_project_dir_configured=False),
             "connect to the board host first",
         )
         self.assertEqual(

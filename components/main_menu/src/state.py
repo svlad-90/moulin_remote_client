@@ -62,7 +62,7 @@ class MainMenuStateController:
             build_connected=port.connection_state == "connected",
             remote_has_user=config_accessors.remote_has_user_for_config(port.config),
             remote_has_host=config_accessors.remote_has_host_for_config(port.config),
-            remote_has_project_dir=config_accessors.remote_has_project_dir_for_config(port.config),
+            remote_project_dir_configured=config_accessors.remote_has_project_dir_for_config(port.config),
             prepare_remote_project_needed=requirements["prepare_remote_project"],
             checkout_git_ref_needed=requirements["checkout_git_ref"],
         )
