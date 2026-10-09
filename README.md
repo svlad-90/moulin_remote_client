@@ -8,6 +8,7 @@
 - [Repository Layout](#repository-layout)
 - [Requirements](#requirements)
 - [Installation](#installation)
+- [Screenshot Tour](#screenshot-tour)
 - [Quick Start](#quick-start)
 - [Main Menu](#main-menu)
 - [Configuration Model](#configuration-model)
@@ -19,7 +20,6 @@
 - [CLI Commands](#cli-commands)
 - [Keyboard Reference](#keyboard-reference)
 - [Safety Notes](#safety-notes)
-- [Troubleshooting](#troubleshooting)
 - [Development Notes](#development-notes)
 
 ## Start With Moulin
@@ -65,6 +65,71 @@ without leaving the client.
 - Flashes board bootloaders and UFS images through board-type-specific command
   plans.
 - Provides board-type-specific commands. The built-in type is `gen5_x5h`.
+
+## Screenshot Tour
+
+The screenshots below are rendered from the real TUI controllers with a fixed
+demo configuration, so they show the same layout and availability rules as the
+application.
+
+### Main Build Flow
+
+The build tab shows the current build host, project checkout, selected Moulin
+parameters, Ninja targets, preflight state, mapping status, action details, and
+the last command log.
+
+![Main build menu](docs/screenshots/main-menu.png)
+
+### Remote Project Preparation
+
+Before build or sync workflows can use a remote checkout, preflight verifies
+that the configured project directory exists and matches the expected Git
+origin and ref. When the checkout is not ready yet, the menu exposes
+**Prepare remote project** and disables checkout-dependent build and sync
+actions until preparation completes.
+
+![Prepare remote project](docs/screenshots/prepare-remote-project.png)
+
+When the checkout exists and only the ref differs, **Checkout project Git ref**
+is shown instead.
+
+![Checkout project Git ref](docs/screenshots/checkout-git-ref.png)
+
+### Configuration Screens
+
+Build host profiles define SSH access and the parent directory for remote
+project checkouts.
+
+![Build host configuration](docs/screenshots/build-host-configuration.png)
+
+Board host profiles define board access, flashing parameters, and network boot
+locations.
+
+![Board host configuration](docs/screenshots/board-host-configuration.png)
+
+Project profiles define the product checkout, local overlay, Git ref, Moulin
+manifest, build parameters, targets, board artifacts, and mappings.
+
+![Project configuration](docs/screenshots/project-configurations.png)
+
+### Source Sync
+
+The sync screen lets a developer select source mappings, activate the subset
+for the current task, pull mapped files locally, and push local edits back to
+the build host.
+
+![Sync mapped files](docs/screenshots/sync-mapped-files.png)
+
+### Board And Network Boot
+
+Board commands are provided by the selected board type.
+
+![Board commands](docs/screenshots/board-commands.png)
+
+The TFTP/NFS tab groups network-boot artifact deployment and workspace
+maintenance commands.
+
+![TFTP and NFS commands](docs/screenshots/tftp-nfs-commands.png)
 
 ## Repository Layout
 
@@ -176,7 +241,15 @@ hosts, user names, and product settings.
    project**. If only the checked-out ref differs, it offers **Checkout project
    Git ref**.
 
-5. Optional: open **Sync mapped files** when you want to edit selected source
+5. Run the initial build flow at least once: **Build Docker image** when the
+   image is not available yet, **Regenerate Moulin/Ninja**, then **Run product
+   build**.
+
+   This creates the generated project tree on the build host. Mapping
+   selection depends on that tree, so the sync screen has little useful content
+   before the initial generation/build has populated it.
+
+6. Optional: open **Sync mapped files** when you want to edit selected source
    paths locally.
 
    Use **Select mappings** to browse the remote project tree and save the files
@@ -185,57 +258,50 @@ hosts, user names, and product settings.
 
    ![Sync mapped files](docs/screenshots/sync-mapped-files.png)
 
-6. If you activated mappings, run **Pull selected apply** once.
+7. If you activated mappings, run **Pull selected apply** once.
 
    This creates or refreshes the local overlay from the remote checkout.
 
-7. Edit files in the local overlay.
+8. Edit files in the local overlay.
 
-8. If you want local overlay changes on the build host, run **Copy mapped files
+9. If you want local overlay changes on the build host, run **Copy mapped files
    to build host**.
 
    The copy action pushes active mappings from the local overlay back to the
    build host with `rsync -az --delete`. Build actions do not run this copy
    automatically.
 
-9. Run **Run product build**.
+10. Run **Run product build**.
 
 ## Main Menu
 
-The main menu is generated from the active configuration and selected board
-type.
+The main menu is generated from the active configuration, connection state,
+preflight result, selected build targets, active mappings, and selected board
+type. It is organized into tabs rather than a fixed global command list.
 
-### Setup
+### Tabs
 
-| Item | Purpose |
+| Tab | Contains |
 | --- | --- |
-| Build host configuration | Add, delete, edit, and activate build-machine SSH profiles. |
-| Board host configuration | Add, delete, edit, and activate board-access SSH profiles. |
-| Project configurations | Add, delete, edit, and activate project profiles; configure product-specific build settings and mappings. |
+| Sessions | Build-host and board-host profile selection, connect/disconnect actions, and interactive shells. |
+| Build | Build configuration, source-copy actions, Docker/Moulin/Ninja build commands, incremental build helpers, cleanup actions, and project preparation actions shown by preflight. |
+| Board | Board-type commands such as artifact copy, bootloader flashing, UFS flashing, board restart, serial console, and U-Boot console. |
+| TFTP/NFS | Network-boot artifact deployment, TFTP/NFS workspace pull/push/open actions, Dom0 initramfs workspace actions, and U-Boot network/UFS environment helpers. |
 
-### Build Host Session
+Configuration screens are opened from the menu and cover build hosts, board
+hosts, project profiles, build targets, copied artifacts, and general settings.
 
-| Item | Purpose |
-| --- | --- |
-| Connect build host | Check SSH access and run build-host/project preflight. |
-| Open build host shell | Open an interactive shell in the remote product directory. |
+Some actions are conditional:
 
-### Build Commands
-
-| Item | Purpose |
-| --- | --- |
-| Prepare remote project | Create or repair the configured checkout when preflight requires it. Empty existing directories are accepted; non-empty non-Git directories must be cleaned or removed first. |
-| Checkout project Git ref | Remove a stale Git index lock when safe, stash local changes, fetch origin, and checkout the configured Git ref. |
-| Copy mapped files to build host | Push selected local mapped files to the configured build host. |
-| Build Docker image | Run `docker build` on the build host. |
-| Clean-up BitBake server | Ask the remote BitBake server to stop before regeneration or rebuild. |
-| Regenerate Moulin/Ninja | Run `moulin <manifest>` inside the product Docker container. |
-| Run product build | Run `ninja <targets>` inside the product Docker container. |
-| Incremental build | Rebuild configured Moulin components using supported builder-specific incremental flows, regenerate Moulin/Ninja, then run the configured Ninja targets. |
-| Reset incremental build state | Forget the stored mapped-file build state so active mappings are treated as not yet applied by a successful build. |
-| Clean Moulin components | Clean selected component artifacts, build output, Yocto state, or component directories. |
-| Clean project folder | Remove the configured remote project checkout directory after confirmation. |
-| Stop running command | Stop the active build/sync command, then force-kill if needed. |
+- **Prepare remote project** is shown when preflight says the configured
+  checkout is missing, inaccessible, not a Git checkout, or has a wrong origin.
+- **Checkout project Git ref** is shown when the checkout exists and only the
+  current ref differs from the project profile.
+- Board commands come from the selected board type.
+- Network deploy and artifact-copy commands use the active board host profile
+  and copied-artifact configuration.
+- **Stop running command** and **Stop current board command** appear in their
+  respective command groups and target separate command slots.
 
 Build commands are multi-step jobs. They stop on the first non-zero step exit.
 The log header remains `RUNNING` until the whole sequence finishes or fails.
@@ -243,15 +309,10 @@ Command logs show compact step labels by default. Set
 `MOULIN_TUI_SHOW_COMMANDS=1` before starting the tool to include full command
 and generated script text in the log.
 
-Set `yocto_image_recipes` on a project, remote, or top-level `yocto` config
-section when the incremental build must force final Yocto image recipes too,
-for example `rcar-image-adas xt-rcar-image`.
+Incremental build and clean commands are described in the
+[Build Workflow](#build-workflow) section.
 
-When **Incremental build** starts, the TUI opens a component selector. `yocto`,
-`bazel`, and `android` builders are supported. Other builder types are shown
-disabled until a builder-specific incremental flow is added.
-
-### Menu Availability
+### Availability
 
 The menu keeps configuration actions available even when hosts are disconnected.
 Build actions that require a live build host are disabled until the build host
@@ -266,33 +327,6 @@ host and still use previously copied board artifacts.
 When only the Git ref mismatches, **Checkout project Git ref** is shown and
 build/sync actions are blocked until the checkout is repaired. Board flashing
 actions remain available because they can use already copied artifacts.
-
-### Board Host Session
-
-| Item | Purpose |
-| --- | --- |
-| Connect board host | Check SSH access to the board host. |
-| Open board host shell | Open an interactive shell on the board host. |
-
-### Board Commands
-
-The board command list comes from the selected board type. The built-in
-`gen5_x5h` type provides:
-
-| Item | Purpose |
-| --- | --- |
-| Copy build artifacts | Copy configured build artifacts from the build host to the board host. |
-| Flash bootloaders | Deploy `flash_bootloaders.py`, unpack boot artifacts, flash bootloaders, and switch the board to boot mode. |
-| Flash UFS image | Deploy `xt-imager.py` and `gen5_x5h_flash_ufs.py`, then flash `full_ufs.img.gz` through the board console. |
-| Stop board command | Stop the active board command, then force-kill if needed. |
-
-![Board commands](docs/screenshots/board-commands.png)
-
-### Sync
-
-| Item | Purpose |
-| --- | --- |
-| Sync mapped files | Open mapping selection, activation, pull, and push workflows. |
 
 ## Configuration Model
 
@@ -441,6 +475,12 @@ Directory mappings use trailing slashes, so rsync synchronizes directory
 contents. Because `--delete` is enabled, deleting a local file inside an active
 directory mapping deletes the corresponding file on the build host during push.
 
+After selecting and activating mappings, run **Pull selected apply** before the
+first **Copy mapped files to build host**. The copy action expects the active
+mapped paths to exist in the local overlay. For a first build with no active
+source mappings yet, there is nothing to pull or push: run the build directly
+in the build-host checkout.
+
 ## Build Workflow
 
 Build commands are run on the build host but driven from the local TUI.
@@ -457,6 +497,46 @@ Build commands are run on the build host but driven from the local TUI.
    should be pushed to the remote checkout.
 5. The requested build command runs on the build host. Build commands do not
    copy mapped files automatically.
+
+### Incremental Build
+
+**Incremental build** starts with a component selector. `yocto`, `bazel`, and
+`android` builders are supported. Other builder types are shown disabled until
+a builder-specific incremental flow is added.
+
+For copied source mappings, the client tracks which mapped files are already
+accounted for by the last successful build. A regular copy updates the remote
+working tree and records which files changed relative to that state. A
+successful incremental build then advances the state for the selected
+incremental components.
+
+For Yocto components, the incremental flow maps changed layer paths back to
+recipes and runs cleansstate for the impacted recipes before regenerating
+Moulin/Ninja and running the selected Ninja targets. Some final image recipes
+are build targets rather than directly changed files, so they may not appear in
+the impacted-recipe list. The incremental flow also reads
+`yocto_image_recipes`; any recipe names listed there, for example
+`rcar-image-adas xt-rcar-image`, are cleaned together with the directly
+impacted recipes.
+
+**Reset incremental build state** forgets the tracked copied-file state. The
+next incremental build treats all active mapped files as not yet accounted for
+by the build, so the recipe/component impact calculation starts from the full
+active mapping set.
+
+### Cleaning Build State
+
+**Clean Moulin components** asks for the Moulin components to clean and runs
+the corresponding generated clean targets on the build host. It is useful when
+the generated Ninja graph is still valid but selected build outputs need to be
+rebuilt from scratch.
+
+**Clean-up BitBake server** stops the remote BitBake server for the configured
+Yocto build directory.
+
+**Clean project folder** removes the configured remote project checkout after
+confirmation. This is a build-host workspace cleanup action; it does not clean
+board artifacts or local source mappings.
 
 The command shapes are:
 
@@ -485,8 +565,18 @@ The built-in `gen5_x5h` workflow is:
 1. **Copy build artifacts**
    - Resolve artifact paths from the Moulin manifest where possible.
    - Copy selected files/directories to `<board work dir>/artifacts`.
-   - If `direct_copy=yes`, stream from build host directly to board host.
-   - If `direct_copy=no`, stream through the local machine.
+   - If `direct_copy=yes`, stream from build host directly to board host:
+
+     ```text
+     build host -> board host
+     ```
+
+   - If `direct_copy=no`, stream through the local machine:
+
+     ```text
+     build host -> local machine -> board host
+     ```
+
    - Artifact copy uses tar streaming, not rsync. It overwrites matching files
      but does not delete unrelated stale files already present on the board
      host.
@@ -644,86 +734,17 @@ Configuration screens show the currently available key hints in the footer.
 - Board helper scripts are vendored in `board_tools/` and deployed to the board
   host work directory when needed.
 
-## Troubleshooting
-
-### The TUI starts slowly or appears stuck
-
-Disable automatic connection for the current run:
-
-```sh
-MOULIN_REMOTE_AUTO_CONNECT=no ./moulin_remote_client.py menu
-```
-
-Then connect build host and board host explicitly from the menu. This is useful
-when VPN is down or the board subnet is unreachable.
-
-### A field accepts pasted text one character at a time
-
-The TUI runs inside curses and terminal paste behavior depends on the terminal
-emulator. Prefer editing long paths directly in
-`moulin_remote_client.config.json` when a terminal has broken paste behavior,
-then restart the client.
-
-### Build command refuses to start because local paths are missing
-
-This only applies to **Copy mapped files to build host** after mappings were
-selected and activated. Run **Sync mapped files** -> **Pull selected apply**
-first. The client blocks the copy when active mappings exist but the local
-overlay does not contain the mapped paths.
-
-For a first build with no source mappings yet, there is nothing to pull or push:
-run the build directly in the build-host checkout.
-
-### Only `Prepare remote project` is available
-
-Preflight detected that the configured checkout is missing, inaccessible,
-not a Git checkout, or has a wrong origin. Run **Prepare remote project** when
-the directory is absent or empty. If the details/log output says the target
-exists but is not a Git checkout, use **Clean project folder** or remove the
-directory manually, then run **Prepare remote project** again.
-
-### Only `Checkout project Git ref` is available
-
-The configured checkout exists and has the expected origin, but the current ref
-does not match the project profile. Run **Checkout project Git ref**. The action
-stashes local changes before switching refs.
-
-### Build target discovery finds nothing
-
-Use manual input in the target selector. The selector first tries the build
-host checkout, then the Git remote/ref. If both paths fail or produce no
-candidates, it prompts for a space-separated target list.
-
-### Build host can reach board host directly
-
-Set board host `direct_copy` to `yes`. Artifact copy then streams directly:
-
-```text
-build host -> board host
-```
-
-Otherwise the stream goes through the local client:
-
-```text
-build host -> local machine -> board host
-```
-
-### Board artifact copy has no byte progress
-
-When `pv` exists on the build host, the direct copy path prints percentage
-progress from `pv`. Otherwise the tool uses Python byte progress for direct
-copy and may only show coarse output on the non-direct path.
-
-### `Flash UFS image` cannot determine UFS capacity
-
-Check the serial console, board boot mode, and the active bootloader state.
-The GEN5 X5H flow expects the board to reach a U-Boot prompt and the UFS device
-to appear in `scsi scan`.
-
 ## Development Notes
 
 Maintainer release validation lives in
 [`docs/release-checklist.md`](docs/release-checklist.md).
+
+README screenshots are rendered from the same TUI controllers used by the
+application. Refresh them after UI changes with:
+
+```sh
+python3 scripts/render_readme_screenshots.py
+```
 
 The component boundary is service-oriented:
 
