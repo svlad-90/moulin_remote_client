@@ -133,6 +133,17 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         self.assertIn("find ./layers/meta -mindepth 1 -maxdepth 1", commands.build_project_listing_command_for_config(config, "layers/meta"))
         self.assertIn("-type f -printf 'f\\t%p\\n'", commands.build_project_listing_command_for_config(config, "layers/meta"))
 
+    def test_prepare_project_command_documents_empty_and_non_git_directory_paths(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+
+        command = shlex.join(commands.build_remote_prepare_project_command_for_config(config))
+
+        self.assertIn("find /mnt/projects/meta-product -mindepth 1 -maxdepth 1 -print -quit", command)
+        self.assertIn("git clone git@example:prod meta-product", command)
+        self.assertIn("target exists but is not a git checkout", command)
+        self.assertIn("remove or clean the non-empty project directory", command)
+
     def test_remote_directory_browse_helpers_match_current_shape(self) -> None:
         config = sample_config()
         prepare_config(config)

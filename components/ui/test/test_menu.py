@@ -94,6 +94,103 @@ class MenuModelBehaviorTests(unittest.TestCase):
         self.assertIsNone(menu.item_job_slot(MenuItem("Open remote TFTP root", "tftp/nfs / open remote roots", "", lambda app: "", lambda app: None)))
         self.assertIsNone(menu.item_job_slot(MenuItem("Project configuration", "setup", "", lambda app: "", lambda app: None)))
 
+    def test_availability_context_drives_enabled_and_disabled_reason(self) -> None:
+        build_item = MenuItem("Run product build", "build commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True)
+        prepare_item = MenuItem("Prepare remote project", "build", "", lambda app: "", lambda app: None, requires_ssh=True, requires_project=True)
+        context = menu.MenuAvailabilityContext(
+            board_host_user="board",
+            board_host_host="host",
+            board_connected=True,
+            build_connected=True,
+            remote_has_user=True,
+            remote_has_host=True,
+            remote_has_project_dir=True,
+            prepare_remote_project_needed=True,
+        )
+
+        self.assertTrue(menu.item_enabled_for_context(prepare_item, context))
+        self.assertFalse(menu.item_enabled_for_context(build_item, context))
+        self.assertEqual(menu.disabled_reason_for_context(build_item, context), "remote project needs preparation")
+        self.assertTrue(context.board_host_has_ssh)
+        self.assertTrue(context.remote_has_ssh)
+
+    def test_availability_state_matrix_for_primary_workflows(self) -> None:
+        actions = {
+            "prepare": MenuItem("Prepare remote project", "build", "", lambda app: "", lambda app: None, requires_ssh=True, requires_project=True),
+            "checkout": MenuItem("Checkout project Git ref", "build", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True),
+            "build_shell": MenuItem("Open build host shell", "sessions / build host", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True),
+            "select_targets": MenuItem("Select build targets", "build / configuration", "", lambda app: "", lambda app: None, requires_project=True),
+            "run_build": MenuItem("Run product build", "build / commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True),
+            "copy_artifacts": MenuItem("Copy build artifacts", "flashing / commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True),
+            "flash_ufs": MenuItem("Flash UFS image", "flashing / commands", "", lambda app: "", lambda app: None),
+            "board_shell": MenuItem("Open board host shell", "sessions / board host", "", lambda app: "", lambda app: None),
+        }
+        base = {
+            "board_host_user": "board",
+            "board_host_host": "host",
+            "board_connected": True,
+            "build_connected": True,
+            "remote_has_user": True,
+            "remote_has_host": True,
+            "remote_has_project_dir": True,
+        }
+        cases = [
+            (
+                "ready",
+                {},
+                {
+                    "prepare",
+                    "checkout",
+                    "build_shell",
+                    "select_targets",
+                    "run_build",
+                    "copy_artifacts",
+                    "flash_ufs",
+                    "board_shell",
+                },
+            ),
+            (
+                "project directory not configured",
+                {"remote_has_project_dir": False},
+                {"prepare", "checkout", "flash_ufs", "board_shell"},
+            ),
+            (
+                "prepare remote project needed",
+                {"prepare_remote_project_needed": True},
+                {"prepare", "build_shell", "flash_ufs", "board_shell"},
+            ),
+            (
+                "checkout git ref needed",
+                {"checkout_git_ref_needed": True},
+                {"prepare", "checkout", "build_shell", "copy_artifacts", "flash_ufs", "board_shell"},
+            ),
+            (
+                "board disconnected",
+                {"board_connected": False},
+                {"prepare", "checkout", "build_shell", "select_targets", "run_build"},
+            ),
+            (
+                "build job running",
+                {"active_job": {"item_label": "Run product build"}},
+                {"build_shell", "run_build", "copy_artifacts", "flash_ufs", "board_shell"},
+            ),
+            (
+                "board job running",
+                {"board_job": {"item_label": "Flash UFS image"}},
+                {"prepare", "checkout", "build_shell", "select_targets", "run_build", "flash_ufs", "board_shell"},
+            ),
+        ]
+
+        for name, overrides, enabled_names in cases:
+            with self.subTest(name=name):
+                context = menu.MenuAvailabilityContext(**{**base, **overrides})
+                actual = {
+                    action_name
+                    for action_name, item in actions.items()
+                    if menu.item_enabled_for_context(item, context)
+                }
+                self.assertEqual(actual, enabled_names)
+
     def test_job_lookup_helpers_match_current_shape(self) -> None:
         active = {"item_label": "Run product build"}
         board = {"item_label": "Flash UFS image"}
