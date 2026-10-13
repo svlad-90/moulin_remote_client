@@ -241,9 +241,9 @@ hosts, user names, and product settings.
    project**. If only the checked-out ref differs, it offers **Checkout project
    Git ref**.
 
-5. Run the initial build flow at least once: **Start/Rebuild Docker image** when
-   the image is not available yet, **Regenerate Moulin/Ninja**, then **Run
-   product build**.
+5. Run the initial build flow at least once: **Build Docker image** when the
+   image is not available yet, **Regenerate Moulin/Ninja**, then **Run product
+   build**.
 
    This creates the generated project tree on the build host. Mapping
    selection depends on that tree, so the sync screen has little useful content
@@ -558,11 +558,14 @@ board artifacts or local source mappings.
 The command shapes are:
 
 ```sh
-# Start/Rebuild Docker image
+# Build Docker image
 ssh <build-host> 'cd <remote-project> && docker build <context> -f <dockerfile> ...'
 
+# Start Docker image
+ssh <build-host> 'cd <remote-project> && docker run ... -dit <image> ...'
+
 # Open Docker image shell
-ssh -t <build-host> 'cd <remote-project> && docker run ... -it --rm <image> ...'
+ssh -t <build-host> 'docker exec -it <container> /bin/bash ...'
 
 # Regenerate Moulin/Ninja
 ssh <build-host> 'cd <remote-project> && docker run ... moulin <manifest> [params]'

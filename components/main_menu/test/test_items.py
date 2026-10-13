@@ -281,13 +281,11 @@ class MainMenuBuilderTests(unittest.TestCase):
             build_labels = [item.label for item in menu_items if item.group == "build / commands"]
             command_labels = [item.label for item in builder.command_items.build_items(FakeApp(_config(app_dir)))]
             self.assertEqual(
-                command_labels[:6],
+                command_labels[:4],
                 [
                     "Open build host shell",
                     "Open build host git repo",
-                    "Start/Rebuild Docker image",
-                    "Open Docker image shell",
-                    "Stop Docker image",
+                    "Build Docker image",
                     "Select build targets",
                 ],
             )
@@ -301,9 +299,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(
                 docker_labels,
                 [
-                    "Start/Rebuild Docker image",
-                    "Open Docker image shell",
-                    "Stop Docker image",
+                    "Build Docker image",
                 ],
             )
             self.assertEqual(build_configuration_labels, ["Select build targets"])
@@ -2204,6 +2200,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 manifest_cache={},
             )
             app = FakeMenuApp(_config(app_dir), [10])
+            app.preflight_values = {"docker": "running"}
             remote_capture_commands: list[list[str]] = []
             app.remote_capture_command = (
                 lambda argv: remote_capture_commands.append(argv)
@@ -2247,7 +2244,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertTrue(any("* /mnt/projects/meta-product" in call[2] and call[3] == 5 for call in app.add_calls))
             self.assertEqual(app.terminal_session.commands[0][0], "ssh")
             self.assertIn("-t", app.terminal_session.commands[0])
-            self.assertIn("docker run", app.terminal_session.commands[0][-1])
+            self.assertIn("docker exec -it", app.terminal_session.commands[0][-1])
             self.assertIn("exec bash -l", app.terminal_session.commands[0][-1])
             self.assertEqual(app.terminal_session.commands[1][0], "ssh")
             self.assertIn("-tt", app.terminal_session.commands[1])
@@ -2256,6 +2253,34 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertNotIn("x5h_off", app.terminal_session.commands[1][-1])
             self.assertIn("x5h_off", app.terminal_session.commands[2][-1])
             self.assertIn("picocom -b 1843200", app.terminal_session.commands[2][-1])
+
+    def test_docker_menu_items_follow_preflight_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+
+            cases = [
+                ("missing", ["Build Docker image"]),
+                ("not-configured", ["Build Docker image"]),
+                ("stopped", ["Start Docker image", "Rebuild Docker image"]),
+                ("running", ["Open Docker image shell", "Stop Docker image"]),
+            ]
+            for docker_state, expected_labels in cases:
+                with self.subTest(docker_state=docker_state):
+                    app = FakeApp(_config(app_dir))
+                    app.preflight_values = {"docker": docker_state}
+                    menu_items = builder.build_items(app)
+                    docker_labels = [item.label for item in menu_items if item.group == "build / docker"]
+                    self.assertEqual(docker_labels, expected_labels)
 
     def test_build_host_git_repo_discovery_command_reports_dirty_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

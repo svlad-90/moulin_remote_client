@@ -299,6 +299,30 @@ class commands:
         )
 
     @staticmethod
+    def build_remote_start_docker_command_for_config(
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+    ) -> list[str]:
+        return commands._build().start_docker_command_for_config(
+            config,
+            docker_image=docker_image,
+        )
+
+    @staticmethod
+    def build_remote_rebuild_docker_command_for_config(
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        default_dockerfile: str,
+    ) -> list[str]:
+        return commands._build().rebuild_docker_command_for_config(
+            config,
+            docker_image=docker_image,
+            default_dockerfile=default_dockerfile,
+        )
+
+    @staticmethod
     def build_remote_stop_docker_command_for_config(
         config: dict[str, Any],
         *,

@@ -75,77 +75,7 @@ class MainMenuCommandItemsService:
                 requires_project=True,
                 allow_during_job=True,
             ),
-            MenuItem(
-                "Start/Rebuild Docker image",
-                "build / docker",
-                "Build or rebuild the configured Docker image on the build host.",
-                lambda app: shlex.join(
-                    self.remote_command_workflow.docker_image_command(
-                        app.config,
-                        docker_image=app.docker_image,
-                    )
-                ),
-                lambda app: self.run_build_command(
-                    app,
-                    "Start/Rebuild Docker image",
-                    self.remote_command_workflow.docker_image_command(
-                        app.config,
-                        docker_image=app.docker_image,
-                    ),
-                ),
-                confirm=True,
-                requires_remote=True,
-                requires_project=True,
-            ),
-            MenuItem(
-                "Open Docker image shell",
-                "build / docker",
-                "Open an interactive shell inside the configured Docker image; exit returns to this TUI.",
-                lambda app: shlex.join(
-                    self.remote_command_workflow.docker_shell_command(
-                        app.config,
-                        docker_image=app.docker_image,
-                    )
-                ),
-                lambda app: app.terminal_session_controller().open_command_shell(
-                    app,
-                    "Open Docker image shell",
-                    [
-                        f"build host: {config_accessors.remote_spec_for_config(app.config)}",
-                        f"docker image: {app.docker_image or '<not set>'}",
-                    ],
-                    self.remote_command_workflow.docker_shell_command(
-                        app.config,
-                        docker_image=app.docker_image,
-                    ),
-                ),
-                requires_remote=True,
-                requires_project=True,
-                allow_during_job=True,
-            ),
-            MenuItem(
-                "Stop Docker image",
-                "build / docker",
-                "Stop running containers created from the configured Docker image.",
-                lambda app: shlex.join(
-                    self.remote_command_workflow.stop_docker_command(
-                        app.config,
-                        docker_image=app.docker_image,
-                    )
-                ),
-                lambda app: self.run_build_command(
-                    app,
-                    "Stop Docker image",
-                    self.remote_command_workflow.stop_docker_command(
-                        app.config,
-                        docker_image=app.docker_image,
-                    ),
-                ),
-                confirm=True,
-                requires_remote=True,
-                requires_project=True,
-                allow_during_job=True,
-            ),
+            *self.docker_menu_items(app),
             MenuItem(
                 "Select build targets",
                 "build / configuration",
@@ -452,6 +382,145 @@ class MainMenuCommandItemsService:
             ),
         ])
         return self.order_items(items)
+
+    def docker_menu_items(self, app: Any) -> list[MenuItem]:
+        state = str(getattr(app, "preflight_values", {}).get("docker", "") or "unknown")
+        if state == "running":
+            return [
+                self.open_docker_shell_item(),
+                self.stop_docker_item(),
+            ]
+        if state == "stopped":
+            return [
+                self.start_docker_item(),
+                self.rebuild_docker_item(),
+            ]
+        return [self.build_docker_item()]
+
+    def build_docker_item(self) -> MenuItem:
+        return MenuItem(
+            "Build Docker image",
+            "build / docker",
+            "Build the configured Docker image on the build host.",
+            lambda app: shlex.join(
+                self.remote_command_workflow.docker_image_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                )
+            ),
+            lambda app: self.run_build_command(
+                app,
+                "Build Docker image",
+                self.remote_command_workflow.docker_image_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                ),
+            ),
+            confirm=True,
+            requires_remote=True,
+            requires_project=True,
+        )
+
+    def start_docker_item(self) -> MenuItem:
+        return MenuItem(
+            "Start Docker image",
+            "build / docker",
+            "Start a persistent shell container from the configured Docker image.",
+            lambda app: shlex.join(
+                self.remote_command_workflow.start_docker_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                )
+            ),
+            lambda app: self.run_build_command(
+                app,
+                "Start Docker image",
+                self.remote_command_workflow.start_docker_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                ),
+            ),
+            confirm=True,
+            requires_remote=True,
+            requires_project=True,
+        )
+
+    def rebuild_docker_item(self) -> MenuItem:
+        return MenuItem(
+            "Rebuild Docker image",
+            "build / docker",
+            "Rebuild the configured Docker image, then start its persistent shell container.",
+            lambda app: shlex.join(
+                self.remote_command_workflow.rebuild_docker_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                )
+            ),
+            lambda app: self.run_build_command(
+                app,
+                "Rebuild Docker image",
+                self.remote_command_workflow.rebuild_docker_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                ),
+            ),
+            confirm=True,
+            requires_remote=True,
+            requires_project=True,
+        )
+
+    def open_docker_shell_item(self) -> MenuItem:
+        return MenuItem(
+            "Open Docker image shell",
+            "build / docker",
+            "Open an interactive shell in the running Docker image container; exit returns to this TUI.",
+            lambda app: shlex.join(
+                self.remote_command_workflow.docker_shell_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                )
+            ),
+            lambda app: app.terminal_session_controller().open_command_shell(
+                app,
+                "Open Docker image shell",
+                [
+                    f"build host: {config_accessors.remote_spec_for_config(app.config)}",
+                    f"docker image: {app.docker_image or '<not set>'}",
+                ],
+                self.remote_command_workflow.docker_shell_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                ),
+            ),
+            requires_remote=True,
+            requires_project=True,
+            allow_during_job=True,
+        )
+
+    def stop_docker_item(self) -> MenuItem:
+        return MenuItem(
+            "Stop Docker image",
+            "build / docker",
+            "Stop the running persistent shell container for the configured Docker image.",
+            lambda app: shlex.join(
+                self.remote_command_workflow.stop_docker_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                )
+            ),
+            lambda app: self.run_build_command(
+                app,
+                "Stop Docker image",
+                self.remote_command_workflow.stop_docker_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                ),
+            ),
+            confirm=True,
+            requires_remote=True,
+            requires_project=True,
+            allow_during_job=True,
+        )
 
     def order_items(self, items: list[MenuItem]) -> list[MenuItem]:
         tftp_group_order = {

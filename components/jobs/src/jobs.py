@@ -459,7 +459,7 @@ def command_step_label(command: list[str]) -> str:
     if " ninja " in text or "ninja " in text:
         return "Run product build"
     if "docker build " in text:
-        return "Start/Rebuild Docker image"
+        return "Build Docker image"
     if "rsync " in text or "Copy mapped files" in text:
         return "Copy mapped files"
     if "Prepare board artifacts directory" in text:

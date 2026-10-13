@@ -152,6 +152,18 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
             commands.build_remote_docker_shell_command_for_config(config, docker_image="prod_img"),
         )
         self.assertEqual(
+            service.start_docker_command(config, docker_image="prod_img"),
+            commands.build_remote_start_docker_command_for_config(config, docker_image="prod_img"),
+        )
+        self.assertEqual(
+            service.rebuild_docker_command(config, docker_image="prod_img"),
+            commands.build_remote_rebuild_docker_command_for_config(
+                config,
+                docker_image="prod_img",
+                default_dockerfile=client.DEFAULT_DOCKERFILE,
+            ),
+        )
+        self.assertEqual(
             service.stop_docker_command(config, docker_image="prod_img"),
             commands.build_remote_stop_docker_command_for_config(config, docker_image="prod_img"),
         )
