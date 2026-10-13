@@ -76,6 +76,77 @@ class MainMenuCommandItemsService:
                 allow_during_job=True,
             ),
             MenuItem(
+                "Start/Rebuild Docker image",
+                "build / docker",
+                "Build or rebuild the configured Docker image on the build host.",
+                lambda app: shlex.join(
+                    self.remote_command_workflow.docker_image_command(
+                        app.config,
+                        docker_image=app.docker_image,
+                    )
+                ),
+                lambda app: self.run_build_command(
+                    app,
+                    "Start/Rebuild Docker image",
+                    self.remote_command_workflow.docker_image_command(
+                        app.config,
+                        docker_image=app.docker_image,
+                    ),
+                ),
+                confirm=True,
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Open Docker image shell",
+                "build / docker",
+                "Open an interactive shell inside the configured Docker image; exit returns to this TUI.",
+                lambda app: shlex.join(
+                    self.remote_command_workflow.docker_shell_command(
+                        app.config,
+                        docker_image=app.docker_image,
+                    )
+                ),
+                lambda app: app.terminal_session_controller().open_command_shell(
+                    app,
+                    "Open Docker image shell",
+                    [
+                        f"build host: {config_accessors.remote_spec_for_config(app.config)}",
+                        f"docker image: {app.docker_image or '<not set>'}",
+                    ],
+                    self.remote_command_workflow.docker_shell_command(
+                        app.config,
+                        docker_image=app.docker_image,
+                    ),
+                ),
+                requires_remote=True,
+                requires_project=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
+                "Stop Docker image",
+                "build / docker",
+                "Stop running containers created from the configured Docker image.",
+                lambda app: shlex.join(
+                    self.remote_command_workflow.stop_docker_command(
+                        app.config,
+                        docker_image=app.docker_image,
+                    )
+                ),
+                lambda app: self.run_build_command(
+                    app,
+                    "Stop Docker image",
+                    self.remote_command_workflow.stop_docker_command(
+                        app.config,
+                        docker_image=app.docker_image,
+                    ),
+                ),
+                confirm=True,
+                requires_remote=True,
+                requires_project=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
                 "Select build targets",
                 "build / configuration",
                 "Choose the Ninja targets used by product and incremental builds.",
@@ -91,28 +162,6 @@ class MainMenuCommandItemsService:
                     self.sync_command_workflow.mapped_files_push_sequence(app.config)
                 ),
                 lambda app: self.run_sync_mapping_push(app),
-                requires_remote=True,
-                requires_project=True,
-            ),
-            MenuItem(
-                "Build Docker image",
-                "build / commands",
-                "Rebuild the configured Docker image on the remote target.",
-                lambda app: shlex.join(
-                    self.remote_command_workflow.docker_image_command(
-                        app.config,
-                        docker_image=app.docker_image,
-                    )
-                ),
-                lambda app: self.run_build_command(
-                    app,
-                    "Build Docker image",
-                    self.remote_command_workflow.docker_image_command(
-                        app.config,
-                        docker_image=app.docker_image,
-                    ),
-                ),
-                confirm=True,
                 requires_remote=True,
                 requires_project=True,
             ),

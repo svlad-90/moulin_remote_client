@@ -275,19 +275,35 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertNotIn("Clean impacted Yocto recipes", labels)
             self.assertNotIn("Rebuild impacted Yocto recipes", labels)
             build_host_labels = [item.label for item in menu_items if item.group == "build / build host"]
+            docker_labels = [item.label for item in menu_items if item.group == "build / docker"]
             build_configuration_labels = [item.label for item in menu_items if item.group == "build / configuration"]
             configuration_labels = [item.label for item in menu_items if item.group == "configuration"]
             build_labels = [item.label for item in menu_items if item.group == "build / commands"]
             command_labels = [item.label for item in builder.command_items.build_items(FakeApp(_config(app_dir)))]
             self.assertEqual(
-                command_labels[:3],
-                ["Open build host shell", "Open build host git repo", "Select build targets"],
+                command_labels[:6],
+                [
+                    "Open build host shell",
+                    "Open build host git repo",
+                    "Start/Rebuild Docker image",
+                    "Open Docker image shell",
+                    "Stop Docker image",
+                    "Select build targets",
+                ],
             )
             self.assertEqual(
                 build_host_labels,
                 [
                     "Open build host shell",
                     "Open build host git repo",
+                ],
+            )
+            self.assertEqual(
+                docker_labels,
+                [
+                    "Start/Rebuild Docker image",
+                    "Open Docker image shell",
+                    "Stop Docker image",
                 ],
             )
             self.assertEqual(build_configuration_labels, ["Select build targets"])
@@ -304,7 +320,6 @@ class MainMenuBuilderTests(unittest.TestCase):
                 build_labels,
                 [
                     "Copy mapped files to build host",
-                    "Build Docker image",
                     "Clean-up BitBake server",
                     "Regenerate Moulin/Ninja",
                     "Run product build",
@@ -2198,6 +2213,7 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             next(item for item in menu_items if item.label == "Open build host shell").handler(app)
             next(item for item in menu_items if item.label == "Open build host git repo").handler(app)
+            next(item for item in menu_items if item.label == "Open Docker image shell").handler(app)
             next(item for item in menu_items if item.label == "Open board host shell" and item.group == "sessions / board host").handler(app)
             next(item for item in menu_items if item.label == "Open build host shell" and item.group == "flashing / hosts").handler(app)
             next(item for item in menu_items if item.label == "Open board host shell" and item.group == "flashing / hosts").handler(app)
@@ -2212,6 +2228,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 [
                     "remote",
                     "build-dir:Open build host git repo",
+                    "command:Open Docker image shell",
                     "board",
                     "remote",
                     "board",
@@ -2229,12 +2246,16 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertTrue(any("* /mnt/projects/meta-product" in call[2] for call in app.add_calls))
             self.assertTrue(any("* /mnt/projects/meta-product" in call[2] and call[3] == 5 for call in app.add_calls))
             self.assertEqual(app.terminal_session.commands[0][0], "ssh")
-            self.assertIn("-tt", app.terminal_session.commands[0])
-            self.assertIn("tester@10.0.0.2", app.terminal_session.commands[0])
-            self.assertIn("picocom -b 1843200", app.terminal_session.commands[0][-1])
-            self.assertNotIn("x5h_off", app.terminal_session.commands[0][-1])
-            self.assertIn("x5h_off", app.terminal_session.commands[1][-1])
+            self.assertIn("-t", app.terminal_session.commands[0])
+            self.assertIn("docker run", app.terminal_session.commands[0][-1])
+            self.assertIn("exec bash -l", app.terminal_session.commands[0][-1])
+            self.assertEqual(app.terminal_session.commands[1][0], "ssh")
+            self.assertIn("-tt", app.terminal_session.commands[1])
+            self.assertIn("tester@10.0.0.2", app.terminal_session.commands[1])
             self.assertIn("picocom -b 1843200", app.terminal_session.commands[1][-1])
+            self.assertNotIn("x5h_off", app.terminal_session.commands[1][-1])
+            self.assertIn("x5h_off", app.terminal_session.commands[2][-1])
+            self.assertIn("picocom -b 1843200", app.terminal_session.commands[2][-1])
 
     def test_build_host_git_repo_discovery_command_reports_dirty_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
