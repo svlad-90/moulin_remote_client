@@ -24,7 +24,8 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
                 ("NFS root", "nfs_root"),
                 ("Deploy subdir", "deploy_subdir"),
                 ("TFTP server IP", "server_ip"),
-                ("Target board IP", "board_ip"),
+                ("Board IP", "board_ip"),
+                ("MAC address", "mac_address"),
             ],
         )
         self.assertEqual(

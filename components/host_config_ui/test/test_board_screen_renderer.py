@@ -81,7 +81,7 @@ class BoardScreenRendererTests(unittest.TestCase):
                 ("SSH user", "user"),
                 ("Console device", "console_device"),
                 ("TFTP root", "tftp_root"),
-                ("Target board IP", "board_ip"),
+                ("Board IP", "board_ip"),
             ],
         )
 
@@ -92,7 +92,8 @@ class BoardScreenRendererTests(unittest.TestCase):
         self.assertIn("SSH", rendered)
         self.assertIn("FLASHING", rendered)
         self.assertIn("NETWORK BOOT", rendered)
-        self.assertTrue(any("Target board IP" in row[2] for row in port.rows))
+        self.assertIn("INVASIVE U-BOOT PARAMETERS", rendered)
+        self.assertTrue(any("Board IP" in row[2] for row in port.rows))
 
     def test_render_reports_inline_edit_cursor_position(self) -> None:
         cfg = config()
@@ -149,7 +150,7 @@ class BoardScreenRendererTests(unittest.TestCase):
             ("NFS root", "nfs_root"),
             ("Deploy subdir", "deploy_subdir"),
             ("TFTP server IP", "server_ip"),
-            ("Target board IP", "board_ip"),
+            ("Board IP", "board_ip"),
             ("Direct copy", "direct_copy"),
             ("Power off command", "command_power_off"),
             ("Power on command", "command_power_on"),

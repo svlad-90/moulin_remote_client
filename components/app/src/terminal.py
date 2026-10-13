@@ -66,6 +66,9 @@ class AppTerminalPortAdapter:
     def warn_attr(self) -> int:
         return self.terminal_port.warn_attr()
 
+    def selected_warn_attr(self) -> int:
+        return self.terminal_port.selected_warn_attr()
+
     def running_attr(self) -> int:
         return self.terminal_port.running_attr()
 

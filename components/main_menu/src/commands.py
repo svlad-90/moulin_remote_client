@@ -66,6 +66,16 @@ class MainMenuCommandItemsService:
                 allow_during_job=True,
             ),
             MenuItem(
+                "Open build host git repo",
+                "build / build host",
+                "Open SSH shell in a Git repository that contains an active mapped path on the build host.",
+                lambda app: "Discover Git repositories from active mappings in one build-host SSH session.",
+                lambda app: self.open_build_host_git_repo(app),
+                requires_remote=True,
+                requires_project=True,
+                allow_during_job=True,
+            ),
+            MenuItem(
                 "Select build targets",
                 "build / configuration",
                 "Choose the Ninja targets used by product and incremental builds.",
@@ -162,13 +172,24 @@ class MainMenuCommandItemsService:
                 requires_project=True,
             ),
             MenuItem(
-                "Incremental build",
+                "Incremental rebuild",
                 "build / commands",
-                "Rebuild configured Moulin components incrementally, regenerate Moulin/Ninja, then run configured Ninja targets.",
+                "Rebuild selected Moulin components without cleaning Yocto recipes; Bazel and Android use the same rebuild path as clean mode.",
                 lambda app: ui_menu_api.command_preview(
-                    self.incremental_product_build_commands(app)
+                    self.incremental_product_build_commands(app, clean_yocto=False)
                 ),
-                lambda app: self.run_incremental_build(app),
+                lambda app: self.run_incremental_build(app, clean_yocto=False),
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Clean incremental build",
+                "build / commands",
+                "Clean impacted Yocto recipes only, regenerate Moulin/Ninja, then rebuild selected components.",
+                lambda app: ui_menu_api.command_preview(
+                    self.incremental_product_build_commands(app, clean_yocto=True)
+                ),
+                lambda app: self.run_incremental_build(app, clean_yocto=True),
                 requires_remote=True,
                 requires_project=True,
             ),
@@ -452,24 +473,25 @@ class MainMenuCommandItemsService:
             tty="-t",
         )
 
-    def run_incremental_build(self, app: Any) -> Any:
+    def run_incremental_build(self, app: Any, *, clean_yocto: bool) -> Any:
+        title = "Clean incremental build" if clean_yocto else "Incremental rebuild"
         app.reload_config_from_disk()
         components = self.incremental_components(app)
         selected_names = self.select_incremental_component_names(app, components)
         if selected_names is None:
-            app.status = "Incremental build cancelled"
+            app.status = f"{title} cancelled"
             return None
         if not selected_names:
-            app.status = "Incremental build cancelled: no components selected"
+            app.status = f"{title} cancelled: no components selected"
             return None
-        if not self.confirm_incremental_build_clean(app, selected_names=selected_names):
-            app.status = "Incremental build cancelled"
+        if clean_yocto and not self.confirm_incremental_build_clean(app, selected_names=selected_names):
+            app.status = f"{title} cancelled"
             return None
         config_runtime_api.save_runtime_incremental_components(app.config, self.app_dir, selected_names)
         return app.command_workflow_service().run_commands(
             app,
-            "Incremental build",
-            self.incremental_product_build_commands(app, selected_names=selected_names),
+            title,
+            self.incremental_product_build_commands(app, selected_names=selected_names, clean_yocto=clean_yocto),
         )
 
     def run_bitbake_cleanup(self, app: Any) -> int:
@@ -529,7 +551,7 @@ class MainMenuCommandItemsService:
             app,
             ui_dialog_api.ConfirmContent(
                 title="Confirm",
-                warning="Incremental build will clean impacted Yocto recipes before rebuilding.",
+                warning="Clean incremental build will clean impacted Yocto recipes only before rebuilding.",
                 subject="Clean impacted Yocto recipes",
                 details=f"Selected components: {selected_components}. Yocto targets: {yocto_target_text}",
                 footer="Enter/y: clean and build | n/q/Esc: back",
@@ -608,7 +630,13 @@ class MainMenuCommandItemsService:
         commands.append(self.mark_incremental_mapping_build_applied_command(app))
         return app.command_workflow_service().run_commands(app, "Run product build", commands)
 
-    def incremental_product_build_commands(self, app: Any, selected_names: list[str] | None = None) -> list[list[str]]:
+    def incremental_product_build_commands(
+        self,
+        app: Any,
+        selected_names: list[str] | None = None,
+        *,
+        clean_yocto: bool = False,
+    ) -> list[list[str]]:
         components = self.incremental_components(app)
         selected_name_set = set(selected_names or [])
         selected = [component for component in components if component["name"] in selected_name_set]
@@ -639,7 +667,7 @@ class MainMenuCommandItemsService:
         applied_files = self.applied_incremental_files(app, selected, changed_files)
 
         commands: list[list[str]] = []
-        if changed_files:
+        if clean_yocto and changed_files:
             added_yocto_clean = False
             for component in selected:
                 if component["builder_type"] != "yocto" or not str(component["target"]).strip():
@@ -671,7 +699,7 @@ class MainMenuCommandItemsService:
                         changed_files=changed_files,
                     )
                 )
-        else:
+        elif clean_yocto:
             commands.append(
                 self.remote_command_workflow.yocto_impact_command(
                     app.config,
@@ -1082,7 +1110,7 @@ class MainMenuCommandItemsService:
             for component in components
         ]
 
-    def active_incremental_mappings(self, app: Any) -> list[dict[str, Any]]:
+    def active_mappings(self, app: Any) -> list[dict[str, Any]]:
         names = self.mapping_selection_service.read_mapping_selection_for_config(
             app.config,
             self.sync_command_workflow.mapping_selection_path(app.config),
@@ -1094,6 +1122,153 @@ class MainMenuCommandItemsService:
             return self.mapping_selection_service.select_mappings_for_config(app.config, names)
         except SystemExit:
             return []
+
+    def active_incremental_mappings(self, app: Any) -> list[dict[str, Any]]:
+        return self.active_mappings(app)
+
+    def open_build_host_git_repo(self, app: Any) -> None:
+        repos = self.discover_build_host_git_repos(app)
+        if not repos:
+            app.status = "No Git repositories found for active mappings"
+            return
+        selected = self.select_build_host_git_repo(app, repos)
+        if selected is None:
+            app.status = "Open build host git repo cancelled"
+            return
+        app.terminal_session_controller().open_build_host_directory_shell(
+            app,
+            "Open build host git repo",
+            selected["root"],
+        )
+
+    def discover_build_host_git_repos(self, app: Any) -> list[dict[str, object]]:
+        capture = self.remote_capture_command(app)
+        if capture is None:
+            app.status = "Git repo discovery unavailable: no capture command"
+            return []
+        command = self.build_host_git_repo_discovery_command(
+            config_accessors.remote_project_dir_for_config(app.config),
+            self.active_mappings(app),
+        )
+        try:
+            output = capture(transport.ssh_command(config_accessors.remote_spec_for_config(app.config), command))
+        except Exception as exc:
+            app.status = f"Git repo discovery failed: {exc}"
+            return []
+        repos: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for raw in output.splitlines():
+            line = raw.strip()
+            if "\t" in line:
+                status, root = line.split("\t", 1)
+                dirty = status == "dirty"
+            else:
+                root = line
+                dirty = False
+            if root and root not in seen:
+                seen.add(root)
+                repos.append({"root": root, "dirty": dirty})
+        return repos
+
+    def build_host_git_repo_discovery_command(self, project_dir: str, mappings: list[dict[str, Any]]) -> str:
+        mapping_lines = self.build_host_git_repo_mapping_lines(mappings)
+        script = f"""set -u
+project_dir={shlex.quote(project_dir)}
+[ -d "$project_dir" ] || exit 0
+{{
+    while IFS=$'\\t' read -r kind rel; do
+        [ -n "$rel" ] || continue
+        if [ "$rel" = "." ]; then
+            candidate="$project_dir"
+        else
+            candidate="$project_dir/$rel"
+        fi
+        if [ "$kind" = "file" ]; then
+            candidate="${{candidate%/*}}"
+        fi
+        while [ "$candidate" != "$project_dir" ] && [ ! -e "$candidate" ]; do
+            next="${{candidate%/*}}"
+            [ "$next" = "$candidate" ] && break
+            candidate="$next"
+        done
+        [ -f "$candidate" ] && candidate="${{candidate%/*}}"
+        git -C "$candidate" rev-parse --show-toplevel 2>/dev/null || true
+    done <<'MRC_MAPPINGS'
+{mapping_lines}
+MRC_MAPPINGS
+}} | awk '!seen[$0]++' | while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    if [ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
+        printf 'dirty\\t%s\\n' "$root"
+    else
+        printf 'clean\\t%s\\n' "$root"
+    fi
+done
+"""
+        return "bash -lc " + shlex.quote(script)
+
+    def build_host_git_repo_mapping_lines(self, mappings: list[dict[str, Any]]) -> str:
+        entries = mappings or [{"kind": "directory", "remote": "."}]
+        lines = []
+        for mapping in entries:
+            kind = str(mapping.get("kind", "directory")).strip()
+            if kind not in {"directory", "file"}:
+                kind = "directory"
+            remote = str(mapping.get("remote", "")).strip().strip("/")
+            if not remote:
+                remote = "."
+            remote = remote.replace("\n", "").replace("\t", " ")
+            lines.append(f"{kind}\t{remote}")
+        return "\n".join(lines)
+
+    def select_build_host_git_repo(self, app: Any, repos: list[dict[str, object]]) -> dict[str, object] | None:
+        index = 0
+        app.screen.timeout(-1)
+        try:
+            while True:
+                app.screen.erase()
+                height, width = app.screen.getmaxyx()
+                if height < 10 or width < 72:
+                    app.add(0, 0, "Terminal is too small. Need at least 72x10.", app.warn_attr())
+                    app.screen.refresh()
+                    ch = app.read_key()
+                    if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                        return None
+                    continue
+
+                index = ui_menu_api.clamp_index(index, len(repos))
+                app.draw_box(0, 0, height - 2, width, "Build Host Git Repositories")
+                app.add(1, 2, "Select repository to open on the build host.", app.accent_attr())
+                visible_rows = max(1, height - 6)
+                start = max(0, min(index - visible_rows + 1, len(repos) - visible_rows))
+                for visible, repo in enumerate(repos[start : start + visible_rows]):
+                    row = 3 + visible
+                    item_index = start + visible
+                    root = str(repo["root"])
+                    dirty = bool(repo.get("dirty"))
+                    marker = " *" if dirty else "  "
+                    label = f"{item_index + 1}.{marker} {root}"
+                    if item_index == index:
+                        selected_dirty_attr = getattr(app, "selected_warn_attr", app.selected_attr)
+                        attr = selected_dirty_attr() if dirty else app.selected_attr()
+                    else:
+                        attr = app.warn_attr() if dirty else 0
+                    app.add(row, 2, ui_text_api.fit_text(label, width - 4).ljust(width - 4), attr)
+                footer = "* changed | Up/Down: select | Enter: open shell | q/Esc: back"
+                app.add(height - 2, 0, footer[:width], app.accent_attr())
+                app.add(height - 1, 0, app.status[:width].ljust(width), curses.A_REVERSE)
+                app.screen.refresh()
+                ch = app.read_key()
+                if ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+                    index = ui_menu_api.move_index(index, len(repos), -1)
+                elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j") or ch == ord("\t"):
+                    index = ui_menu_api.move_index(index, len(repos), 1)
+                elif ch in (curses.KEY_ENTER, 10, 13):
+                    return repos[index]
+                elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                    return None
+        finally:
+            app.screen.timeout(1000)
 
     def auto_incremental_component_names(
         self,
@@ -1454,6 +1629,7 @@ class MainMenuCommandItemsService:
         if action_id in {
             "apply_uboot_network_env",
             "apply_uboot_ufs_env",
+            "inject_invasive_uboot_parameters",
             "install_nfs_deploy_helper",
         }:
             return "tftp/nfs / board setup"

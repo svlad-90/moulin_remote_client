@@ -87,11 +87,16 @@ class SyncPreBuildService:
         issues: list[str],
         *,
         rsync_command: Callable[[dict[str, Any]], list[str]],
+        skipped_mappings: list[str] | None = None,
     ) -> list[list[str]]:
+        skipped_mappings = skipped_mappings or []
         if not names:
+            lines = ["Copy mapped files: no active mappings selected"]
+            if skipped_mappings:
+                lines.append("skipped missing local mappings: " + ", ".join(skipped_mappings))
             return [
                 self.local_log_command(
-                    "Copy mapped files: no active mappings selected",
+                    *lines,
                 )
             ]
         if issues:
@@ -107,6 +112,11 @@ class SyncPreBuildService:
             self.local_log_command(
                 "Copy mapped files: pushing active mappings to remote",
                 f"mappings: {', '.join(names)}",
+                *(
+                    ["skipped missing local mappings: " + ", ".join(skipped_mappings)]
+                    if skipped_mappings
+                    else []
+                ),
             )
         ]
         for mapping in active_mappings:
@@ -149,13 +159,35 @@ class SyncPreBuildService:
         except SystemExit as exc:
             return self.pre_build_selection_error_command(exc)
         active_mappings = [mapping for mapping in active_mappings if mapping.get("push", True)]
+        local_base = config_accessors.local_project_dir_for_config(config, app_dir)
+        skipped_mappings = [
+            str(mapping["name"])
+            for mapping in active_mappings
+            if mapping.get("kind") == "file" and not (local_base / mapping["local"]).exists()
+        ]
+        active_mappings = [
+            mapping
+            for mapping in active_mappings
+            if mapping.get("kind") != "file" or (local_base / mapping["local"]).exists()
+        ]
         names = [str(mapping["name"]) for mapping in active_mappings]
         if not active_mappings:
-            return self.pre_build_sync_commands([], [], [], rsync_command=lambda _mapping: [])
-        local_base = config_accessors.local_project_dir_for_config(config, app_dir)
+            return self.pre_build_sync_commands(
+                [],
+                [],
+                [],
+                rsync_command=lambda _mapping: [],
+                skipped_mappings=skipped_mappings,
+            )
         issues = self.overlay_validation_service.local_mapping_issues(local_base, active_mappings)
         if issues:
-            return self.pre_build_sync_commands(names, active_mappings, issues, rsync_command=lambda _mapping: [])
+            return self.pre_build_sync_commands(
+                names,
+                active_mappings,
+                issues,
+                rsync_command=lambda _mapping: [],
+                skipped_mappings=skipped_mappings,
+            )
         try:
             batch_command = self.mapping_service.rsync_mappings_push_command_for_config(
                 config,
@@ -171,6 +203,11 @@ class SyncPreBuildService:
             self.local_log_command(
                 "Copy mapped files: pushing active mappings to remote",
                 f"mappings: {', '.join(names)}",
+                *(
+                    ["skipped missing local mappings: " + ", ".join(skipped_mappings)]
+                    if skipped_mappings
+                    else []
+                ),
             ),
             self.mappings_copy_command(active_mappings, batch_command),
         ]

@@ -183,6 +183,9 @@ class ClientApp:
     def warn_attr(self) -> int:
         return self.terminal.warn_attr()
 
+    def selected_warn_attr(self) -> int:
+        return self.terminal.selected_warn_attr()
+
     def running_attr(self) -> int:
         return self.terminal.running_attr()
 

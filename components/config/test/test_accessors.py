@@ -46,6 +46,7 @@ class ConfigAccessorBehaviorTests(unittest.TestCase):
                     "deploy_subdir": "vgon/projects/",
                     "server_ip": "10.0.0.10",
                     "board_ip": "10.0.0.20",
+                    "mac_address": "2E:09:0A:12:F7:EA",
                 }
             ],
             "active_board_host": "board",
@@ -71,6 +72,7 @@ class ConfigAccessorBehaviorTests(unittest.TestCase):
         self.assertEqual(accessors.board_deploy_subdir_for_config(config), "vgon/projects")
         self.assertEqual(accessors.board_server_ip_for_config(config), "10.0.0.10")
         self.assertEqual(accessors.board_ipaddr_for_config(config), "10.0.0.20")
+        self.assertEqual(accessors.board_mac_address_for_config(config), "2E:09:0A:12:F7:EA")
         self.assertEqual(accessors.network_deploy_project_name_for_config(config), "prod")
         self.assertEqual(accessors.board_tftp_project_dir_for_config(config), "/srv/tftp/vgon/projects/prod")
         self.assertEqual(accessors.board_nfs_current_dir_for_config(config), "/srv/nfs/vgon/projects/current")

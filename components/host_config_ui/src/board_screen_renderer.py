@@ -215,8 +215,10 @@ class BoardScreenRenderer:
             return "SSH"
         if key in {"console_device", "ufs_loadaddr", "ufs_buffersize"}:
             return "FLASHING"
-        if key in {"tftp_root", "nfs_root", "deploy_subdir", "server_ip", "board_ip"}:
+        if key in {"tftp_root", "nfs_root", "deploy_subdir"}:
             return "NETWORK BOOT"
+        if key in {"server_ip", "board_ip", "mac_address"}:
+            return "INVASIVE U-BOOT PARAMETERS"
         if key.startswith("command_"):
             return "COMMANDS"
         return "OTHER"

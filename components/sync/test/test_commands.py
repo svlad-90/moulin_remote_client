@@ -379,9 +379,12 @@ class SyncCommandBehaviorTests(unittest.TestCase):
                 remote_base="builder@example:/work/product",
             )
 
-            expected = transport.rsync_base_command(dry_run=True)
-            expected.extend(["--exclude", "tmp/", "builder@example:/work/product/layers/meta-example/", str(local_base / "layers/meta-example") + "/"])
-            self.assertEqual(argv, expected)
+            expected_rsync = transport.rsync_base_command(dry_run=True)
+            expected_rsync.extend(["--exclude", "tmp/", "builder@example:/work/product/layers/meta-example/", str(local_base / "layers/meta-example") + "/"])
+            self.assertEqual(argv[:2], ["bash", "-lc"])
+            self.assertIn(transport.shell_command(expected_rsync), argv[2])
+            self.assertIn("test -d /work/product/layers/meta-example", argv[2])
+            self.assertIn("SKIP pull: layer", argv[2])
             self.assertTrue((local_base / "layers/meta-example").is_dir())
 
     def test_push_file_apply_command_matches_current_shape(self) -> None:

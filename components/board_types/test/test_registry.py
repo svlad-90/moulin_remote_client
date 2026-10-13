@@ -38,6 +38,7 @@ class BoardTypeRegistryTests(unittest.TestCase):
                 ("deploy_network_android", "Deploy Android image to NFS"),
                 ("deploy_network_full", "Deploy full TFTP/NFS set"),
                 ("install_nfs_deploy_helper", "Install NFS deploy helper"),
+                ("inject_invasive_uboot_parameters", "Inject invasive U-Boot parameters"),
                 ("pull_network_workspace", "Pull TFTP/NFS workspace"),
                 ("push_network_workspace", "Push TFTP/NFS workspace"),
                 ("pull_dom0_initramfs_workspace", "Pull Dom0 initramfs workspace"),

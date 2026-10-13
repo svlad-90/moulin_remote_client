@@ -108,6 +108,41 @@ class SyncPreBuildServiceTests(unittest.TestCase):
             self.assertNotIn('"name": "crate"', snapshot_mappings_text)
             self.assertIn("recorded incremental build baseline", argv[2][2])
 
+    def test_pre_build_sync_commands_for_config_skips_missing_local_mappings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            local_base = app_dir / "overlay"
+            layer = local_base / "layers/meta"
+            layer.mkdir(parents=True)
+            (layer / "recipe.bb").write_text("x\n", encoding="utf-8")
+            service = pre_build.sync_pre_build_service()
+            config = sample_config(app_dir)
+            project = config["projects"][0]
+            project["active_mappings"] = ["layer", "android-kernel"]
+            project["mappings"] = [
+                {"name": "layer", "role": "source layer", "remote": "layers/meta", "local": "layers/meta", "push": True},
+                {
+                    "name": "android-kernel",
+                    "role": "Android kernel fragment",
+                    "remote": "android_kernel/common-modules/xen-virtual-device/xenvm.aarch64.fragment",
+                    "local": "android_kernel/common-modules/xen-virtual-device/xenvm.aarch64.fragment",
+                    "kind": "file",
+                    "push": True,
+                },
+            ]
+
+            argv = service.pre_build_sync_commands_for_config(
+                config,
+                selection_path=app_dir / "unused.txt",
+                app_dir=app_dir,
+            )
+
+            self.assertEqual(len(argv), 3)
+            self.assertIn("skipped missing local mappings: android-kernel", argv[0][2])
+            self.assertIn("Copy mapped files mappings: layer", argv[1][2])
+            self.assertNotIn("android_kernel/common-modules", " ".join(argv[1]))
+            self.assertIn("recorded incremental build baseline", argv[2][2])
+
     def test_command_sequence_saves_build_settings_and_appends_build_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)

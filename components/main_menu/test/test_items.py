@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +32,7 @@ class FakeTerminalSession:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.commands: list[list[str]] = []
+        self.directory_paths: list[str] = []
 
     def open_remote_shell(self, _port: Any) -> None:
         self.calls.append("remote")
@@ -43,6 +45,7 @@ class FakeTerminalSession:
 
     def open_build_host_directory_shell(self, _port: Any, title: str, _path: str) -> None:
         self.calls.append(f"build-dir:{title}")
+        self.directory_paths.append(_path)
 
     def open_board_host_directory_shell(self, _port: Any, title: str, _path: str) -> None:
         self.calls.append(f"board-dir:{title}")
@@ -168,9 +171,14 @@ class FakeMenuApp(FakeApp):
         super().__init__(config)
         self.screen = FakeMenuScreen(keys)
         self.status = ""
+        self.add_calls: list[tuple[int, int, str, int | None]] = []
 
     def add(self, *_args: Any) -> None:
-        return None
+        row = int(_args[0])
+        col = int(_args[1])
+        text = str(_args[2])
+        attr = int(_args[3]) if len(_args) > 3 and isinstance(_args[3], int) else None
+        self.add_calls.append((row, col, text, attr))
 
     def draw_box(self, *_args: Any) -> None:
         return None
@@ -183,6 +191,9 @@ class FakeMenuApp(FakeApp):
 
     def warn_attr(self) -> int:
         return 2
+
+    def selected_warn_attr(self) -> int:
+        return 5
 
     def selected_attr(self) -> int:
         return 3
@@ -255,7 +266,8 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertIn("Select build host", labels)
             self.assertIn("Copy mapped files to build host", labels)
             self.assertIn("Run product build", labels)
-            self.assertIn("Incremental build", labels)
+            self.assertIn("Incremental rebuild", labels)
+            self.assertIn("Clean incremental build", labels)
             self.assertIn("Select board host", labels)
             self.assertIn("Copy build artifacts", labels)
             self.assertIn("Sync mapped files", labels)
@@ -269,12 +281,13 @@ class MainMenuBuilderTests(unittest.TestCase):
             command_labels = [item.label for item in builder.command_items.build_items(FakeApp(_config(app_dir)))]
             self.assertEqual(
                 command_labels[:3],
-                ["Open build host shell", "Select build targets", "Copy mapped files to build host"],
+                ["Open build host shell", "Open build host git repo", "Select build targets"],
             )
             self.assertEqual(
                 build_host_labels,
                 [
                     "Open build host shell",
+                    "Open build host git repo",
                 ],
             )
             self.assertEqual(build_configuration_labels, ["Select build targets"])
@@ -295,7 +308,8 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Clean-up BitBake server",
                     "Regenerate Moulin/Ninja",
                     "Run product build",
-                    "Incremental build",
+                    "Incremental rebuild",
+                    "Clean incremental build",
                     "Reset incremental build state",
                     "Clean Moulin components",
                     "Clean project folder",
@@ -369,7 +383,12 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(tftp_remote_labels, ["Open remote TFTP root", "Open remote NFS root"])
             self.assertEqual(
                 tftp_setup_labels,
-                ["Install NFS deploy helper", "Apply U-Boot network env", "Apply U-Boot UFS env"],
+                [
+                    "Install NFS deploy helper",
+                    "Inject invasive U-Boot parameters",
+                    "Apply U-Boot network env",
+                    "Apply U-Boot UFS env",
+                ],
             )
             self.assertEqual(
                 tftp_labels,
@@ -387,6 +406,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Push Dom0 initramfs workspace",
                     "Open local Dom0 initramfs workspace",
                     "Install NFS deploy helper",
+                    "Inject invasive U-Boot parameters",
                     "Apply U-Boot network env",
                     "Apply U-Boot UFS env",
                     "Stop current board command",
@@ -553,13 +573,13 @@ class MainMenuBuilderTests(unittest.TestCase):
                 "doma",
                 "boot_artifacts",
             ]
-            yocto_item = next(item for item in command_items if item.label == "Incremental build")
+            yocto_item = next(item for item in command_items if item.label == "Clean incremental build")
 
             yocto_item.handler(app)
 
             self.assertEqual(app.reload_config_calls, 1)
             title, commands = app.workflow.command_calls[0]
-            self.assertEqual(title, "Incremental build")
+            self.assertEqual(title, "Clean incremental build")
             self.assertEqual(len(commands), 7)
             self.assertIn('ACTION = "clean"', commands[0][-1])
             self.assertIn('TARGETS = "rcar-image-adas".strip()', commands[0][-1])
@@ -585,6 +605,47 @@ class MainMenuBuilderTests(unittest.TestCase):
                 json.loads(settings_path.read_text(encoding="utf-8"))["incremental_components"],
                 ["domd", "doma_kernel", "doma", "boot_artifacts"],
             )
+
+    def test_incremental_rebuild_skips_yocto_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  dom0:",
+                    "    build-dir: yocto",
+                    "    builder:",
+                    "      type: yocto",
+                    "      work_dir: build-dom0",
+                    "      build_target: core-image-thin-initramfs",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            command_items = builder.command_items.build_items(app)
+            builder.command_items.select_incremental_component_names = lambda _app, _components: ["dom0"]
+            incremental_item = next(item for item in command_items if item.label == "Incremental rebuild")
+
+            incremental_item.handler(app)
+
+            title, commands = app.workflow.command_calls[0]
+            command_text = "\n".join(command[-1] for command in commands if command)
+            self.assertEqual(title, "Incremental rebuild")
+            self.assertEqual(app.dialog_workflow.confirm_calls, [])
+            self.assertNotIn('ACTION = "clean"', command_text)
+            self.assertIn("moulin product.yaml", commands[0][-1])
+            self.assertIn("ninja dom0", commands[-2][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[-1][-1])
 
     def test_incremental_handler_limits_yocto_scan_to_selected_component_build_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -620,7 +681,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             app = FakeApp(_config(app_dir))
             command_items = builder.command_items.build_items(app)
             builder.command_items.select_incremental_component_names = lambda _app, _components: ["dom0"]
-            yocto_item = next(item for item in command_items if item.label == "Incremental build")
+            yocto_item = next(item for item in command_items if item.label == "Clean incremental build")
 
             yocto_item.handler(app)
 
@@ -658,14 +719,14 @@ class MainMenuBuilderTests(unittest.TestCase):
             app = FakeApp(_config(app_dir))
             app.dialog_workflow.confirm_result = False
             builder.command_items.select_incremental_component_names = lambda _app, _components: ["dom0"]
-            incremental_item = next(item for item in builder.command_items.build_items(app) if item.label == "Incremental build")
+            incremental_item = next(item for item in builder.command_items.build_items(app) if item.label == "Clean incremental build")
 
             incremental_item.handler(app)
 
             self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
             self.assertEqual(app.dialog_workflow.confirm_calls[0].subject, "Clean impacted Yocto recipes")
             self.assertEqual(app.workflow.command_calls, [])
-            self.assertEqual(app.status, "Incremental build cancelled")
+            self.assertEqual(app.status, "Clean incremental build cancelled")
 
     def test_incremental_clean_includes_image_recipe_when_mapped_content_changed(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -716,7 +777,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             )
             app = FakeApp(config)
 
-            commands = builder.command_items.incremental_product_build_commands(app, selected_names=["dom0"])
+            commands = builder.command_items.incremental_product_build_commands(app, selected_names=["dom0"], clean_yocto=True)
 
             self.assertIn('IMAGE_RECIPES = "core-image-thin-initramfs"', commands[0][-1])
             self.assertIn('USE_CHANGED_FILES = "1" == "1"', commands[0][-1])
@@ -768,7 +829,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             )
             app = FakeApp(config)
 
-            commands = builder.command_items.incremental_product_build_commands(app, selected_names=["dom0"])
+            commands = builder.command_items.incremental_product_build_commands(app, selected_names=["dom0"], clean_yocto=True)
 
             self.assertIn('TARGETS = "core-image-thin-initramfs".strip()', commands[0][-1])
             self.assertIn('IMAGE_RECIPES = ""', commands[0][-1])
@@ -865,7 +926,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 "doma_kernel",
                 "doma",
             ]
-            yocto_item = next(item for item in command_items if item.label == "Incremental build")
+            yocto_item = next(item for item in command_items if item.label == "Clean incremental build")
 
             yocto_item.handler(app)
 
@@ -931,7 +992,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             app = FakeApp(config)
             command_items = builder.command_items.build_items(app)
             builder.command_items.select_incremental_component_names = lambda _app, _components: ["doma_kernel", "doma"]
-            yocto_item = next(item for item in command_items if item.label == "Incremental build")
+            yocto_item = next(item for item in command_items if item.label == "Clean incremental build")
 
             yocto_item.handler(app)
 
@@ -975,7 +1036,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             app = FakeApp(_config(app_dir))
             command_items = builder.command_items.build_items(app)
             builder.command_items.select_incremental_component_names = lambda _app, _components: ["doma"]
-            yocto_item = next(item for item in command_items if item.label == "Incremental build")
+            yocto_item = next(item for item in command_items if item.label == "Clean incremental build")
 
             yocto_item.handler(app)
 
@@ -1015,7 +1076,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             app = FakeApp(_config(app_dir))
             components = builder.command_items.incremental_components(app)
             builder.command_items.select_incremental_component_names = lambda _app, _components: ["boot_artifacts"]
-            incremental_item = next(item for item in builder.command_items.build_items(app) if item.label == "Incremental build")
+            incremental_item = next(item for item in builder.command_items.build_items(app) if item.label == "Incremental rebuild")
 
             incremental_item.handler(app)
 
@@ -2018,6 +2079,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 "Prepare remote project",
                 "Checkout project Git ref",
                 "Open build host shell",
+                "Open build host git repo",
                 "Select build targets",
                 "Copy mapped files to build host",
                 "Run product build",
@@ -2034,6 +2096,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                         "Prepare remote project": (True, ""),
                         "Checkout project Git ref": None,
                         "Open build host shell": (True, ""),
+                        "Open build host git repo": (True, ""),
                         "Select build targets": (False, "remote project needs preparation"),
                         "Copy mapped files to build host": (False, "remote project needs preparation"),
                         "Run product build": (False, "remote project needs preparation"),
@@ -2050,6 +2113,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                         "Prepare remote project": (True, ""),
                         "Checkout project Git ref": None,
                         "Open build host shell": (True, ""),
+                        "Open build host git repo": (True, ""),
                         "Select build targets": (False, "remote project needs preparation"),
                         "Copy mapped files to build host": (False, "remote project needs preparation"),
                         "Run product build": (False, "remote project needs preparation"),
@@ -2066,6 +2130,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                         "Prepare remote project": None,
                         "Checkout project Git ref": (True, ""),
                         "Open build host shell": (True, ""),
+                        "Open build host git repo": (True, ""),
                         "Select build targets": (False, "remote project Git ref mismatch"),
                         "Copy mapped files to build host": (False, "remote project Git ref mismatch"),
                         "Run product build": (False, "remote project Git ref mismatch"),
@@ -2082,6 +2147,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                         "Prepare remote project": None,
                         "Checkout project Git ref": None,
                         "Open build host shell": (False, "connect to the build host first"),
+                        "Open build host git repo": (False, "connect to the build host first"),
                         "Select build targets": (True, ""),
                         "Copy mapped files to build host": (False, "connect to the build host first"),
                         "Run product build": (False, "connect to the build host first"),
@@ -2122,10 +2188,16 @@ class MainMenuBuilderTests(unittest.TestCase):
                 remote_read_project_file=lambda *_args, **_kwargs: "",
                 manifest_cache={},
             )
-            app = FakeApp(_config(app_dir))
+            app = FakeMenuApp(_config(app_dir), [10])
+            remote_capture_commands: list[list[str]] = []
+            app.remote_capture_command = (
+                lambda argv: remote_capture_commands.append(argv)
+                or "dirty\t/mnt/projects/meta-product\nclean\t/mnt/projects/meta-product/yocto/meta-xt-common\n"
+            )
             menu_items = builder.build_items(app)
 
             next(item for item in menu_items if item.label == "Open build host shell").handler(app)
+            next(item for item in menu_items if item.label == "Open build host git repo").handler(app)
             next(item for item in menu_items if item.label == "Open board host shell" and item.group == "sessions / board host").handler(app)
             next(item for item in menu_items if item.label == "Open build host shell" and item.group == "flashing / hosts").handler(app)
             next(item for item in menu_items if item.label == "Open board host shell" and item.group == "flashing / hosts").handler(app)
@@ -2139,6 +2211,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 app.terminal_session.calls,
                 [
                     "remote",
+                    "build-dir:Open build host git repo",
                     "board",
                     "remote",
                     "board",
@@ -2149,6 +2222,12 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "command:Open U-Boot console",
                 ],
             )
+            self.assertEqual(len(remote_capture_commands), 1)
+            self.assertIn("git -C \"$candidate\" rev-parse --show-toplevel", remote_capture_commands[0][-1])
+            self.assertIn("status --porcelain", remote_capture_commands[0][-1])
+            self.assertEqual(app.terminal_session.directory_paths[0], "/mnt/projects/meta-product")
+            self.assertTrue(any("* /mnt/projects/meta-product" in call[2] for call in app.add_calls))
+            self.assertTrue(any("* /mnt/projects/meta-product" in call[2] and call[3] == 5 for call in app.add_calls))
             self.assertEqual(app.terminal_session.commands[0][0], "ssh")
             self.assertIn("-tt", app.terminal_session.commands[0])
             self.assertIn("tester@10.0.0.2", app.terminal_session.commands[0])
@@ -2156,6 +2235,34 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertNotIn("x5h_off", app.terminal_session.commands[0][-1])
             self.assertIn("x5h_off", app.terminal_session.commands[1][-1])
             self.assertIn("picocom -b 1843200", app.terminal_session.commands[1][-1])
+
+    def test_build_host_git_repo_discovery_command_reports_dirty_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            repo = app_dir / "repo"
+            mapped_dir = repo / "layers" / "meta-demo"
+            mapped_dir.mkdir(parents=True)
+            subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+            (mapped_dir / "changed.txt").write_text("dirty\n", encoding="utf-8")
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+
+            command = builder.command_items.build_host_git_repo_discovery_command(
+                str(repo),
+                [{"kind": "directory", "remote": "layers/meta-demo"}],
+            )
+            result = subprocess.run(command, shell=True, executable="/bin/bash", text=True, capture_output=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), f"dirty\t{repo}")
 
     def test_configure_copied_artifacts_opens_board_artifact_selector(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
