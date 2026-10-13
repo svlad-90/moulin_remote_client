@@ -370,37 +370,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             ),
         )
 
-    def test_start_docker_command_starts_persistent_shell_container(self) -> None:
-        config = sample_config()
-        prepare_config(config)
-
-        argv = commands.build_remote_start_docker_command_for_config(config, docker_image="prod_img")
-
-        self.assertEqual(argv[0], "ssh")
-        self.assertIn("builder@10.0.0.1", argv)
-        self.assertIn("cd /mnt/projects/meta-product && image=prod_img", argv[-1])
-        self.assertIn("moulin_remote_client.image=prod_img", argv[-1])
-        self.assertIn("--name \"$name\"", argv[-1])
-        self.assertIn("-dit \"$image\"", argv[-1])
-        self.assertIn("while true; do sleep 3600; done", argv[-1])
-
-    def test_rebuild_docker_command_builds_then_starts_shell_container(self) -> None:
-        config = sample_config()
-        prepare_config(config)
-
-        argv = commands.build_remote_rebuild_docker_command_for_config(
-            config,
-            docker_image="prod_img",
-            default_dockerfile=client.DEFAULT_DOCKERFILE,
-        )
-
-        self.assertEqual(argv[0], "ssh")
-        self.assertIn("DOCKER_BUILDKIT=1 docker build doc -f doc/Dockerfile", argv[-1])
-        self.assertIn("build_rc=$?", argv[-1])
-        self.assertIn("moulin_remote_client.image=prod_img", argv[-1])
-        self.assertIn("-dit \"$image\"", argv[-1])
-
-    def test_docker_shell_command_opens_running_shell_container(self) -> None:
+    def test_docker_shell_command_opens_transient_product_container(self) -> None:
         config = sample_config()
         prepare_config(config)
 
@@ -409,20 +379,11 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         self.assertEqual(argv[0], "ssh")
         self.assertIn("-t", argv)
         self.assertIn("builder@10.0.0.1", argv)
-        self.assertIn("moulin_remote_client.image=prod_img", argv[-1])
-        self.assertIn("Docker image shell is not running", argv[-1])
-        self.assertIn("docker exec -it \"$container\"", argv[-1])
-
-    def test_stop_docker_command_stops_running_image_containers(self) -> None:
-        config = sample_config()
-        prepare_config(config)
-
-        argv = commands.build_remote_stop_docker_command_for_config(config, docker_image="prod_img")
-
-        self.assertEqual(argv[0], "ssh")
-        self.assertIn("builder@10.0.0.1", argv)
-        self.assertIn("moulin_remote_client.image=prod_img", argv[-1])
-        self.assertIn("docker stop $ids", argv[-1])
+        self.assertIn("cd /mnt/projects/meta-product && docker run", argv[-1])
+        self.assertIn("--network=host --privileged", argv[-1])
+        self.assertIn("-v /mnt/projects/meta-product:/home/builder/workspace", argv[-1])
+        self.assertIn("-it --rm prod_img", argv[-1])
+        self.assertIn("cd /home/builder/workspace && exec bash -l", argv[-1])
 
     def test_bitbake_cleanup_command_kills_containers_and_removes_locks(self) -> None:
         config = sample_config()

@@ -19,14 +19,6 @@ class RemoteBuildCommandService:
     def __init__(self) -> None:
         self.session_service = remote_session.remote_session_command_service()
 
-    def docker_container_label(self, docker_image: str) -> str:
-        return f"moulin_remote_client.image={docker_image}"
-
-    def docker_container_name(self, docker_image: str) -> str:
-        safe = "".join(char if char.isalnum() else "-" for char in docker_image.lower()).strip("-")
-        safe = "-".join(part for part in safe.split("-") if part)
-        return "mrc-" + (safe or "docker")
-
     def docker_command(self, remote: str, project_dir: str, docker_image: str, dockerfile: str) -> list[str]:
         if not docker_image:
             raise SystemExit("Docker image name is not configured")
@@ -72,60 +64,13 @@ class RemoteBuildCommandService:
             )
         )
 
-    def start_docker_command(self, remote: str, project_dir: str, docker_image: str) -> list[str]:
-        if not docker_image:
-            raise SystemExit("Docker image name is not configured")
-        if not project_dir:
-            raise SystemExit("Remote project directory is not configured")
-        command = self.product_docker_start_command(project_dir, docker_image)
-        return self.session_service.remote_shell_command(remote, project_dir, command)
-
-    def start_docker_command_for_config(
-        self,
-        config: dict[str, Any],
-        *,
-        docker_image: str,
-    ) -> list[str]:
-        return self.start_docker_command(
-            config_accessors.remote_spec_for_config(config),
-            config_accessors.remote_project_dir_for_config(config),
-            docker_image,
-        )
-
-    def rebuild_docker_command(self, remote: str, project_dir: str, docker_image: str, dockerfile: str) -> list[str]:
-        build_command = self.docker_command(remote, project_dir, docker_image, dockerfile)[-1]
-        start_command = self.start_docker_command(remote, project_dir, docker_image)[-1]
-        return transport.ssh_command(remote, f"{build_command}; build_rc=$?; [ \"$build_rc\" -eq 0 ] || exit \"$build_rc\"; {start_command}")
-
-    def rebuild_docker_command_for_config(
-        self,
-        config: dict[str, Any],
-        *,
-        docker_image: str,
-        default_dockerfile: str,
-    ) -> list[str]:
-        return self.rebuild_docker_command(
-            config_accessors.remote_spec_for_config(config),
-            config_accessors.remote_project_dir_for_config(config),
-            docker_image,
-            config_accessors.configured_dockerfile_for_config(config, default_dockerfile),
-        )
-
     def docker_shell_command(self, remote: str, project_dir: str, docker_image: str) -> list[str]:
         if not docker_image:
             raise SystemExit("Docker image name is not configured")
         if not project_dir:
             raise SystemExit("Remote project directory is not configured")
-        label = shlex.quote("label=" + self.docker_container_label(docker_image))
-        script = (
-            f"container=$(docker ps -q --filter {label} | head -n 1)\n"
-            "if [ -z \"$container\" ]; then\n"
-            "  printf 'Docker image shell is not running; run Start Docker image first\\n' >&2\n"
-            "  exit 2\n"
-            "fi\n"
-            "docker exec -it \"$container\" /bin/bash -lc 'cd /home/builder/workspace && exec bash -l'\n"
-        )
-        return transport.ssh_command(remote, script, tty="-t")
+        command = self.product_docker_shell_command(project_dir, docker_image)
+        return transport.ssh_command(remote, f"cd {shlex.quote(project_dir)} && {command}", tty="-t")
 
     def docker_shell_command_for_config(
         self,
@@ -134,33 +79,6 @@ class RemoteBuildCommandService:
         docker_image: str,
     ) -> list[str]:
         return self.docker_shell_command(
-            config_accessors.remote_spec_for_config(config),
-            config_accessors.remote_project_dir_for_config(config),
-            docker_image,
-        )
-
-    def stop_docker_command(self, remote: str, project_dir: str, docker_image: str) -> list[str]:
-        if not docker_image:
-            raise SystemExit("Docker image name is not configured")
-        label = shlex.quote("label=" + self.docker_container_label(docker_image))
-        script = (
-            f"ids=$(docker ps -q --filter {label})\n"
-            "if [ -z \"$ids\" ]; then\n"
-            f"  printf 'No running Moulin Docker shell container for image: %s\\n' {shlex.quote(docker_image)}\n"
-            "  exit 0\n"
-            "fi\n"
-            f"printf 'Stopping Moulin Docker shell containers for image {shlex.quote(docker_image)}:\\n%s\\n' \"$ids\"\n"
-            "docker stop $ids\n"
-        )
-        return self.session_service.remote_shell_command(remote, project_dir, script)
-
-    def stop_docker_command_for_config(
-        self,
-        config: dict[str, Any],
-        *,
-        docker_image: str,
-    ) -> list[str]:
-        return self.stop_docker_command(
             config_accessors.remote_spec_for_config(config),
             config_accessors.remote_project_dir_for_config(config),
             docker_image,
@@ -345,46 +263,14 @@ if not build_dirs:
     def product_docker_shell_command(self, project_dir: str, docker_image: str) -> str:
         workspace = shlex.quote(project_dir)
         image = shlex.quote(docker_image)
-        label = shlex.quote(self.docker_container_label(docker_image))
-        name = shlex.quote(self.docker_container_name(docker_image))
         return (
             "docker run --network=host --privileged --security-opt apparmor=unconfined "
-            "--label " + label + " "
-            f"--name {name} "
             "-e PYTHONUNBUFFERED=1 "
             '-v "$HOME"/.ssh:/home/builder/.ssh '
             '--mount type=bind,source="$HOME"/.gitconfig,target=/home/builder/.gitconfig '
             '--mount type=bind,source="$HOME"/.git-credentials,target=/home/builder/.git-credentials '
             f"-v {workspace}:/home/builder/workspace "
             f"-it --rm {image} /bin/bash -lc 'cd /home/builder/workspace && exec bash -l'"
-        )
-
-    def product_docker_start_command(self, project_dir: str, docker_image: str) -> str:
-        workspace = shlex.quote(project_dir)
-        image = shlex.quote(docker_image)
-        label = shlex.quote(self.docker_container_label(docker_image))
-        filter_label = shlex.quote("label=" + self.docker_container_label(docker_image))
-        name = shlex.quote(self.docker_container_name(docker_image))
-        return (
-            f"image={image}\n"
-            f"name={name}\n"
-            f"running=$(docker ps -q --filter {filter_label} | head -n 1)\n"
-            "if [ -n \"$running\" ]; then\n"
-            "  printf 'Docker image shell already running: %s\\n' \"$running\"\n"
-            "  exit 0\n"
-            "fi\n"
-            "docker image inspect \"$image\" >/dev/null 2>&1 || { printf 'Docker image is missing: %s\\n' \"$image\" >&2; exit 2; }\n"
-            "docker rm -f \"$name\" >/dev/null 2>&1 || true\n"
-            "docker run --network=host --privileged --security-opt apparmor=unconfined "
-            "--label " + label + " "
-            "--name \"$name\" "
-            "-e PYTHONUNBUFFERED=1 "
-            '-v "$HOME"/.ssh:/home/builder/.ssh '
-            '--mount type=bind,source="$HOME"/.gitconfig,target=/home/builder/.gitconfig '
-            '--mount type=bind,source="$HOME"/.git-credentials,target=/home/builder/.git-credentials '
-            f"-v {workspace}:/home/builder/workspace "
-            "-dit \"$image\" /bin/bash -lc 'cd /home/builder/workspace && while true; do sleep 3600; done'\n"
-            "printf 'Docker image shell started: %s\\n' \"$name\"\n"
         )
 
     def product_docker_command_for_config(self, config: dict[str, Any], docker_image: str, inner_command: str) -> str:

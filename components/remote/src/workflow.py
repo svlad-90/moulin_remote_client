@@ -124,40 +124,6 @@ class RemoteCommandWorkflowService:
             docker_image=docker_image,
         )
 
-    def start_docker_command(
-        self,
-        config: dict[str, Any],
-        *,
-        docker_image: str,
-    ) -> list[str]:
-        return self.build_service.start_docker_command_for_config(
-            config,
-            docker_image=docker_image,
-        )
-
-    def rebuild_docker_command(
-        self,
-        config: dict[str, Any],
-        *,
-        docker_image: str,
-    ) -> list[str]:
-        return self.build_service.rebuild_docker_command_for_config(
-            config,
-            docker_image=docker_image,
-            default_dockerfile=self.default_dockerfile,
-        )
-
-    def stop_docker_command(
-        self,
-        config: dict[str, Any],
-        *,
-        docker_image: str,
-    ) -> list[str]:
-        return self.build_service.stop_docker_command_for_config(
-            config,
-            docker_image=docker_image,
-        )
-
     def bitbake_cleanup_command(
         self,
         config: dict[str, Any],

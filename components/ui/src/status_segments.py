@@ -35,8 +35,6 @@ def preflight_part_ok(part: str) -> bool:
         return False
     return (
         "ok" in lowered
-        or part.startswith("docker running")
-        or part.startswith("docker stopped")
         or part.startswith("cwd ")
         or part.startswith("disk ")
         or part.startswith("git ##")

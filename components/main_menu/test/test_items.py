@@ -2200,7 +2200,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 manifest_cache={},
             )
             app = FakeMenuApp(_config(app_dir), [10])
-            app.preflight_values = {"docker": "running"}
+            app.preflight_values = {"docker": "ok"}
             remote_capture_commands: list[list[str]] = []
             app.remote_capture_command = (
                 lambda argv: remote_capture_commands.append(argv)
@@ -2244,7 +2244,8 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertTrue(any("* /mnt/projects/meta-product" in call[2] and call[3] == 5 for call in app.add_calls))
             self.assertEqual(app.terminal_session.commands[0][0], "ssh")
             self.assertIn("-t", app.terminal_session.commands[0])
-            self.assertIn("docker exec -it", app.terminal_session.commands[0][-1])
+            self.assertIn("docker run", app.terminal_session.commands[0][-1])
+            self.assertIn("-it --rm", app.terminal_session.commands[0][-1])
             self.assertIn("exec bash -l", app.terminal_session.commands[0][-1])
             self.assertEqual(app.terminal_session.commands[1][0], "ssh")
             self.assertIn("-tt", app.terminal_session.commands[1])
@@ -2271,8 +2272,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             cases = [
                 ("missing", ["Build Docker image"]),
                 ("not-configured", ["Build Docker image"]),
-                ("stopped", ["Start Docker image", "Rebuild Docker image"]),
-                ("running", ["Open Docker image shell", "Stop Docker image"]),
+                ("ok", ["Open Docker image shell", "Rebuild Docker image"]),
             ]
             for docker_state, expected_labels in cases:
                 with self.subTest(docker_state=docker_state):

@@ -211,11 +211,8 @@ class RemoteProjectMaintenanceService:
         if not project_dir:
             return self.session_service.connect_command(remote)
         image = shlex.quote(f"{docker_image}:latest") if docker_image else ""
-        docker_label = shlex.quote(f"label=moulin_remote_client.image={docker_image}") if docker_image else ""
         docker_check = (
-            f"if ! docker image inspect {image} >/dev/null 2>&1; then printf 'docker=missing\\n'; "
-            f"elif [ -n \"$(docker ps -q --filter {docker_label} | head -n 1)\" ]; then printf 'docker=running\\n'; "
-            "else printf 'docker=stopped\\n'; fi; "
+            f"docker image inspect {image} >/dev/null 2>&1 && printf 'docker=ok\\n' || printf 'docker=missing\\n'; "
             if image
             else "printf 'docker=not-configured\\n'; "
         )

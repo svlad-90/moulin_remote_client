@@ -385,14 +385,9 @@ class MainMenuCommandItemsService:
 
     def docker_menu_items(self, app: Any) -> list[MenuItem]:
         state = str(getattr(app, "preflight_values", {}).get("docker", "") or "unknown")
-        if state == "running":
+        if state == "ok":
             return [
                 self.open_docker_shell_item(),
-                self.stop_docker_item(),
-            ]
-        if state == "stopped":
-            return [
-                self.start_docker_item(),
                 self.rebuild_docker_item(),
             ]
         return [self.build_docker_item()]
@@ -421,37 +416,13 @@ class MainMenuCommandItemsService:
             requires_project=True,
         )
 
-    def start_docker_item(self) -> MenuItem:
-        return MenuItem(
-            "Start Docker image",
-            "build / docker",
-            "Start a persistent shell container from the configured Docker image.",
-            lambda app: shlex.join(
-                self.remote_command_workflow.start_docker_command(
-                    app.config,
-                    docker_image=app.docker_image,
-                )
-            ),
-            lambda app: self.run_build_command(
-                app,
-                "Start Docker image",
-                self.remote_command_workflow.start_docker_command(
-                    app.config,
-                    docker_image=app.docker_image,
-                ),
-            ),
-            confirm=True,
-            requires_remote=True,
-            requires_project=True,
-        )
-
     def rebuild_docker_item(self) -> MenuItem:
         return MenuItem(
             "Rebuild Docker image",
             "build / docker",
-            "Rebuild the configured Docker image, then start its persistent shell container.",
+            "Rebuild the configured Docker image on the build host.",
             lambda app: shlex.join(
-                self.remote_command_workflow.rebuild_docker_command(
+                self.remote_command_workflow.docker_image_command(
                     app.config,
                     docker_image=app.docker_image,
                 )
@@ -459,7 +430,7 @@ class MainMenuCommandItemsService:
             lambda app: self.run_build_command(
                 app,
                 "Rebuild Docker image",
-                self.remote_command_workflow.rebuild_docker_command(
+                self.remote_command_workflow.docker_image_command(
                     app.config,
                     docker_image=app.docker_image,
                 ),
@@ -473,7 +444,7 @@ class MainMenuCommandItemsService:
         return MenuItem(
             "Open Docker image shell",
             "build / docker",
-            "Open an interactive shell in the running Docker image container; exit returns to this TUI.",
+            "Open an interactive shell inside the configured Docker image; exit stops the container and returns to this TUI.",
             lambda app: shlex.join(
                 self.remote_command_workflow.docker_shell_command(
                     app.config,
@@ -492,31 +463,6 @@ class MainMenuCommandItemsService:
                     docker_image=app.docker_image,
                 ),
             ),
-            requires_remote=True,
-            requires_project=True,
-            allow_during_job=True,
-        )
-
-    def stop_docker_item(self) -> MenuItem:
-        return MenuItem(
-            "Stop Docker image",
-            "build / docker",
-            "Stop the running persistent shell container for the configured Docker image.",
-            lambda app: shlex.join(
-                self.remote_command_workflow.stop_docker_command(
-                    app.config,
-                    docker_image=app.docker_image,
-                )
-            ),
-            lambda app: self.run_build_command(
-                app,
-                "Stop Docker image",
-                self.remote_command_workflow.stop_docker_command(
-                    app.config,
-                    docker_image=app.docker_image,
-                ),
-            ),
-            confirm=True,
             requires_remote=True,
             requires_project=True,
             allow_during_job=True,

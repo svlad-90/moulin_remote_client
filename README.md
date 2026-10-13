@@ -561,11 +561,8 @@ The command shapes are:
 # Build Docker image
 ssh <build-host> 'cd <remote-project> && docker build <context> -f <dockerfile> ...'
 
-# Start Docker image
-ssh <build-host> 'cd <remote-project> && docker run ... -dit <image> ...'
-
 # Open Docker image shell
-ssh -t <build-host> 'docker exec -it <container> /bin/bash ...'
+ssh -t <build-host> 'cd <remote-project> && docker run ... -it --rm <image> ...'
 
 # Regenerate Moulin/Ninja
 ssh <build-host> 'cd <remote-project> && docker run ... moulin <manifest> [params]'
