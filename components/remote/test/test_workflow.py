@@ -147,6 +147,10 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
                 default_dockerfile=client.DEFAULT_DOCKERFILE,
             ),
         )
+        self.assertEqual(
+            service.docker_shell_command(config, docker_image="prod_img"),
+            commands.build_remote_docker_shell_command_for_config(config, docker_image="prod_img"),
+        )
         components = [{"name": "domd", "builder_type": "yocto", "build_dir": "yocto", "work_dir": "build-domd"}]
         self.assertEqual(
             service.bitbake_cleanup_command(config, docker_image="prod_img", components=components),

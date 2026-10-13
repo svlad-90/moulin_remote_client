@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from components.config.api import accessors as config_accessors
 from components.remote.src import session as remote_session
+from components.remote.src import transport
 
 
 class RemoteBuildCommandService:
@@ -61,6 +62,26 @@ class RemoteBuildCommandService:
                 docker_image=docker_image,
                 default_dockerfile=default_dockerfile,
             )
+        )
+
+    def docker_shell_command(self, remote: str, project_dir: str, docker_image: str) -> list[str]:
+        if not docker_image:
+            raise SystemExit("Docker image name is not configured")
+        if not project_dir:
+            raise SystemExit("Remote project directory is not configured")
+        command = self.product_docker_shell_command(project_dir, docker_image)
+        return transport.ssh_command(remote, f"cd {shlex.quote(project_dir)} && {command}", tty="-t")
+
+    def docker_shell_command_for_config(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+    ) -> list[str]:
+        return self.docker_shell_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            docker_image,
         )
 
     def bitbake_cleanup_command(
@@ -237,6 +258,19 @@ if not build_dirs:
             '--mount type=bind,source="$HOME"/.git-credentials,target=/home/builder/.git-credentials '
             f"-v {workspace}:/home/builder/workspace "
             f"-i --rm {image} /bin/bash -lc {inner}"
+        )
+
+    def product_docker_shell_command(self, project_dir: str, docker_image: str) -> str:
+        workspace = shlex.quote(project_dir)
+        image = shlex.quote(docker_image)
+        return (
+            "docker run --network=host --privileged --security-opt apparmor=unconfined "
+            "-e PYTHONUNBUFFERED=1 "
+            '-v "$HOME"/.ssh:/home/builder/.ssh '
+            '--mount type=bind,source="$HOME"/.gitconfig,target=/home/builder/.gitconfig '
+            '--mount type=bind,source="$HOME"/.git-credentials,target=/home/builder/.git-credentials '
+            f"-v {workspace}:/home/builder/workspace "
+            f"-it --rm {image} /bin/bash -lc 'cd /home/builder/workspace && exec bash -l'"
         )
 
     def product_docker_command_for_config(self, config: dict[str, Any], docker_image: str, inner_command: str) -> str:

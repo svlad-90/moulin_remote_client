@@ -288,6 +288,17 @@ class commands:
         return commands._build().docker_command(remote, project_dir, docker_image, dockerfile)
 
     @staticmethod
+    def build_remote_docker_shell_command_for_config(
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+    ) -> list[str]:
+        return commands._build().docker_shell_command_for_config(
+            config,
+            docker_image=docker_image,
+        )
+
+    @staticmethod
     def build_remote_bitbake_cleanup_command_for_config(
         config: dict[str, Any],
         *,
