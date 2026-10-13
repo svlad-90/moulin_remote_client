@@ -122,6 +122,7 @@ class TerminalPortControllerTests(unittest.TestCase):
         self.assertEqual(fake_curses.calls[1], ("use_default_colors", None))
         self.assertIn(("init_pair", (1, fake_curses.COLOR_BLACK, fake_curses.COLOR_CYAN)), fake_curses.calls)
         self.assertIn(("init_pair", (8, fake_curses.COLOR_BLACK, fake_curses.COLOR_GREEN)), fake_curses.calls)
+        self.assertIn(("init_pair", (9, fake_curses.COLOR_BLACK, fake_curses.COLOR_YELLOW)), fake_curses.calls)
 
     def test_read_key_encodes_text_and_handles_empty_queue(self) -> None:
         fake_curses = FakeCurses()

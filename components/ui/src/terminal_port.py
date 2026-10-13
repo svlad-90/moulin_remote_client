@@ -27,6 +27,7 @@ class TerminalPortController:
         curses.init_pair(6, curses.COLOR_WHITE, curses.COLOR_BLUE)
         curses.init_pair(7, curses.COLOR_GREEN, -1)
         curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_GREEN)
+        curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_YELLOW)
 
     def configure_escape_delay(self) -> None:
         try:
@@ -124,6 +125,11 @@ class TerminalPortController:
 
     def warn_attr(self) -> int:
         return curses.color_pair(3) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
+
+    def selected_warn_attr(self) -> int:
+        if curses.has_colors():
+            return curses.color_pair(9) | curses.A_BOLD
+        return curses.A_REVERSE | curses.A_BOLD
 
     def running_attr(self) -> int:
         return self.warn_attr()

@@ -358,7 +358,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(argv[0], "ssh")
         self.assertIn("builder@10.0.0.1", argv)
-        self.assertIn("cd /mnt/projects/meta-product && docker build doc -f doc/Dockerfile", argv[-1])
+        self.assertIn("cd /mnt/projects/meta-product && DOCKER_BUILDKIT=1 docker build doc -f doc/Dockerfile", argv[-1])
         self.assertIn("-t prod_img:latest", argv[-1])
         self.assertEqual(
             argv,

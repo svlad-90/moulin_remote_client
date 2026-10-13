@@ -67,6 +67,7 @@ class JobSessionController:
                 display_command_lines=self.display_command_lines,
                 format_preflight=self.format_preflight,
                 start_pending_auto_board_connect=lambda target: self.connection_workflow_service(target).start_pending_auto_board_connect(target),
+                refresh_build_host_preflight=lambda target: self.connection_workflow_service(target).start_build_host_connect(target),
             ),
         )
 

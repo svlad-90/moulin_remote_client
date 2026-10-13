@@ -47,6 +47,7 @@ class SyncMappingCommandService:
                 if mapping["kind"] == "directory":
                     local_path.mkdir(parents=True, exist_ok=True)
             argv.extend([remote_path + source_suffix, str(local_path) + target_suffix])
+            return self.pull_with_remote_missing_skip_command(mapping, argv, remote_base=remote_base)
         elif direction == "push":
             if not mapping["push"]:
                 if dry_run:
@@ -78,6 +79,33 @@ class SyncMappingCommandService:
 
     def local_log_command(self, *lines: str, exit_code: int = 0) -> list[str]:
         return self.script_service.local_log_command(*lines, exit_code=exit_code)
+
+    def remote_mapping_exists_command(self, mapping: dict[str, Any], *, remote_base: str) -> list[str]:
+        remote, remote_path = self.remote_file_path(mapping, remote_base=remote_base)
+        test_op = "-d" if mapping["kind"] == "directory" else "-e"
+        return transport.ssh_command(remote, f"test {test_op} {shlex.quote(remote_path)}")
+
+    def pull_with_remote_missing_skip_command(
+        self,
+        mapping: dict[str, Any],
+        argv: list[str],
+        *,
+        remote_base: str,
+    ) -> list[str]:
+        check = transport.shell_command(self.remote_mapping_exists_command(mapping, remote_base=remote_base))
+        rsync = transport.shell_command(argv)
+        script = "\n".join(
+            [
+                "set -e",
+                f"if {check}; then",
+                f"  exec {rsync}",
+                "fi",
+                f"printf '%s\\n' {shlex.quote('SKIP pull: ' + str(mapping['name']))}",
+                f"printf '%s\\n' {shlex.quote('reason: remote mapping path does not exist')}",
+                f"printf '%s\\n' {shlex.quote('remote: ' + str(mapping['remote']))}",
+            ]
+        )
+        return ["bash", "-lc", script]
 
     @staticmethod
     def add_push_compare_options(argv: list[str]) -> None:

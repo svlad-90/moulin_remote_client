@@ -124,6 +124,10 @@ def board_ipaddr(board_host: dict[str, Any]) -> str:
     return str(board_host.get("board_ip", "")).strip()
 
 
+def board_mac_address(board_host: dict[str, Any]) -> str:
+    return str(board_host.get("mac_address", "")).strip()
+
+
 def network_deploy_project_name(project: dict[str, Any]) -> str:
     return str(project.get("name", project_dir_name(project) or "project")).strip().strip("/") or "project"
 
@@ -308,6 +312,10 @@ def board_server_ip_for_config(config: dict[str, Any]) -> str:
 
 def board_ipaddr_for_config(config: dict[str, Any]) -> str:
     return board_ipaddr(config_profiles.active_board_host(config))
+
+
+def board_mac_address_for_config(config: dict[str, Any]) -> str:
+    return board_mac_address(config_profiles.active_board_host(config))
 
 
 def network_deploy_project_name_for_config(config: dict[str, Any]) -> str:

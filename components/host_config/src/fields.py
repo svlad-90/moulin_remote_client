@@ -25,7 +25,8 @@ def board_host_fields(host: dict[str, Any] | None = None) -> list[tuple[str, str
         ("NFS root", "nfs_root"),
         ("Deploy subdir", "deploy_subdir"),
         ("TFTP server IP", "server_ip"),
-        ("Target board IP", "board_ip"),
+        ("Board IP", "board_ip"),
+        ("MAC address", "mac_address"),
     ]
     if host is not None:
         fields.extend(

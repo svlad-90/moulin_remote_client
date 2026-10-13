@@ -24,6 +24,7 @@ def empty_host_profile(name: str = "") -> dict[str, Any]:
         "deploy_subdir": "",
         "server_ip": "",
         "board_ip": "",
+        "mac_address": "",
         "commands": {},
     }
 

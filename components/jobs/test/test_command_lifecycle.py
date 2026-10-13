@@ -47,6 +47,7 @@ def _service(
     terminations: list[tuple[int, int]] | None = None,
     sleeps: list[float] | None = None,
     started: list[tuple[dict[str, Any], list[str]]] | None = None,
+    preflight_refreshes: list[Any] | None = None,
 ) -> command_lifecycle.CommandLifecycleService:
     if terminations is None:
         terminations = []
@@ -54,6 +55,8 @@ def _service(
         sleeps = []
     if started is None:
         started = []
+    if preflight_refreshes is None:
+        preflight_refreshes = []
 
     def start_command(job: dict[str, Any], command: list[str], mark_dirty: Any) -> None:
         started.append((job, command))
@@ -68,6 +71,7 @@ def _service(
         display_command_lines=lambda command: ["command: " + " ".join(command)],
         format_preflight=lambda output: ("ok", {"raw": output}),
         start_pending_auto_board_connect=lambda port: port.start_pending_auto_board_connect(),
+        refresh_build_host_preflight=preflight_refreshes.append,
         start_command_process=start_command,
     )
 
@@ -98,7 +102,7 @@ class CommandLifecycleServiceTests(unittest.TestCase):
             ],
         )
 
-    def test_start_next_command_finishes_completed_sequence_and_resets_preflight_when_needed(self) -> None:
+    def test_start_next_command_refreshes_preflight_after_project_maintenance(self) -> None:
         port = FakePort()
         job = jobs.create_command_job(
             title="Prepare remote project",
@@ -107,15 +111,39 @@ class CommandLifecycleServiceTests(unittest.TestCase):
             commands=[],
         )
         port.active_job = job
+        preflight_refreshes: list[Any] = []
 
-        _service().start_next_command(port, job)
+        _service(preflight_refreshes=preflight_refreshes).start_next_command(port, job)
 
         self.assertIsNone(port.active_job)
         self.assertIs(port.last_job, job)
         self.assertIs(port.last_jobs_by_label["Prepare remote project"], job)
-        self.assertEqual(port.status, "Prepare remote project: done; reconnect to refresh preflight")
+        self.assertEqual(port.status, "Prepare remote project: done; refreshing preflight")
         self.assertEqual(port.preflight, "not run")
         self.assertNotIn("header", port.render_cache)
+        self.assertEqual(preflight_refreshes, [port])
+
+    def test_start_next_command_refreshes_preflight_after_checkout_repair(self) -> None:
+        port = FakePort()
+        job = jobs.create_command_job(
+            title="Checkout project Git ref",
+            item_label="Checkout project Git ref",
+            slot="build",
+            commands=[],
+        )
+        port.active_job = job
+        port.preflight = "project ok | ref mismatch:old"
+        port.preflight_values = {"project": "ok", "ref": "mismatch:old"}
+        preflight_refreshes: list[Any] = []
+
+        _service(preflight_refreshes=preflight_refreshes).start_next_command(port, job)
+
+        self.assertIsNone(port.active_job)
+        self.assertIs(port.last_jobs_by_label["Checkout project Git ref"], job)
+        self.assertEqual(port.status, "Checkout project Git ref: done; refreshing preflight")
+        self.assertEqual(port.preflight, "not run")
+        self.assertEqual(port.preflight_values, {})
+        self.assertEqual(preflight_refreshes, [port])
 
     def test_poll_job_advances_successful_command_step(self) -> None:
         port = FakePort()

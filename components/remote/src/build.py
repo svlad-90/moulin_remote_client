@@ -26,7 +26,7 @@ class RemoteBuildCommandService:
         dockerfile_path = PurePosixPath(dockerfile)
         context = "." if str(dockerfile_path.parent) == "." else str(dockerfile_path.parent)
         command = (
-            f"docker build {shlex.quote(context)} -f {shlex.quote(dockerfile)} "
+            f"DOCKER_BUILDKIT=1 docker build {shlex.quote(context)} -f {shlex.quote(dockerfile)} "
             '--build-arg "USER_ID=$(id -u)" '
             '--build-arg "USER_GID=$(id -g)" '
             f"-t {shlex.quote(docker_image + ':latest')}"

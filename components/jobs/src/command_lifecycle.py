@@ -23,6 +23,7 @@ class CommandLifecycleService:
         display_command_lines: Callable[[list[str]], list[str]],
         format_preflight: Callable[[str], tuple[str, dict[str, str]]],
         start_pending_auto_board_connect: Callable[[Any], Any],
+        refresh_build_host_preflight: Callable[[Any], Any],
         start_command_process: Callable[[dict[str, Any], list[str], Callable[[], None]], Any] = job_api.start_command_process,
     ) -> None:
         self.now = now
@@ -32,6 +33,7 @@ class CommandLifecycleService:
         self.display_command_lines = display_command_lines
         self.format_preflight = format_preflight
         self.start_pending_auto_board_connect = start_pending_auto_board_connect
+        self.refresh_build_host_preflight = refresh_build_host_preflight
         self.start_command_process = start_command_process
 
     def finish_job(self, port: Any, job: dict[str, Any] | None = None) -> None:
@@ -63,8 +65,11 @@ class CommandLifecycleService:
             state = dict(plan["state"])
             if state.pop("needs_preflight_reset", False):
                 ui_session_api.reset_preflight(port)
+            needs_preflight_refresh = bool(state.pop("needs_preflight_refresh", False))
             ui_session_api.apply_state(port, state)
             self.finish_job(port, job)
+            if needs_preflight_refresh:
+                self.refresh_build_host_preflight(port)
             return
         start = job_api.prepare_command_step_start(
             job,
@@ -154,6 +159,7 @@ def command_lifecycle_service(
     display_command_lines: Callable[[list[str]], list[str]],
     format_preflight: Callable[[str], tuple[str, dict[str, str]]],
     start_pending_auto_board_connect: Callable[[Any], Any],
+    refresh_build_host_preflight: Callable[[Any], Any],
     start_command_process: Callable[[dict[str, Any], list[str], Callable[[], None]], Any] = job_api.start_command_process,
 ) -> CommandLifecycleService:
     return CommandLifecycleService(
@@ -164,5 +170,6 @@ def command_lifecycle_service(
         display_command_lines=display_command_lines,
         format_preflight=format_preflight,
         start_pending_auto_board_connect=start_pending_auto_board_connect,
+        refresh_build_host_preflight=refresh_build_host_preflight,
         start_command_process=start_command_process,
     )

@@ -498,11 +498,29 @@ Build commands are run on the build host but driven from the local TUI.
 5. The requested build command runs on the build host. Build commands do not
    copy mapped files automatically.
 
-### Incremental Build
+### Incremental Builds
 
-**Incremental build** starts with a component selector. `yocto`, `bazel`, and
-`android` builders are supported. Other builder types are shown disabled until
-a builder-specific incremental flow is added.
+**Incremental rebuild** starts with a component selector, regenerates
+Moulin/Ninja, and rebuilds the selected targets without cleaning Yocto state.
+Use it for the normal edit-build loop after copied mappings were pushed to the
+build host.
+
+**Clean incremental build** uses the same component selector, but first cleans
+the impacted Yocto recipes before regenerating Moulin/Ninja and rebuilding the
+selected targets. Use it when normal incremental rebuilds keep stale Yocto
+state.
+
+The clean/non-clean difference applies only to Yocto. Bazel and Android
+components use the same rebuild commands in both modes.
+
+Neither incremental mode automatically builds the configured full target list.
+The final Ninja step receives the component names selected in the component
+selector. Select image components such as `full.img.gz` or `full_ufs.img.gz`
+when those image targets must be rebuilt, or use **Run product build** to build
+the configured target list.
+
+`yocto`, `bazel`, and `android` builders are supported. Other builder types are
+shown disabled until a builder-specific incremental flow is added.
 
 For copied source mappings, the client tracks which mapped files are already
 accounted for by the last successful build. A regular copy updates the remote
@@ -510,11 +528,10 @@ working tree and records which files changed relative to that state. A
 successful incremental build then advances the state for the selected
 incremental components.
 
-For Yocto components, the incremental flow maps changed layer paths back to
-recipes and runs cleansstate for the impacted recipes before regenerating
-Moulin/Ninja and running the selected Ninja targets. Some final image recipes
-are build targets rather than directly changed files, so they may not appear in
-the impacted-recipe list. The incremental flow also reads
+For Yocto components, the clean incremental flow maps changed layer paths back
+to recipes and runs cleansstate for the impacted recipes. Some final image
+recipes are build targets rather than directly changed files, so they may not
+appear in the impacted-recipe list. The clean incremental flow also reads
 `yocto_image_recipes`; any recipe names listed there, for example
 `rcar-image-adas xt-rcar-image`, are cleaned together with the directly
 impacted recipes.

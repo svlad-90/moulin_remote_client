@@ -518,9 +518,10 @@ def completed_command_sequence_state(job: dict[str, Any]) -> dict[str, Any]:
         "last_exit": rc,
         "status": f"{title}: exit {rc}",
     }
-    if title == "Prepare remote project" and rc == 0:
+    if title in {"Prepare remote project", "Checkout project Git ref"} and rc == 0:
         state["needs_preflight_reset"] = True
-        state["status"] = "Prepare remote project: done; reconnect to refresh preflight"
+        state["needs_preflight_refresh"] = True
+        state["status"] = f"{title}: done; refreshing preflight"
     if title == "Clean project folder" and rc == 0:
         state["preflight"] = "project missing | disk ? | git ? | docker ? | origin ? | ref ?"
         state["preflight_values"] = {
