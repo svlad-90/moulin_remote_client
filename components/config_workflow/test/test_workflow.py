@@ -38,6 +38,10 @@ class FakePort:
         self.rows: list[tuple[int, int, str, int]] = []
         self.prompt_values: dict[str, str] = {}
         self.prompt_cancelled = False
+        self.active_job = None
+        self.board_job = None
+        self.action_running = False
+        self.connection_workflow_service = Mock()
 
     def prompt(self, label: str, current: str = "") -> str:
         return self.prompt_values.get(label, current)
@@ -207,7 +211,10 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
     def test_select_active_remote_uses_profile_picker(self) -> None:
         cfg = {
             "active_remote": "build-a",
-            "remotes": [{"name": "build-a", "host": "10.0.0.1"}, {"name": "build-b", "host": "10.0.0.2"}],
+            "remotes": [
+                {"name": "build-a", "host": "10.0.0.1", "user": "builder"},
+                {"name": "build-b", "host": "10.0.0.2", "user": "builder"},
+            ],
         }
         controller = make_controller(cfg)
         port = FakePort()
@@ -218,6 +225,7 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
         self.assertEqual(cfg["active_remote"], "build-b")
         self.assertEqual(port.status, "Active build host: build-b")
         controller.save_config.assert_called_once_with(cfg)
+        port.connection_workflow_service.return_value.start_build_host_connect.assert_called_once_with(port)
         rendered_text = "\n".join(row[2] for row in port.rows)
         self.assertIn("Select build host", rendered_text)
         self.assertIn("* build-a", rendered_text)
@@ -226,7 +234,10 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
     def test_select_active_board_host_uses_profile_picker(self) -> None:
         cfg = {
             "active_board_host": "board-a",
-            "board_hosts": [{"name": "board-a", "host": "10.0.0.3"}, {"name": "board-b", "host": "10.0.0.4"}],
+            "board_hosts": [
+                {"name": "board-a", "host": "10.0.0.3", "user": "board"},
+                {"name": "board-b", "host": "10.0.0.4", "user": "board"},
+            ],
         }
         controller = make_controller(cfg)
         port = FakePort()
@@ -237,6 +248,7 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
         self.assertEqual(cfg["active_board_host"], "board-b")
         self.assertEqual(port.status, "Active board host: board-b")
         controller.save_config.assert_called_once_with(cfg)
+        port.connection_workflow_service.return_value.start_board_host_connect.assert_called_once_with(port)
 
     def test_select_active_remote_cancel_keeps_current_profile(self) -> None:
         cfg = {"active_remote": "build-a", "remotes": [{"name": "build-a"}]}

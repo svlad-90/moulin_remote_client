@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from components.config.api import accessors as config_accessor_api
 from components.config.api import profiles as config_profile_api
 from components.ui.api import input as ui_input_api
 from components.ui.api import session as ui_session_api
@@ -60,13 +61,27 @@ class ProfileActionController:
         self.save_config(self.config)
         port.status = str(plan["status"])
 
+    def _host_switch_blocked(self, port: Any) -> bool:
+        if port.active_job is not None or port.board_job is not None:
+            port.status = "Wait for the running action before switching hosts"
+            return True
+        if port.action_running:
+            port.status = "Close the interactive action before switching hosts"
+            return True
+        return False
+
     def set_active_board_host(self, port: Any, host: dict[str, Any]) -> None:
+        if str(host.get("name", "")) != str(self.config.get("active_board_host", "")):
+            if self._host_switch_blocked(port):
+                return
         plan = config_profile_api.apply_active_board_host_profile_for_config(self.config, host)
         if plan["connection_reset"]:
             port.board_connection_state = "disconnected"
         if plan["changed"]:
             self.save_config(self.config)
         port.status = str(plan["status"])
+        if plan["changed"] and config_accessor_api.board_host_has_ssh_for_config(self.config):
+            port.connection_workflow_service().start_board_host_connect(port)
 
     def delete_remote(self, port: Any, remote: dict[str, Any]) -> None:
         name = str(remote.get("name", ""))
@@ -99,6 +114,9 @@ class ProfileActionController:
         port.status = str(plan["status"])
 
     def set_active_remote(self, port: Any, remote: dict[str, Any]) -> None:
+        if str(remote.get("name", "")) != str(self.config.get("active_remote", "")):
+            if self._host_switch_blocked(port):
+                return
         plan = config_profile_api.apply_active_remote_profile_for_config(self.config, remote)
         if plan["connection_reset"]:
             port.connection_state = "disconnected"
@@ -107,6 +125,8 @@ class ProfileActionController:
         if plan["changed"]:
             self.save_config(self.config)
         port.status = str(plan["status"])
+        if plan["changed"] and config_accessor_api.remote_has_ssh_for_config(self.config):
+            port.connection_workflow_service().start_build_host_connect(port)
 
     def delete_project_profile(self, port: Any, project: dict[str, Any]) -> None:
         name = str(project.get("name", ""))

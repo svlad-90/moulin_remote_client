@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import shlex
-from pathlib import PurePosixPath
 from typing import Any, Callable
 
 from components.config.api import accessors as config_accessors
@@ -24,10 +23,8 @@ class RemoteBuildCommandService:
             raise SystemExit("Docker image name is not configured")
         if not dockerfile:
             raise SystemExit("Dockerfile is not configured")
-        dockerfile_path = PurePosixPath(dockerfile)
-        context = "." if str(dockerfile_path.parent) == "." else str(dockerfile_path.parent)
         command = (
-            f"DOCKER_BUILDKIT=1 docker build {shlex.quote(context)} -f {shlex.quote(dockerfile)} "
+            f"DOCKER_BUILDKIT=1 docker build . -f {shlex.quote(dockerfile)} "
             '--build-arg "USER_ID=$(id -u)" '
             '--build-arg "USER_GID=$(id -g)" '
             f"-t {shlex.quote(docker_image + ':latest')}"
@@ -352,7 +349,7 @@ if not build_dirs:
         dry_run: bool = True,
     ) -> list[str]:
         mode = mode.strip()
-        if mode not in {"artifacts", "directory", "build_output", "yocto_component_clean", "yocto_component_sstate", "all"}:
+        if mode not in {"artifacts", "directory", "build_output", "yocto_component_clean", "yocto_component_sstate", "bitbake_cache", "all"}:
             raise ValueError(f"unsupported clean mode: {mode}")
         payload = base64.b64encode(json.dumps(components, sort_keys=True).encode("utf-8")).decode("ascii")
         script = r'''
@@ -556,12 +553,25 @@ def yocto_component_build_dirs(component: dict[str, object]) -> tuple[list[Path]
     return sorted(path for path in Path("yocto").glob("build-*") if (path / "conf/bblayers.conf").exists()), False
 
 
-def clean_yocto_work(component: dict[str, object], *, task: str) -> int:
+def clean_yocto_work(component: dict[str, object], *, task: str, dependencies: bool = False) -> int:
     name = str(component.get("name", "")).strip()
     recipe = str(component.get("target", "")).strip()
     if not recipe:
         print(f"ERROR: no Yocto recipe target for {name or '<unnamed>'}")
         return 1
+    if dependencies:
+        if not safe_relative_path(name):
+            print("ERROR: no safe Moulin component name for configuration")
+            return 1
+        config_rc = run(f"ninja {shlex.quote('conf-' + name)}", label=f"prepare configuration for {name}")
+        if config_rc:
+            return config_rc
+    task_command = f"bitbake -c {shlex.quote(task)} {shlex.quote(recipe)}"
+    if dependencies:
+        task_command = (
+            f"bitbake -g {shlex.quote(recipe)} && test -s pn-buildlist && "
+            "xargs -r -a pn-buildlist bitbake -c cleansstate"
+        )
     rc = 0
     matched = 0
     build_dirs, exact_build_dir = yocto_component_build_dirs(component)
@@ -570,7 +580,7 @@ def clean_yocto_work(component: dict[str, object], *, task: str) -> int:
         return 1
     for build_dir in build_dirs:
         if exact_build_dir:
-            command = f"{bitbake_setup(build_dir)} && bitbake -c {shlex.quote(task)} {shlex.quote(recipe)}"
+            command = f"{bitbake_setup(build_dir)} && {task_command}"
             matched += 1
             rc = run(command, label=f"{task} {recipe} in {build_dir}") or rc
             continue
@@ -580,7 +590,7 @@ def clean_yocto_work(component: dict[str, object], *, task: str) -> int:
             print(f"skip {name or recipe} in {build_dir}: {reason}")
             continue
         matched += 1
-        command = f"{bitbake_setup(build_dir)} && bitbake -c {shlex.quote(task)} {shlex.quote(recipe)}"
+        command = f"{bitbake_setup(build_dir)} && {task_command}"
         rc = run(command, label=f"{task} {recipe} in {build_dir}") or rc
     if matched == 0:
         print(f"ERROR: selected Yocto component {name or recipe} target {recipe} was not found in any yocto/build-* directory")
@@ -600,6 +610,8 @@ def main() -> int:
             rc = remove_component_directory(component) or rc
         if MODE == "build_output":
             rc = remove_build_output(component) or rc
+        if component.get("builder_type") == "yocto" and MODE == "bitbake_cache":
+            rc = clean_yocto_work(component, task="cleansstate", dependencies=True) or rc
         if component.get("builder_type") == "yocto" and MODE in {"yocto_component_clean", "yocto_component_sstate", "all"}:
             task = "clean" if MODE == "yocto_component_clean" else "cleansstate"
             rc = clean_yocto_work(component, task=task) or rc

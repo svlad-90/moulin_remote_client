@@ -129,6 +129,14 @@ Board commands are provided by the selected board type.
 The TFTP/NFS tab groups network-boot artifact deployment and workspace
 maintenance commands.
 
+Use **Unpack Android image on NFS** to expand the archive already on the
+board host and republish the image in the DomD rootfs without uploading it
+again. The archive is kept for subsequent unpack operations.
+
+After updating the client, run **Install NFS deploy helper** once on the
+board host to enable archive retention. If an older helper already removed
+the archive, run **Deploy Android image to NFS** once to upload it again.
+
 ![TFTP and NFS commands](docs/screenshots/tftp-nfs-commands.png)
 
 ## Repository Layout
@@ -548,6 +556,15 @@ the corresponding generated clean targets on the build host. It is useful when
 the generated Ninja graph is still valid but selected build outputs need to be
 rebuilt from scratch.
 
+**Clean bitbake cache**, inside that menu, accepts one or more Yocto components.
+It prepares their Moulin configuration, generates each image's recipe dependency
+list with `bitbake -g`, and runs only `cleansstate` for those recipes. It removes
+local sstate and build outputs, but keeps downloaded sources and does not start
+a build. Stop other builds first: shared sstate may also be used by other domains.
+Remote sstate mirrors are not cleared; use `--no-setscene` for a subsequent build
+that must not restore their cached results. Component selection starts empty;
+dry-run remains enabled by default.
+
 **Clean-up BitBake server** stops the remote BitBake server for the configured
 Yocto build directory.
 
@@ -601,7 +618,7 @@ The built-in `gen5_x5h` workflow is:
      but does not delete unrelated stale files already present on the board
      host.
 
-2. **Flash bootloaders**
+2. **Flash bootloaders (flash mode)**
    - Deploy `board_tools/flash_bootloaders.py` to the board host.
    - Run the X5H flash mode helper.
    - Unpack boot artifacts under `<work dir>/artifacts`.
@@ -612,6 +629,47 @@ The built-in `gen5_x5h` workflow is:
      ```
 
    - Switch the board to boot mode.
+
+**Flash bootloaders** opens a TUI multi-selection menu containing the UFS images from
+`x5h_bootloaders.yaml` from prepared IPL files. **Copy build artifacts**, with
+`boot_artifacts` selected, extracts IPLs once on the board host. Opening the
+submenu reads the extracted YAML; all its UFS entries are checked by default.
+Missing files cause an error before rebooting. Space toggles an image, `a`
+selects all, and `n` clears the selection. No saved image list or compressed archive is read.
+For previously copied artifacts, repeat **Copy build artifacts** once.
+If no files are prepared, the action reports this without rebooting the board.
+If boot artifacts have not been built, build `boot_artifacts` first; copying
+does not trigger a build. Keep exactly one boot-artifacts archive in the
+board-host artifacts directory during copying. Select all images or a subset
+and confirm their UFS addresses before writing. Close any serial-console
+session first. All selected files are validated before the action power-cycles the board once in boot
+mode and interrupts autoboot. Existing U-Boot `ipaddr` and `serverip` are used
+by default. Nonempty `board_ip` or `server_ip` in the board-host configuration
+override only the corresponding variable and are verified. Empty values do not
+change U-Boot networking. These environment changes are not saved.
+Images are written sequentially in YAML order without reboots between them.
+The first error stops the remaining writes; earlier writes are not rolled back.
+Preparation failures stop the action before any IPL is written. After flashing,
+the board stays at the U-Boot prompt. The configured board work directory
+must be writable and served beneath the configured TFTP root.
+
+Board power sequencing, autoboot interruption, and U-Boot commands live in
+`board_tools/gen5_x5h_uboot.py`. Restart, U-Boot console, environment setup,
+and IPL preparation use this shared helper. For an IPL subset, preparation
+and flashing are separate steps; the archive/flashing helper does not reboot
+the board. The shared helper source is sent over SSH, without a remote module
+installation.
+
+**Flash bootloaders (flash mode)** retains the separate original flash-mode flow
+for boards that cannot reach U-Boot. It is not needed for normal UFS subset updates.
+
+Prepared IPLs live under `artifacts/.moulin-ipls/`. Each update publishes a
+new snapshot atomically; an existing selection stays bound to its snapshot.
+Old snapshots are retained so a later copy cannot replace a selected image.
+
+The single-IPL flasher supports TFTP subdirectories and zero-pads the final
+UFS block. This flow is for debug reflashing only; use **Flash bootloaders**
+for a complete release update.
 
 3. **Flash UFS image**
    - Deploy `board_tools/xt-imager.py`.

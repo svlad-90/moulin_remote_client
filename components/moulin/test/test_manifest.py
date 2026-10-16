@@ -103,6 +103,36 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
         self.assertEqual(calls, [("prod", "prod.yaml")])
 
     @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
+    def test_load_manifest_for_config_falls_back_when_remote_returns_no_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "overlay"
+            local.mkdir()
+            (local / "prod.yaml").write_text("min_ver: '1.0'\nimages:\n  full_ufs: {}\n", encoding="utf-8")
+            config = {
+                "remotes": [{"name": "build", "user": "builder", "host": "10.0.0.1", "projects_dir": "/mnt/projects"}],
+                "active_remote": "build",
+                "projects": [
+                    {
+                        "name": "prod",
+                        "project_dir": "meta-product",
+                        "local_project_dir": str(local),
+                        "moulin_manifest": "prod.yaml",
+                    }
+                ],
+                "active_project": "prod",
+            }
+
+            data = manifest.load_manifest_for_config(
+                config,
+                app_dir=root,
+                remote_read_project_file=lambda _config, _path: "",
+                cache={},
+            )
+
+            self.assertEqual(data, {"min_ver": "1.0", "images": {"full_ufs": {}}})
+
+    @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
     def test_build_runtime_context_for_config_merges_manifest_defaults_and_project_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -117,6 +147,9 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
                         "    no: {}",
                         "    yes:",
                         "      default: 'true'",
+                        "  CUSTOM:",
+                        "    default:",
+                        "      default: 'true'",
                     ]
                 ),
                 encoding="utf-8",
@@ -128,7 +161,7 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
                         "name": "prod",
                         "local_project_dir": str(local),
                         "moulin_manifest": "prod.yaml",
-                        "parameters": {"ENABLE_ANDROID": "no", "CUSTOM": "value"},
+                        "parameters": {"BB_PRIORITY": "high", "ENABLE_ANDROID": "no", "CUSTOM": "value"},
                         "targets": "boot_artifacts",
                         "board_artifacts": "full_ufs.img.gz",
                         "docker_image": "project-image",

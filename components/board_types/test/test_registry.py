@@ -27,7 +27,8 @@ class BoardTypeRegistryTests(unittest.TestCase):
             [
                 ("open_board_host_shell", "Open board host shell"),
                 ("copy_build_artifacts", "Copy build artifacts"),
-                ("flash_bootloaders", "Flash bootloaders"),
+                ("flash_bootloaders", "Flash bootloaders (flash mode)"),
+                ("flash_single_ipl", "Flash bootloaders"),
                 ("flash_ufs_image", "Flash UFS image"),
                 ("restart_board", "Restart board"),
                 ("open_board_serial_console", "Open board serial console"),
@@ -36,15 +37,16 @@ class BoardTypeRegistryTests(unittest.TestCase):
                 ("deploy_network_domd_rootfs", "Deploy DomD NFS rootfs"),
                 ("deploy_network_domu_rootfs", "Deploy DomU NFS rootfs"),
                 ("deploy_network_android", "Deploy Android image to NFS"),
+                ("unpack_network_android", "Unpack Android image on NFS"),
                 ("deploy_network_full", "Deploy full TFTP/NFS set"),
                 ("install_nfs_deploy_helper", "Install NFS deploy helper"),
-                ("inject_invasive_uboot_parameters", "Inject invasive U-Boot parameters"),
                 ("pull_network_workspace", "Pull TFTP/NFS workspace"),
                 ("push_network_workspace", "Push TFTP/NFS workspace"),
                 ("pull_dom0_initramfs_workspace", "Pull Dom0 initramfs workspace"),
                 ("push_dom0_initramfs_workspace", "Push Dom0 initramfs workspace"),
                 ("apply_uboot_network_env", "Apply U-Boot network env"),
                 ("apply_uboot_ufs_env", "Apply U-Boot UFS env"),
+                ("inject_invasive_uboot_parameters", "Inject invasive U-Boot parameters"),
             ],
         )
 
