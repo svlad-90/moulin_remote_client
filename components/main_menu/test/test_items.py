@@ -396,9 +396,9 @@ class MainMenuBuilderTests(unittest.TestCase):
                 tftp_setup_labels,
                 [
                     "Install NFS deploy helper",
-                    "Inject invasive U-Boot parameters",
                     "Apply U-Boot network env",
                     "Apply U-Boot UFS env",
+                    "Inject invasive U-Boot parameters",
                 ],
             )
             self.assertEqual(
@@ -408,6 +408,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Deploy DomD NFS rootfs",
                     "Deploy DomU NFS rootfs",
                     "Deploy Android image to NFS",
+                    "Unpack Android image on NFS",
                     "Deploy full TFTP/NFS set",
                     "Pull TFTP/NFS workspace",
                     "Push TFTP/NFS workspace",
@@ -417,9 +418,9 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Push Dom0 initramfs workspace",
                     "Open local Dom0 initramfs workspace",
                     "Install NFS deploy helper",
-                    "Inject invasive U-Boot parameters",
                     "Apply U-Boot network env",
                     "Apply U-Boot UFS env",
+                    "Inject invasive U-Boot parameters",
                     "Stop current board command",
                     "Open remote TFTP root",
                     "Open remote NFS root",
@@ -1308,12 +1309,25 @@ class MainMenuBuilderTests(unittest.TestCase):
             manifest_text = "\n".join(
                 [
                     "min_ver: '1.0'",
+                    "parameters:",
+                    "  ENABLE_DOMU:",
+                    "    no:",
+                    "      default: true",
+                    "    yes:",
+                    "      overrides:",
+                    "        variables:",
+                    "          DOMU_DIR: selected-domu",
                     "components:",
                     "  domd:",
                     "    build-dir: yocto",
                     "    builder:",
                     "      type: yocto",
                     "      build_target: rcar-image-adas",
+                    "  domu:",
+                    "    build-dir: '%{DOMU_DIR}'",
+                    "    builder:",
+                    "      type: yocto",
+                    "      build_target: xt-rcar-image",
                     "  doma_kernel:",
                     "    build-dir: android_kernel",
                     "    builder:",
@@ -1336,13 +1350,18 @@ class MainMenuBuilderTests(unittest.TestCase):
                 manifest_cache={},
             )
             app = FakeApp(_config(app_dir))
-            app.build_params = {"ENABLE_ANDROID": "no"}
+            app.build_params = {"ENABLE_ANDROID": "no", "ENABLE_DOMU": "yes"}
 
             cleanable = builder.command_items.cleanable_components(app, mode="directory")
 
             self.assertEqual(
                 [(component["name"], component.get("build_dir", ""), component["supported"]) for component in cleanable],
-                [("domd", "yocto", True), ("doma_kernel", "android_kernel", True), ("doma", "android", True)],
+                [
+                    ("domd", "yocto", True),
+                    ("domu", "selected-domu", True),
+                    ("doma_kernel", "android_kernel", True),
+                    ("doma", "android", True),
+                ],
             )
 
     def test_directory_cleanup_filters_missing_remote_component_directories(self) -> None:
@@ -1400,7 +1419,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertIn("android", probe_script)
             self.assertIn("artifacts", probe_script)
 
-    def test_directory_cleanup_hides_successfully_removed_components(self) -> None:
+    def test_directory_cleanup_rechecks_removed_and_recreated_components(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
             manifest_text = "\n".join(
@@ -1440,14 +1459,83 @@ class MainMenuBuilderTests(unittest.TestCase):
             builder.command_items.confirm_component_clean = lambda _app, **_kwargs: True
 
             result = builder.command_items.run_component_clean(app, mode="directory", dry_run=False)
+            app.remote_capture_command = lambda _argv: "domd\n"
             cleanable = builder.command_items.cleanable_components(app, mode="directory")
 
             self.assertEqual(result, 0)
-            self.assertEqual(app.cleaned_component_directories, {"doma_kernel", "doma"})
             self.assertEqual(
                 [(component["name"], component.get("build_dir", ""), component["supported"]) for component in cleanable],
                 [("domd", "yocto", True)],
             )
+            app.remote_capture_command = lambda _argv: "domd\ndoma_kernel\ndoma\n"
+            recreated = builder.command_items.cleanable_components(app, mode="directory")
+
+            self.assertEqual([component["name"] for component in recreated], ["doma_kernel", "doma", "domd"])
+
+    def test_cleanup_modes_start_without_selected_components(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            components = [{"name": "domu", "builder_type": "yocto", "supported": True}]
+            builder.command_items.cleanable_components = lambda _app, **_kwargs: components
+            builder.command_items.incremental_change_state = lambda _app, _components: {
+                "mappings": ["product.yaml"],
+                "components": ["domu"],
+            }
+            for mode in (
+                "directory", "artifacts", "build_output",
+                "yocto_component_clean", "yocto_component_sstate", "bitbake_cache", "all",
+            ):
+                for dry_run in (True, False):
+                    with self.subTest(mode=mode, dry_run=dry_run):
+                        app = FakeMenuApp(_config(app_dir), [10])
+                        runtime_api.save_runtime_incremental_components(app.config, app_dir, ["domu"])
+
+                        builder.command_items.run_component_clean(app, mode=mode, dry_run=dry_run)
+
+                        self.assertEqual(app.status, "Back to cleanup mode selection: no components selected")
+                        self.assertEqual(app.workflow.command_calls, [])
+                        self.assertEqual(app.dialog_workflow.confirm_calls, [])
+
+    def test_bitbake_cache_menu_supports_yocto_and_warns_about_shared_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [ord("j")] * 5 + [10])
+            action = builder.command_items.select_component_clean_action(app)
+            self.assertEqual(action["label"], "Clean bitbake cache")
+            self.assertEqual(action["mode"], "bitbake_cache")
+            builder.command_items.manifest_components = lambda _app: [
+                {"name": "domu", "builder_type": "yocto", "target": "rcar-image-adas"},
+                {"name": "doma", "builder_type": "android", "build_dir": "android"},
+                {"name": "doma_kernel", "builder_type": "bazel", "build_dir": "android_kernel"},
+            ]
+            components = builder.command_items.cleanable_components(app, mode="bitbake_cache")
+            self.assertEqual([component["supported"] for component in components], [True, False, False])
+            self.assertTrue(builder.command_items.confirm_component_clean(
+                app, selected_names=["dom0", "domu"], mode="bitbake_cache", dry_run=False,
+            ))
+            content = app.dialog_workflow.confirm_calls[-1]
+            self.assertIn("Shared sstate", content.warning)
+            self.assertIn("dom0, domu", content.subject)
 
     def test_component_clean_confirm_uses_popup_dialog(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2238,7 +2326,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             )
             self.assertEqual(len(remote_capture_commands), 1)
             self.assertIn("git -C \"$candidate\" rev-parse --show-toplevel", remote_capture_commands[0][-1])
-            self.assertIn("status --porcelain", remote_capture_commands[0][-1])
+            self.assertIn("timeout 3s git -C \"$root\" status --porcelain --untracked-files=no", remote_capture_commands[0][-1])
             self.assertEqual(app.terminal_session.directory_paths[0], "/mnt/projects/meta-product")
             self.assertTrue(any("* /mnt/projects/meta-product" in call[2] for call in app.add_calls))
             self.assertTrue(any("* /mnt/projects/meta-product" in call[2] and call[3] == 5 for call in app.add_calls))
@@ -2290,6 +2378,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             mapped_dir.mkdir(parents=True)
             subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
             (mapped_dir / "changed.txt").write_text("dirty\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "layers/meta-demo/changed.txt"], check=True)
             builder = items.main_menu_builder(
                 app_dir=app_dir,
                 default_config_path=app_dir / "config.json",
@@ -2309,6 +2398,7 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), f"dirty\t{repo}")
+            self.assertIn("timeout 3s git -C \"$root\" status --porcelain --untracked-files=no", command)
 
     def test_configure_copied_artifacts_opens_board_artifact_selector(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2390,6 +2480,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Deploy DomD NFS rootfs",
                     "Deploy DomU NFS rootfs",
                     "Deploy Android image to NFS",
+                    "Unpack Android image on NFS",
                     "Deploy full TFTP/NFS set",
                 ],
             )

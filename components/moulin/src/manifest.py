@@ -164,8 +164,9 @@ def load_manifest_for_config(
             return cache[cache_key]
         try:
             result = load_manifest_text(remote_read_project_file(config, manifest_name))
-            cache[cache_key] = result
-            return result
+            if is_manifest_data(result):
+                cache[cache_key] = result
+                return result
         except Exception:
             pass
     return load_manifest_file(resolve_manifest_path_for_config(config, app_dir, default_moulin_manifest))
@@ -265,20 +266,27 @@ def build_runtime_context_for_config(
     remote_read_project_file: Callable[[dict[str, Any], str], str],
     cache: dict[tuple[str, str, str], dict[str, Any]],
 ) -> dict[str, Any]:
+    manifest_params = default_parameters_for_config(
+        config,
+        app_dir=app_dir,
+        remote_read_project_file=remote_read_project_file,
+        cache=cache,
+        default_moulin_manifest=default_moulin_manifest,
+    )
     context = config_runtime.build_runtime_context_for_config(
         config,
         app_dir=app_dir,
         env=env,
         default_docker_image=default_docker_image,
         default_build_targets=default_build_targets,
-        default_parameters=lambda: default_parameters_for_config(
-            config,
-            app_dir=app_dir,
-            remote_read_project_file=remote_read_project_file,
-            cache=cache,
-            default_moulin_manifest=default_moulin_manifest,
-        ),
+        default_parameters=lambda: dict(manifest_params),
     )
+    if manifest_params:
+        context["build_params"] = {
+            name: value
+            for name, value in dict(context["build_params"]).items()
+            if name in manifest_params
+        }
     target_candidates = target_candidates_for_config(
         config,
         app_dir=app_dir,
@@ -576,13 +584,15 @@ def expanded_string_list(value: Any, variables: dict[str, str]) -> list[str]:
 def component_builders_from_manifest(
     data: dict[str, Any],
     build_params: dict[str, str] | None = None,
+    *,
+    include_disabled: bool = False,
 ) -> list[dict[str, Any]]:
     effective = effective_manifest(data, build_params)
     variables = effective_variables(effective)
     components = effective.get("components", {}) if isinstance(effective.get("components", {}), dict) else {}
     result: list[dict[str, str]] = []
     for name, raw in components.items():
-        if not component_enabled_by_params(str(name), build_params):
+        if not include_disabled and not component_enabled_by_params(str(name), build_params):
             continue
         builder = raw.get("builder", {}) if isinstance(raw, dict) else {}
         if not isinstance(builder, dict):
@@ -630,6 +640,7 @@ def component_builders_for_config(
     cache: dict[tuple[str, str, str], dict[str, Any]],
     default_moulin_manifest: str = "product.yaml",
     build_params: dict[str, str] | None = None,
+    include_disabled: bool = False,
 ) -> list[dict[str, Any]]:
     data = load_manifest_for_config(
         config,
@@ -649,6 +660,7 @@ def component_builders_for_config(
             cache=cache,
             default_moulin_manifest=default_moulin_manifest,
         ),
+        include_disabled=include_disabled,
     )
 
 

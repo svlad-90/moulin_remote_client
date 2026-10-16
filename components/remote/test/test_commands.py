@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import io
 import json
 import re
 import shlex
 import unittest
+from unittest.mock import patch
 
 import moulin_remote_client as client
 from components.config.api import accessors as config_accessors
@@ -358,7 +361,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(argv[0], "ssh")
         self.assertIn("builder@10.0.0.1", argv)
-        self.assertIn("cd /mnt/projects/meta-product && DOCKER_BUILDKIT=1 docker build doc -f doc/Dockerfile", argv[-1])
+        self.assertIn("cd /mnt/projects/meta-product && DOCKER_BUILDKIT=1 docker build . -f doc/Dockerfile", argv[-1])
         self.assertIn("-t prod_img:latest", argv[-1])
         self.assertEqual(
             argv,
@@ -708,6 +711,55 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         self.assertIn("yocto_component_build_dirs(component)", argv[-1])
         self.assertIn("Path(base) / work_dir", argv[-1])
         self.assertEqual(clean_command_components(argv), components)
+
+    def test_bitbake_cache_cleans_selected_dependency_graphs_without_building(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        components = [
+            {"name": name, "builder_type": "yocto", "target": target,
+             "build_dir": "yocto", "work_dir": f"build-{name}"}
+            for name, target in (("dom0", "core-image-thin-initramfs"), ("domu", "rcar-image-adas"))
+        ]
+        components.append({"name": "doma", "builder_type": "android", "target": "doma"})
+        for dry_run in (True, False):
+            with self.subTest(dry_run=dry_run):
+                argv = commands.build_remote_component_clean_command_for_config(
+                    config, docker_image="prod_img", components=components,
+                    mode="bitbake_cache", dry_run=dry_run,
+                )
+                inner = next(token for token in shlex.split(argv[-1]) if "from __future__ import annotations" in token)
+                source = inner.split("from __future__ import annotations", 1)[1]
+                source = source.split("raise SystemExit(main())", 1)[0]
+                namespace = {}
+                exec("from __future__ import annotations" + source, namespace)
+                calls = []
+
+                def record(command, *, label):
+                    calls.append(command)
+                    return 0
+
+                with contextlib.redirect_stdout(io.StringIO()):
+                    if dry_run:
+                        with patch("subprocess.run", side_effect=AssertionError("dry-run executed a process")):
+                            self.assertEqual(namespace["main"](), 0)
+                    else:
+                        namespace["run"] = record
+                        self.assertEqual(namespace["main"](), 0)
+                if not dry_run:
+                    self.assertEqual(calls, [
+                        "ninja conf-dom0",
+                        ". yocto/openembedded-core/oe-init-build-env yocto/build-dom0 >/dev/null && "
+                        "bitbake -g core-image-thin-initramfs && test -s pn-buildlist && "
+                        "xargs -r -a pn-buildlist bitbake -c cleansstate",
+                        "ninja conf-domu",
+                        ". yocto/openembedded-core/oe-init-build-env yocto/build-domu >/dev/null && "
+                        "bitbake -g rcar-image-adas && test -s pn-buildlist && "
+                        "xargs -r -a pn-buildlist bitbake -c cleansstate",
+                    ])
+                    calls.clear()
+                    namespace["run"] = lambda command, **_kwargs: calls.append(command) or 17
+                    self.assertEqual(namespace["clean_yocto_work"](components[0], task="cleansstate", dependencies=True), 17)
+                    self.assertEqual(calls, ["ninja conf-dom0"])
 
     def test_component_clean_command_removes_build_outputs(self) -> None:
         config = sample_config()

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import gzip
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -78,6 +82,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("Copy build artifacts", argv[1][2])
         self.assertIn("boot_artifacts: artifacts/boot.tar (manifest component target_images)", argv[1][2])
         self.assertIn("full_ufs.img.gz: full_ufs.img.gz (manifest image output)", argv[1][2])
+        self.assertEqual(len(argv), 3)
+        self.assertIn('--prepare', argv[-1][-1])
+        self.assertIn('.moulin-ipls', argv[-1][-1])
 
     def test_workflow_runs_copy_build_artifacts_with_scenario_title(self) -> None:
         config = sample_copy_config()
@@ -111,6 +118,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
                 "open_board_host_shell",
                 "copy_build_artifacts",
                 "flash_bootloaders",
+                "flash_single_ipl",
                 "flash_ufs_image",
                 "restart_board",
                 "open_board_serial_console",
@@ -119,20 +127,21 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
                 "deploy_network_domd_rootfs",
                 "deploy_network_domu_rootfs",
                 "deploy_network_android",
+                "unpack_network_android",
                 "deploy_network_full",
                 "install_nfs_deploy_helper",
-                "inject_invasive_uboot_parameters",
                 "pull_network_workspace",
                 "push_network_workspace",
                 "pull_dom0_initramfs_workspace",
                 "push_dom0_initramfs_workspace",
                 "apply_uboot_network_env",
                 "apply_uboot_ufs_env",
+                "inject_invasive_uboot_parameters",
             ],
         )
         self.assertEqual(
-            [action.label for action in actions[:5]],
-            ["Open board host shell", "Copy build artifacts", "Flash bootloaders", "Flash UFS image", "Restart board"],
+            [action.label for action in actions[:6]],
+            ["Open board host shell", "Copy build artifacts", "Flash bootloaders (flash mode)", "Flash bootloaders", "Flash UFS image", "Restart board"],
         )
         self.assertTrue(next(action for action in actions if action.action_id == "open_board_host_shell").interactive)
         self.assertTrue(next(action for action in actions if action.action_id == "open_board_serial_console").interactive)
@@ -194,14 +203,15 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("Deploy DomU NFS rootfs", domu_rootfs[1][-1])
         self.assertIn("Installing DomU rootfs on board host", domu_rootfs[1][-1])
         self.assertIn("testrpi5@10.13.64.242:/srv/nfs/vgoncharuk/projects/prod/rootfs/domu/.moulin-domu-rootfs.tar.bz2", domu_rootfs[1][-1])
-        self.assertIn("android_only.img", android[0][-1])
-        self.assertIn("rsync -azS", android[0][-1])
+        self.assertIn("android_only.img.gz", android[0][-1])
+        self.assertIn("rsync -az", android[0][-1])
+        self.assertNotIn("rsync -azS", android[0][-1])
         self.assertIn("--inplace", android[0][-1])
         self.assertIn("--info=progress2", android[0][-1])
         self.assertIn("--stats", android[0][-1])
         self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --prepare-android /srv/nfs/vgoncharuk/projects/prod testrpi5", android[0][-1])
-        self.assertIn("testrpi5@10.13.64.242:/srv/nfs/vgoncharuk/projects/prod/.moulin-android_only.img", android[0][-1])
-        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --install-android /srv/nfs/vgoncharuk/projects/prod /srv/nfs/vgoncharuk/projects/prod/.moulin-android_only.img", android[0][-1])
+        self.assertIn("testrpi5@10.13.64.242:/srv/nfs/vgoncharuk/projects/prod/.moulin-android_only.img.gz", android[0][-1])
+        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --install-android /srv/nfs/vgoncharuk/projects/prod /srv/nfs/vgoncharuk/projects/prod/.moulin-android_only.img.gz", android[0][-1])
         self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --refresh-current /srv/nfs/vgoncharuk/projects /srv/nfs/vgoncharuk/projects/current prod", android[0][-1])
         self.assertNotIn("MOULIN_STREAM_FILE", android[0][-1])
         self.assertNotIn("cat >", android[0][-1])
@@ -233,7 +243,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("setenv user_vgoncharuk", uboot[1][-1])
         self.assertIn("env import -t ${loadaddr} ${filesize}; run bootcmd_moulin", uboot[1][-1])
         self.assertNotIn("setenv bootcmd", uboot[1][-1])
-        self.assertIn("The board will be power-cycled, switched to boot mode, stopped at U-Boot, then updated.", ufs[1][-1])
+        self.assertIn("--power-off-command x5h_off", ufs[1][-1])
         self.assertIn("x5h_off", ufs[1][-1])
         self.assertIn("x5h_boot", ufs[1][-1])
         self.assertIn("x5h_on", ufs[1][-1])
@@ -244,9 +254,73 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("ufs_xenpolicy_load=", ufs[0][-1])
         self.assertIn("bootcmd_moulin=", ufs[0][-1])
         self.assertIn("setenv user_vgoncharuk", ufs[1][-1])
-        self.assertIn("printenv user_vgoncharuk", ufs[1][-1])
+        self.assertIn("--verify-variable user_vgoncharuk", ufs[1][-1])
         self.assertIn("saveenv", ufs[1][-1])
         self.assertNotIn("The board must be stopped at the U-Boot prompt", ufs[0][-1])
+
+    def test_android_unpack_uses_existing_board_archive_without_upload(self) -> None:
+        config = sample_copy_config()
+        config["board_hosts"][0].update(
+            {"nfs_root": "/srv/nfs", "deploy_subdir": "vgoncharuk/projects"}
+        )
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_board_host_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        service = self._service()
+
+        commands = service.board_action_commands(config, "unpack_network_android")
+
+        self.assertEqual(len(commands), 1)
+        self.assertIn("testrpi5@10.13.64.242", commands[0])
+        self.assertNotIn("builder@10.0.0.1", commands[0])
+        self.assertNotIn("rsync", commands[0][-1])
+        self.assertIn(
+            "--install-android /srv/nfs/vgoncharuk/projects/prod "
+            "/srv/nfs/vgoncharuk/projects/prod/.moulin-android_only.img.gz",
+            commands[0][-1],
+        )
+        self.assertIn("--refresh-current", commands[0][-1])
+        action = next(
+            action for action in service.board_actions(config)
+            if action.action_id == "unpack_network_android"
+        )
+        self.assertFalse(action.requires_remote)
+
+    def test_android_helper_retains_archive_for_repeated_unpack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            nfs = root / "nfs"
+            dest = nfs / "project"
+            domd = dest / "rootfs" / "domd"
+            domd.mkdir(parents=True)
+            archive = dest / ".moulin-android_only.img.gz"
+            payload = b"android image data"
+            archive.write_bytes(gzip.compress(payload))
+            helper = root / "helper.sh"
+            adapter = self._service().board_type_registry.adapter_for_type("gen5_x5h")
+            helper.write_text(
+                adapter.nfs_deploy_helper_script().replace("/srv/nfs", str(nfs)),
+                encoding="utf-8",
+            )
+            tools = root / "bin"
+            tools.mkdir()
+            chown = tools / "chown"
+            chown.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            chown.chmod(0o755)
+            env = {**os.environ, "PATH": f"{tools}:{os.environ['PATH']}"}
+
+            for _ in range(2):
+                (dest / "android_only.img").write_bytes(b"stale image")
+                subprocess.run(
+                    ["sh", str(helper), "--install-android", str(dest), str(archive)],
+                    env=env,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertTrue(archive.is_file())
+                self.assertEqual((dest / "android_only.img").read_bytes(), payload)
+                self.assertEqual((domd / "android_only.img").read_bytes(), payload)
 
     def test_full_network_deploy_uses_active_artifact_targets(self) -> None:
         config = sample_copy_config()
@@ -392,6 +466,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn('.moulin-domd-rootfs.tar.bz2', helper[0][-1])
         self.assertIn('.moulin-domu-rootfs.tar.bz2', helper[0][-1])
         self.assertIn(".moulin-*-rootfs.tar.bz2", helper[0][-1])
+        self.assertIn("gzip -dc", helper[0][-1])
+        self.assertIn("rootfs/domd/android_only.img", helper[0][-1])
+        self.assertIn("linked DomD /android_only.img", helper[0][-1])
         self.assertIn("android_only.img", helper[0][-1])
         self.assertIn("testrpi5 ALL=(root) NOPASSWD: /usr/local/sbin/moulin-deploy-rootfs", helper[0][-1])
         self.assertIn("visudo -cf /etc/sudoers.d/moulin-rootfs-deploy", helper[0][-1])
@@ -500,9 +577,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("x5h_boot", restart[0][-1])
         self.assertIn("x5h_on", restart[0][-1])
         self.assertIn("Restart board and run Moulin U-Boot action", restart[0][-1])
-        self.assertIn("printenv {user_command}", restart[0][-1])
+        self.assertIn("--require-variable user_default", restart[0][-1])
         self.assertIn("user_default", restart[0][-1])
-        self.assertIn("run {user_command}", restart[0][-1])
+        self.assertIn("run user_default", restart[0][-1])
         self.assertIn("Apply U-Boot network env or Apply U-Boot UFS env first", restart[0][-1])
 
     def test_flash_bootloaders_uses_configured_console_device(self) -> None:
@@ -540,7 +617,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("relayctl off", restart[0][-1])
         self.assertIn("relayctl boot", restart[0][-1])
         self.assertIn("relayctl on", restart[0][-1])
-        self.assertIn("printenv {user_command}", restart[0][-1])
+        self.assertIn("--require-variable user_default", restart[0][-1])
         self.assertIn("user_default", restart[0][-1])
         self.assertNotIn("x5h_flash", bootloaders[2][-1])
         self.assertNotIn("x5h_off", restart[0][-1])
@@ -554,7 +631,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         service.run_flash_bootloaders(config, runner=lambda title, commands: calls.append((title, commands)))
         service.run_flash_ufs_image(config, runner=lambda title, commands: calls.append((title, commands)))
 
-        self.assertEqual([title for title, _commands in calls], ["Flash bootloaders", "Flash UFS image"])
+        self.assertEqual([title for title, _commands in calls], ["Flash bootloaders (flash mode)", "Flash UFS image"])
         self.assertEqual(calls[0][1], service.flash_bootloaders_commands(config))
         self.assertEqual(calls[1][1], service.flash_ufs_image_commands(config))
 

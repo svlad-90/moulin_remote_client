@@ -211,6 +211,7 @@ class FakeFieldActionController:
 
 def config_with_projects() -> dict[str, Any]:
     return {
+        "local": {"project_dir": "overlay"},
         "remotes": [{"name": "build", "user": "builder", "host": "10.0.0.1", "projects_dir": "/mnt/projects"}],
         "active_remote": "build",
         "projects": [

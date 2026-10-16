@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from typing import Any
+from unittest.mock import Mock
 
 from components.config_workflow.api import profile_actions
 
@@ -21,6 +22,10 @@ class FakeProfilePort:
         self.docker_image = "builder:latest"
         self.prompt_values: dict[str, str] = {}
         self.prompt_cancelled = False
+        self.active_job = None
+        self.board_job = None
+        self.action_running = False
+        self.connection_workflow_service = Mock()
 
     def prompt(self, label: str, current: str) -> str:
         return self.prompt_values.get(label, current)
@@ -197,6 +202,83 @@ class ProfileActionControllerTests(unittest.TestCase):
         self.assertEqual(port.preflight, "not run")
         self.assertEqual(port.status, "Active build host: other")
         self.assertEqual(harness.save_count, 1)
+
+    def test_host_switch_reconnects_after_saving_and_resetting_state(self) -> None:
+        cases = (
+            ("remotes", "active_remote", "set_active_remote", "start_build_host_connect"),
+            ("board_hosts", "active_board_host", "set_active_board_host", "start_board_host_connect"),
+        )
+        for profiles, active, select, connect in cases:
+            with self.subTest(host=active):
+                cfg = config()
+                target = cfg[profiles][1]
+                target.update(user="tester", host="new-host")
+                port = FakeProfilePort()
+                harness = Harness(cfg)
+                service = port.connection_workflow_service.return_value
+
+                def check_state(_port: Any) -> None:
+                    self.assertIs(_port, port)
+                    self.assertEqual(cfg[active], target["name"])
+                    self.assertEqual(harness.save_count, 1)
+                    if profiles == "remotes":
+                        self.assertEqual(port.connection_state, "disconnected")
+                        self.assertEqual(port.preflight, "not run")
+                        self.assertEqual(port.board_connection_state, "connected")
+                        port.connection_state = "connecting"
+                    else:
+                        self.assertEqual(port.board_connection_state, "disconnected")
+                        self.assertEqual(port.connection_state, "connected")
+                        self.assertEqual(port.preflight, "ok")
+                        port.board_connection_state = "connecting"
+
+                getattr(service, connect).side_effect = check_state
+                getattr(harness.controller, select)(port, target)
+
+                getattr(service, connect).assert_called_once_with(port)
+                other = "start_board_host_connect" if profiles == "remotes" else "start_build_host_connect"
+                getattr(service, other).assert_not_called()
+                getattr(harness.controller, select)(port, target)
+                getattr(service, connect).assert_called_once_with(port)
+                self.assertEqual(harness.save_count, 1)
+
+    def test_host_switch_does_not_connect_incomplete_profiles(self) -> None:
+        for profiles, select in (
+            ("remotes", "set_active_remote"),
+            ("board_hosts", "set_active_board_host"),
+        ):
+            with self.subTest(host=profiles):
+                cfg = config()
+                port = FakeProfilePort()
+                harness = Harness(cfg)
+
+                getattr(harness.controller, select)(port, cfg[profiles][1])
+
+                self.assertEqual(harness.save_count, 1)
+                port.connection_workflow_service.assert_not_called()
+
+    def test_host_switch_preserves_config_and_state_while_busy(self) -> None:
+        for busy in ("active_job", "board_job", "action_running"):
+            for profiles, active, select in (
+                ("remotes", "active_remote", "set_active_remote"),
+                ("board_hosts", "active_board_host", "set_active_board_host"),
+            ):
+                with self.subTest(busy=busy, host=active):
+                    cfg = config()
+                    port = FakeProfilePort()
+                    setattr(port, busy, True if busy == "action_running" else {})
+                    harness = Harness(cfg)
+                    original = cfg[active]
+
+                    getattr(harness.controller, select)(port, cfg[profiles][1])
+
+                    self.assertEqual(cfg[active], original)
+                    self.assertEqual(port.connection_state, "connected")
+                    self.assertEqual(port.board_connection_state, "connected")
+                    self.assertEqual(port.preflight, "ok")
+                    self.assertIn("before switching hosts", port.status)
+                    self.assertEqual(harness.save_count, 0)
+                    port.connection_workflow_service.assert_not_called()
 
     def test_delete_active_board_host_resets_board_connection(self) -> None:
         cfg = config()

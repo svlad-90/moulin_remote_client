@@ -27,7 +27,7 @@ def build_parser(description: str | None, default_config: Path) -> argparse.Argu
     clean_component.add_argument("names", nargs="*", help="Moulin component names, or all when omitted")
     clean_component.add_argument(
         "--mode",
-        choices=("directory", "artifacts", "build_output", "yocto_component_clean", "yocto_component_sstate", "all"),
+        choices=("directory", "artifacts", "build_output", "yocto_component_clean", "yocto_component_sstate", "bitbake_cache", "all"),
         default="artifacts",
         help="cleanup scope; default: artifacts",
     )

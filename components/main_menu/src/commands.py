@@ -859,6 +859,11 @@ class MainMenuCommandItemsService:
                 "mode": "yocto_component_sstate",
                 "description": "Run BitBake cleansstate for each selected Yocto component build target.",
             },
+            {
+                "label": "Clean bitbake cache",
+                "mode": "bitbake_cache",
+                "description": "Clean local sstate and outputs for selected Yocto components and their dependencies.",
+            },
         ]
         index = self.component_clean_action_index
         dry_run = self.component_clean_dry_run
@@ -927,6 +932,8 @@ class MainMenuCommandItemsService:
                 prompt=f"Select Moulin components to clean ({mode}), then press Enter.",
                 supported_description=f"Cleanup mode {mode} is supported for {{builder_type}}.",
                 unsupported_description=f"Cleanup mode {mode} is not supported for {{builder_type}}.",
+                use_stored_selection=False,
+                use_auto_selection=False,
             )
             if selected_names is None:
                 app.status = "Back to cleanup mode selection"
@@ -943,10 +950,6 @@ class MainMenuCommandItemsService:
                 label,
                 self.component_clean_commands(app, selected_names=selected_names, mode=mode, dry_run=dry_run),
             )
-            if result == 0 and mode == "directory" and not dry_run:
-                cleaned_dirs = set(getattr(app, "cleaned_component_directories", set()))
-                cleaned_dirs.update(selected_names)
-                app.cleaned_component_directories = cleaned_dirs
             return result
 
     def confirm_component_clean(
@@ -964,7 +967,10 @@ class MainMenuCommandItemsService:
             app,
             ui_dialog_api.ConfirmContent(
                 title="Confirm",
-                warning="This action can change remote build state.",
+                warning=(
+                    "Stop other builds first. Shared sstate may also be used by other domains."
+                    if mode == "bitbake_cache" else "This action can change remote build state."
+                ),
                 subject=f"Clean Moulin components: {components}",
                 details=(
                     f"Mode: {mode}. "
@@ -999,12 +1005,7 @@ class MainMenuCommandItemsService:
         ]
 
     def cleanable_components(self, app: Any, *, mode: str) -> list[dict[str, Any]]:
-        cleaned_dirs = set(getattr(app, "cleaned_component_directories", set())) if mode == "directory" else set()
-        components = [
-            component
-            for component in self.manifest_components(app)
-            if component.get("name") not in cleaned_dirs
-        ]
+        components = self.manifest_components(app)
         existing_dirs = self.existing_component_directory_names(app, components) if mode == "directory" else None
         if existing_dirs is not None:
             components = [
@@ -1028,7 +1029,7 @@ class MainMenuCommandItemsService:
                     or builder_type == "yocto" and bool(target)
                 )
             ) or (
-                mode in {"yocto_component_clean", "yocto_component_sstate", "all"} and builder_type == "yocto"
+                mode in {"yocto_component_clean", "yocto_component_sstate", "bitbake_cache", "all"} and builder_type == "yocto"
             )
         return components
 
@@ -1101,7 +1102,8 @@ class MainMenuCommandItemsService:
             remote_read_project_file=self.remote_read_project_file,
             cache=self.manifest_cache,
             default_moulin_manifest=self.default_moulin_manifest,
-            build_params=None,
+            build_params=getattr(app, "build_params", None),
+            include_disabled=True,
         )
 
     @staticmethod
@@ -1262,7 +1264,12 @@ project_dir={shlex.quote(project_dir)}
 MRC_MAPPINGS
 }} | awk '!seen[$0]++' | while IFS= read -r root; do
     [ -n "$root" ] || continue
-    if [ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
+    if command -v timeout >/dev/null 2>&1; then
+        status_output="$(timeout 3s git -C "$root" status --porcelain --untracked-files=no 2>/dev/null || true)"
+    else
+        status_output="$(git -C "$root" status --porcelain --untracked-files=no 2>/dev/null || true)"
+    fi
+    if [ -n "$status_output" ]; then
         printf 'dirty\\t%s\\n' "$root"
     else
         printf 'clean\\t%s\\n' "$root"
@@ -1458,7 +1465,8 @@ done
             if use_stored_selection
             else []
         )
-        selected = set(stored_names or auto_names or supported_names) & supported_names
+        fallback_names = supported_names if use_stored_selection or use_auto_selection else set()
+        selected = set(stored_names or auto_names or fallback_names) & supported_names
         index = 0
         app.screen.timeout(-1)
         try:
@@ -1677,6 +1685,7 @@ done
             "deploy_network_domd_rootfs",
             "deploy_network_domu_rootfs",
             "deploy_network_android",
+            "unpack_network_android",
             "deploy_network_full",
         }:
             return "tftp/nfs / deploy artifacts"
@@ -1697,7 +1706,7 @@ done
             "install_nfs_deploy_helper",
         }:
             return "tftp/nfs / board setup"
-        if action_id in {"copy_build_artifacts", "flash_bootloaders", "flash_ufs_image"}:
+        if action_id in {"copy_build_artifacts", "flash_bootloaders", "flash_single_ipl", "flash_ufs_image"}:
             return "flashing / commands"
         if action_id == "open_board_host_shell":
             return "flashing / hosts"
@@ -1714,6 +1723,8 @@ done
         )
 
     def run_board_action(self, app: Any, action_id: str) -> Any:
+        if action_id == "flash_single_ipl":
+            return self.run_single_ipl_menu(app)
         return self.board_command_workflow.run_board_action(
             app.config,
             action_id,
@@ -1721,6 +1732,103 @@ done
             build_params=app.build_params,
             runner=lambda title, commands: app.command_workflow_service().run_commands(app, title, commands),
         )
+
+    def run_single_ipl_menu(self, app: Any) -> None:
+        capture = self.remote_capture_command(app)
+        if capture is None:
+            self.show_ipl_discovery_error(app, "IPL discovery unavailable: no capture command")
+            return
+        try:
+            app.status = "Reading prepared IPL list from board host..."
+            output = ""
+            for command in self.board_action_commands(app, "flash_single_ipl"):
+                output = capture(command)
+            listing = json.loads(output)
+            images = listing["images"]
+            if not images:
+                self.show_ipl_discovery_error(app, "No UFS IPL files found. Run Copy build artifacts with boot_artifacts selected.")
+                return
+        except Exception as exc:
+            detail = getattr(exc, "stderr", "") or str(exc)
+            self.show_ipl_discovery_error(app, detail)
+            return
+        selected = self.select_ipl_image(app, images)
+        if not selected:
+            app.status = "IPL flash cancelled: no images selected"
+            return
+        try:
+            commands = self.board_command_workflow.board_action_commands(
+                app.config, "flash_single_ipl",
+                build_params={**app.build_params, "_ipl_names": json.dumps([image["name"] for image in selected]),
+                              "_ipl_snapshot": listing["ipls_dir"]},
+            )
+        except ValueError as exc:
+            self.show_ipl_discovery_error(app, str(exc), title="Cannot prepare IPL flash")
+            return
+        if not app.dialog_workflow_controller().run_confirm_dialog(
+            app,
+            ui_dialog_api.ConfirmContent(
+                title="Flash bootloaders",
+                warning="Power-cycles once and overwrites selected UFS bootloaders. Stops on failure; earlier writes are not rolled back. Close the serial console first.",
+                subject=", ".join(image["name"] for image in selected),
+                details=" | ".join(f"{image['name']}: UFS 0, {image['flash_addr']}" for image in selected) + f" | {listing['archive']}",
+                footer="Enter/y: flash | n/q/Esc: back",
+            ),
+            redraw_background=False,
+        ):
+            app.status = "IPL flash cancelled"
+            return
+        app.command_workflow_service().run_commands(app, f"Flash {len(selected)} IPLs", commands)
+
+    def show_ipl_discovery_error(self, app: Any, detail: str, *, title: str = "Cannot open IPL selection") -> None:
+        lines = detail.strip().splitlines()[-8:]
+        app.status = title
+        app.dialog_workflow_controller().show_message(app, title, lines)
+
+    def select_ipl_image(self, app: Any, images: list[dict[str, str]]) -> list[dict[str, str]] | None:
+        index = 0
+        selected = {image['name'] for image in images}
+        app.screen.timeout(-1)
+        try:
+            while True:
+                app.screen.erase()
+                height, width = app.screen.getmaxyx()
+                if height >= 10 and width >= 72:
+                    app.draw_box(0, 0, height - 2, width, "Flash Bootloaders")
+                    rows = max(1, height - 6)
+                    start = max(0, min(index - rows + 1, len(images) - rows))
+                    for offset, image in enumerate(images[start:start + rows]):
+                        mark = '[x]' if image['name'] in selected else '[ ]'
+                        label = f"{mark} {image['name']}  (UFS {image['flash_addr']})"
+                        app.add(2 + offset, 2, ui_text_api.fit_text(label, width - 4),
+                                app.selected_attr() if start + offset == index else 0)
+                    app.add(height - 2, 0, "Space: toggle | a: all | n: none | Enter: flash | q/Esc: back"[:width], app.accent_attr())
+                else:
+                    app.add(0, 0, "Terminal is too small. Need at least 72x10.", app.warn_attr())
+                app.screen.refresh()
+                ch = app.read_key()
+                if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                    return None
+                if height < 10 or width < 72:
+                    continue
+                if ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+                    index = ui_menu_api.move_index(index, len(images), -1)
+                elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j"):
+                    index = ui_menu_api.move_index(index, len(images), 1)
+                elif ch == ord(' ') and images:
+                    name = images[index]['name']
+                    if name in selected:
+                        selected.remove(name)
+                    else:
+                        selected.add(name)
+                elif ui_input_api.key_code_matches(ch, 'a'):
+                    selected = {image['name'] for image in images}
+                elif ui_input_api.key_code_matches(ch, 'n'):
+                    selected.clear()
+                elif ch in (curses.KEY_ENTER, 10, 13):
+                    return [image for image in images if image['name'] in selected]
+        finally:
+            app.screen.timeout(1000)
 
     def run_interactive_board_action(self, app: Any, action_id: str, title: str) -> None:
         if action_id == "open_board_host_shell":
