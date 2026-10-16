@@ -210,7 +210,7 @@ class MainPanelsControllerTests(unittest.TestCase):
         port = FakePanelPort()
         port.items[0] = FakeMenuItem("Copy mapped files to build host", "Push selected mappings.", "build / files mapping")
         port.mapping_selection_cache = [
-            "prod-devel-rcar-gen5.yaml",
+            "product.yaml",
             "yocto-meta-xt-common",
             "layers-meta-xt-dom0-gen5",
             "layers-meta-xt-domd-gen5",

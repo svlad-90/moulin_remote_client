@@ -418,7 +418,7 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
         self.assertEqual(fields.remote_field_hint("unknown"), "")
 
     def test_remote_value_helpers_match_current_behavior(self) -> None:
-        self.assertEqual(fields.normalize_remote_field_value("host", "  10.13.64.194  "), "10.13.64.194")
+        self.assertEqual(fields.normalize_remote_field_value("host", "  192.0.2.30  "), "192.0.2.30")
         for key in ("user", "host", "projects_dir"):
             self.assertTrue(fields.remote_connection_reset_needed(key, "build", "build"))
         self.assertFalse(fields.remote_connection_reset_needed("label", "build", "build"))

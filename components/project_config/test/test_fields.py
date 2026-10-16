@@ -9,14 +9,14 @@ class ProjectConfigFieldBehaviorTests(unittest.TestCase):
     def test_project_profile_row_model_matches_current_screen_text_and_states(self) -> None:
         project = {
             "name": "gen5-product-profile",
-            "moulin_manifest": "prod-devel-rcar-gen5.yaml",
+            "moulin_manifest": "product.yaml",
             "targets": "boot_artifacts full_ufs.img.gz",
         }
 
         self.assertEqual(
             fields.project_profile_row_model(project, active_name="gen5-product-profile", selected=True),
             {
-                "text": "* gen5-product-profi prod-devel-rcar-gen5.yaml      boot_artifacts full_ufs.img.gz  ACTIVE",
+                "text": "* gen5-product-profi product.yaml                   boot_artifacts full_ufs.img.gz  ACTIVE",
                 "state": "selected-active",
                 "active": True,
                 "selected": True,

@@ -180,7 +180,7 @@ class BoardHostFieldService:
             "ufs_buffersize": "Optional xt-imager --buffersize override. Leave empty to use xt-imager default.",
             "tftp_root": "Board-host TFTP server root directory.",
             "nfs_root": "Board-host NFS export root directory.",
-            "deploy_subdir": "Subdirectory under TFTP/NFS roots used by this client, for example vgoncharuk/projects.",
+            "deploy_subdir": "Subdirectory under TFTP/NFS roots used by this client, for example demo/projects.",
             "server_ip": "TFTP/NFS server IP address visible from U-Boot.",
             "board_ip": "Board IP address used by U-Boot network boot commands.",
             "direct_copy": "Enter/Space toggles yes when the build host can SSH to this board host directly.",

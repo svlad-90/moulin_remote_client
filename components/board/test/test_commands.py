@@ -20,9 +20,9 @@ def sample_config() -> dict[str, object]:
             {
                 "name": "board",
                 "label": "Board",
-                "user": "testrpi5",
-                "host": "10.13.64.242",
-                "work_dir": "/srv/tftp/vgon",
+                "user": "board",
+                "host": "192.0.2.10",
+                "work_dir": "/srv/tftp/demo",
             }
         ],
         "active_board_host": "board",
@@ -63,16 +63,16 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         config_profiles.normalize_board_host_profiles(config)
         workflow = self._workflow_service()
         builder = board_builder_api.board_command_builder()
-        command = "cd /srv/tftp/vgon && ls"
+        command = "cd /srv/tftp/demo && ls"
         board_host = config_accessors.host_spec(config_profiles.active_board_host(config))
 
         self.assertEqual(
             workflow.interactive_shell_command(config),
-            transport.ssh_command("testrpi5@10.13.64.242", tty="-t"),
+            transport.ssh_command("board@192.0.2.10", tty="-t"),
         )
         self.assertEqual(
             builder.board_ssh_command(board_host, command, tty=True),
-            transport.ssh_command("testrpi5@10.13.64.242", "bash -lic 'cd /srv/tftp/vgon && ls'", tty="-tt"),
+            transport.ssh_command("board@192.0.2.10", "bash -lic 'cd /srv/tftp/demo && ls'", tty="-tt"),
         )
 
     def test_run_board_interactive_shell_for_config_delegates_to_runner(self) -> None:
@@ -87,7 +87,7 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(rc, 17)
-        self.assertEqual(calls, [transport.ssh_command("testrpi5@10.13.64.242", tty="-t")])
+        self.assertEqual(calls, [transport.ssh_command("board@192.0.2.10", tty="-t")])
 
     def test_board_deploy_tool_command_matches_current_behavior(self) -> None:
         config = sample_config()
@@ -101,14 +101,14 @@ class BoardCommandBehaviorTests(unittest.TestCase):
 
         self.assertEqual(command[:2], ["bash", "-lc"])
         self.assertIn("cat /tmp/flash_bootloaders.py | ssh ", command[2])
-        self.assertIn("testrpi5@10.13.64.242", command[2])
+        self.assertIn("board@192.0.2.10", command[2])
         self.assertIn("Deploy board helper", command[2])
         self.assertIn("from: /tmp/flash_bootloaders.py", command[2])
-        self.assertIn("to:   testrpi5@10.13.64.242:/srv/tftp/vgon/flash_bootloaders.py", command[2])
-        self.assertIn("cat > /srv/tftp/vgon/flash_bootloaders.py", command[2])
+        self.assertIn("to:   board@192.0.2.10:/srv/tftp/demo/flash_bootloaders.py", command[2])
+        self.assertIn("cat > /srv/tftp/demo/flash_bootloaders.py", command[2])
         self.assertEqual(
             builder.board_tool_remote_path(work_dir, tool),
-            "/srv/tftp/vgon/flash_bootloaders.py",
+            "/srv/tftp/demo/flash_bootloaders.py",
         )
 
     def test_board_prepare_work_dir_command_matches_current_behavior(self) -> None:
@@ -123,8 +123,8 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         self.assertEqual(
             builder.board_prepare_work_dir_command(board_host, artifacts_dir),
             transport.ssh_command(
-                "testrpi5@10.13.64.242",
-                "printf '%s\\n' 'Prepare board artifacts directory'\nprintf '%s\\n' 'path: /srv/tftp/vgon/artifacts'\nmkdir -p /srv/tftp/vgon/artifacts",
+                "board@192.0.2.10",
+                "printf '%s\\n' 'Prepare board artifacts directory'\nprintf '%s\\n' 'path: /srv/tftp/demo/artifacts'\nmkdir -p /srv/tftp/demo/artifacts",
             ),
         )
 
@@ -142,12 +142,12 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         self.assertIn("resolved_tar_args+=(-C \"$tar_dir\" \"$(basename \"$found\")\")", script)
 
     def test_tar_progress_command_matches_current_behavior(self) -> None:
-        destination_script = "mkdir -p /srv/tftp/vgon/artifacts && cd /srv/tftp/vgon/artifacts && tar -xf -"
+        destination_script = "mkdir -p /srv/tftp/demo/artifacts && cd /srv/tftp/demo/artifacts && tar -xf -"
         transfer = self._transfer_service()
 
-        command = transfer.tar_progress_command("testrpi5@10.13.64.242", destination_script)
+        command = transfer.tar_progress_command("board@192.0.2.10", destination_script)
 
-        self.assertIn("BOARD_COPY_DESTINATION=testrpi5@10.13.64.242", command)
+        self.assertIn("BOARD_COPY_DESTINATION=board@192.0.2.10", command)
         self.assertIn("StrictHostKeyChecking=accept-new", command)
         self.assertIn("progress: {pct}% ({copied}/{total} bytes)", command)
 
@@ -168,7 +168,7 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             build_host="builder@10.0.0.1",
             board_host="board@10.0.0.2",
             source_dir="/mnt/projects/meta-product",
-            destination_dir="/srv/tftp/vgon/artifacts",
+            destination_dir="/srv/tftp/demo/artifacts",
             direct_copy=True,
         )
 
@@ -190,13 +190,13 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             build_host="builder@10.0.0.1",
             board_host="board@10.0.0.2",
             source_dir="/mnt/projects/meta-product",
-            destination_dir="/srv/tftp/vgon/artifacts",
+            destination_dir="/srv/tftp/demo/artifacts",
             direct_copy=False,
         )
 
         self.assertEqual(len(argv), 2)
         self.assertIn("Prepare board artifacts directory", argv[0][-1])
-        self.assertIn("mkdir -p /srv/tftp/vgon/artifacts", argv[0][-1])
+        self.assertIn("mkdir -p /srv/tftp/demo/artifacts", argv[0][-1])
         self.assertEqual(argv[1][0:2], ["bash", "-lc"])
         self.assertIn("route: via client machine", argv[1][2])
         self.assertIn("builder@10.0.0.1", argv[1][2])
@@ -209,7 +209,7 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             build_host="builder@10.0.0.1",
             board_host="board@10.0.0.2",
             source_dir="/mnt/projects/meta-product",
-            destination_dir="/srv/tftp/vgon/artifacts",
+            destination_dir="/srv/tftp/demo/artifacts",
             direct_copy=True,
         )
 
@@ -260,7 +260,7 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertIn("from: builder@10.0.0.1:/mnt/projects/meta-product", argv[1][2])
-        self.assertIn("to:   testrpi5@10.13.64.242:/srv/tftp/vgon/artifacts", argv[1][2])
+        self.assertIn("to:   board@192.0.2.10:/srv/tftp/demo/artifacts", argv[1][2])
         self.assertIn("boot_artifacts: artifacts/boot.tar (manifest component target_images)", argv[1][2])
         self.assertIn("full_ufs.img.gz: full_ufs.img.gz (manifest image output)", argv[1][2])
 
@@ -306,8 +306,8 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         self.assertIn("x5h_on", script)
         self.assertIn("x5h_boot", script)
         self.assertIn("console=$(ls -1 /dev/GEN5_CONSOLE*", script)
-        self.assertIn("python3 /srv/tftp/vgon/gen5_x5h_flash_ufs.py", script)
-        self.assertIn("--tool /srv/tftp/vgon/xt-imager.py", script)
+        self.assertIn("python3 /srv/tftp/demo/gen5_x5h_flash_ufs.py", script)
+        self.assertIn("--tool /srv/tftp/demo/xt-imager.py", script)
         self.assertNotIn("python3 -c", script)
         self.assertIn("--loadaddr", script)
         self.assertIn("0x50000000", script)

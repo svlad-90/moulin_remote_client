@@ -273,8 +273,8 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
         self.assertEqual(config["active_board_host"], "renamed")
         self.assertEqual(profiles.active_board_host(config), host)
 
-        profiles.update_board_host_profile_field(config, host, "work_dir", "/srv/tftp/vgon")
-        self.assertEqual(host["work_dir"], "/srv/tftp/vgon")
+        profiles.update_board_host_profile_field(config, host, "work_dir", "/srv/tftp/demo")
+        self.assertEqual(host["work_dir"], "/srv/tftp/demo")
         self.assertEqual(config["board_host"], host)
 
         with self.assertRaisesRegex(ValueError, "already exists"):
