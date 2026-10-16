@@ -223,7 +223,7 @@ def _config(app_dir: Path) -> dict[str, Any]:
                 "name": "board",
                 "user": "tester",
                 "host": "10.0.0.2",
-                "work_dir": "/srv/tftp/vgon",
+                "work_dir": "/srv/tftp/demo",
             }
         ],
         "active_project": "prod",

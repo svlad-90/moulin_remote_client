@@ -27,17 +27,17 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertEqual(
             service.connect_command_for_config(config),
-            transport.ssh_command("testrpi5@10.13.64.242", "printf 'ssh=ok\\n'; uname -a | sed 's/^/target=/'"),
+            transport.ssh_command("board@192.0.2.10", "printf 'ssh=ok\\n'; uname -a | sed 's/^/target=/'"),
         )
         self.assertEqual(
             service.interactive_shell_command_for_config(config),
-            transport.ssh_command("testrpi5@10.13.64.242", tty="-t"),
+            transport.ssh_command("board@192.0.2.10", tty="-t"),
         )
         self.assertEqual(
             service.run_interactive_shell(config, lambda argv: calls.append(argv) or 23),
             23,
         )
-        self.assertEqual(calls, [transport.ssh_command("testrpi5@10.13.64.242", tty="-t")])
+        self.assertEqual(calls, [transport.ssh_command("board@192.0.2.10", tty="-t")])
 
     def test_interactive_shell_service_matches_command_builder(self) -> None:
         config = sample_config()
@@ -46,11 +46,11 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertEqual(
             service.connect_command(config),
-            transport.ssh_command("testrpi5@10.13.64.242", "printf 'ssh=ok\\n'; uname -a | sed 's/^/target=/'"),
+            transport.ssh_command("board@192.0.2.10", "printf 'ssh=ok\\n'; uname -a | sed 's/^/target=/'"),
         )
         self.assertEqual(
             service.interactive_shell_command(config),
-            transport.ssh_command("testrpi5@10.13.64.242", tty="-t"),
+            transport.ssh_command("board@192.0.2.10", tty="-t"),
         )
 
     @unittest.skipUnless(moulin_manifest_api.yaml_available(), "PyYAML is not installed")
@@ -155,9 +155,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
             {
                 "tftp_root": "/srv/tftp",
                 "nfs_root": "/srv/nfs",
-                "deploy_subdir": "vgoncharuk/projects",
-                "server_ip": "10.13.64.242",
-                "board_ip": "10.13.64.120",
+                "deploy_subdir": "demo/projects",
+                "server_ip": "192.0.2.10",
+                "board_ip": "192.0.2.20",
             }
         )
         config_profiles.normalize_remote_profiles(config)
@@ -174,73 +174,73 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertEqual("ssh", boot[0][0])
         self.assertIn("builder@10.0.0.1", boot[0])
-        self.assertIn("/srv/tftp/vgoncharuk/projects/prod", boot[0][-1])
-        self.assertIn("testrpi5@10.13.64.242", boot[0][-1])
+        self.assertIn("/srv/tftp/demo/projects/prod", boot[0][-1])
+        self.assertIn("board@192.0.2.10", boot[0][-1])
         self.assertIn("rsync -az", boot[0][-1])
         self.assertIn("--info=progress2", boot[0][-1])
         self.assertIn("--stats", boot[0][-1])
-        self.assertIn("testrpi5@10.13.64.242:/srv/tftp/vgoncharuk/projects/prod/", boot[0][-1])
+        self.assertIn("board@192.0.2.10:/srv/tftp/demo/projects/prod/", boot[0][-1])
         self.assertNotIn("MOULIN_STREAM_FILE", boot[0][-1])
         self.assertNotIn("pv not found", boot[0][-1])
-        self.assertIn("/srv/nfs/vgoncharuk/projects/prod", rootfs[1][-1])
+        self.assertIn("/srv/nfs/demo/projects/prod", rootfs[1][-1])
         self.assertIn("rcar-image-adas", rootfs[0][-1])
         self.assertIn("rcar-image-adas", rootfs[1][-1])
         self.assertIn("rsync -az", rootfs[1][-1])
         self.assertIn("--info=progress2", rootfs[1][-1])
         self.assertIn("--stats", rootfs[1][-1])
-        self.assertIn("testrpi5@10.13.64.242:/srv/nfs/vgoncharuk/projects/prod/rootfs/domd/.moulin-domd-rootfs.tar.bz2", rootfs[1][-1])
+        self.assertIn("board@192.0.2.10:/srv/nfs/demo/projects/prod/rootfs/domd/.moulin-domd-rootfs.tar.bz2", rootfs[1][-1])
         self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --check", rootfs[1][-1])
-        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --prepare /srv/nfs/vgoncharuk/projects/prod/rootfs/domd testrpi5", rootfs[1][-1])
+        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --prepare /srv/nfs/demo/projects/prod/rootfs/domd board", rootfs[1][-1])
         self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs \"$dest\" \"$tarball\"", rootfs[1][-1])
-        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --refresh-current /srv/nfs/vgoncharuk/projects /srv/nfs/vgoncharuk/projects/current prod", rootfs[1][-1])
-        self.assertNotIn("ln -sfn prod /srv/nfs/vgoncharuk/projects/current", rootfs[1][-1])
-        self.assertNotIn("sudo -n mkdir -p /srv/nfs/vgoncharuk/projects/prod", rootfs[1][-1])
+        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --refresh-current /srv/nfs/demo/projects /srv/nfs/demo/projects/current prod", rootfs[1][-1])
+        self.assertNotIn("ln -sfn prod /srv/nfs/demo/projects/current", rootfs[1][-1])
+        self.assertNotIn("sudo -n mkdir -p /srv/nfs/demo/projects/prod", rootfs[1][-1])
         self.assertNotIn("MOULIN_STREAM_FILE", rootfs[1][-1])
         self.assertNotIn("pv not found", rootfs[1][-1])
-        self.assertIn("/srv/nfs/vgoncharuk/projects/prod", domu_rootfs[1][-1])
+        self.assertIn("/srv/nfs/demo/projects/prod", domu_rootfs[1][-1])
         self.assertIn("yocto/build-domu/tmp/deploy/images", domu_rootfs[0][-1])
         self.assertIn("yocto/build-domu/tmp/deploy/images", domu_rootfs[1][-1])
         self.assertIn("Deploy DomU NFS rootfs", domu_rootfs[1][-1])
         self.assertIn("Installing DomU rootfs on board host", domu_rootfs[1][-1])
-        self.assertIn("testrpi5@10.13.64.242:/srv/nfs/vgoncharuk/projects/prod/rootfs/domu/.moulin-domu-rootfs.tar.bz2", domu_rootfs[1][-1])
+        self.assertIn("board@192.0.2.10:/srv/nfs/demo/projects/prod/rootfs/domu/.moulin-domu-rootfs.tar.bz2", domu_rootfs[1][-1])
         self.assertIn("android_only.img.gz", android[0][-1])
         self.assertIn("rsync -az", android[0][-1])
         self.assertNotIn("rsync -azS", android[0][-1])
         self.assertIn("--inplace", android[0][-1])
         self.assertIn("--info=progress2", android[0][-1])
         self.assertIn("--stats", android[0][-1])
-        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --prepare-android /srv/nfs/vgoncharuk/projects/prod testrpi5", android[0][-1])
-        self.assertIn("testrpi5@10.13.64.242:/srv/nfs/vgoncharuk/projects/prod/.moulin-android_only.img.gz", android[0][-1])
-        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --install-android /srv/nfs/vgoncharuk/projects/prod /srv/nfs/vgoncharuk/projects/prod/.moulin-android_only.img.gz", android[0][-1])
-        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --refresh-current /srv/nfs/vgoncharuk/projects /srv/nfs/vgoncharuk/projects/current prod", android[0][-1])
+        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --prepare-android /srv/nfs/demo/projects/prod board", android[0][-1])
+        self.assertIn("board@192.0.2.10:/srv/nfs/demo/projects/prod/.moulin-android_only.img.gz", android[0][-1])
+        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --install-android /srv/nfs/demo/projects/prod /srv/nfs/demo/projects/prod/.moulin-android_only.img.gz", android[0][-1])
+        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --refresh-current /srv/nfs/demo/projects /srv/nfs/demo/projects/current prod", android[0][-1])
         self.assertNotIn("MOULIN_STREAM_FILE", android[0][-1])
         self.assertNotIn("cat >", android[0][-1])
         self.assertNotIn("pv not found", android[0][-1])
         invasive = service.board_action_commands(config, "inject_invasive_uboot_parameters")
-        self.assertIn("setenv serverip 10.13.64.242", invasive[0][-1])
-        self.assertIn("setenv ipaddr 10.13.64.120", invasive[0][-1])
+        self.assertIn("setenv serverip 192.0.2.10", invasive[0][-1])
+        self.assertIn("setenv ipaddr 192.0.2.20", invasive[0][-1])
         self.assertNotIn("setenv ethaddr", invasive[0][-1])
-        self.assertIn("cat > /srv/tftp/vgoncharuk/projects/prod/env/uboot.env", uboot[0][-1])
-        self.assertIn("ln -sfn prod /srv/tftp/vgoncharuk/projects/current", uboot[0][-1])
-        self.assertNotIn("mkdir -p /srv/nfs/vgoncharuk/projects", uboot[0][-1])
-        self.assertNotIn("ln -sfn prod /srv/nfs/vgoncharuk/projects/current", uboot[0][-1])
-        self.assertIn("vgoncharuk/projects/current/Image", uboot[0][-1])
+        self.assertIn("cat > /srv/tftp/demo/projects/prod/env/uboot.env", uboot[0][-1])
+        self.assertIn("ln -sfn prod /srv/tftp/demo/projects/current", uboot[0][-1])
+        self.assertNotIn("mkdir -p /srv/nfs/demo/projects", uboot[0][-1])
+        self.assertNotIn("ln -sfn prod /srv/nfs/demo/projects/current", uboot[0][-1])
+        self.assertIn("demo/projects/current/Image", uboot[0][-1])
         self.assertIn("tftp_configure_nfs=", uboot[0][-1])
-        self.assertIn("nfs_domd_dir=/srv/nfs/vgoncharuk/projects/current/rootfs/domd", uboot[0][-1])
+        self.assertIn("nfs_domd_dir=/srv/nfs/demo/projects/current/rootfs/domd", uboot[0][-1])
         self.assertIn("fdt set /boot_dev device_doma domd_rootfs", uboot[0][-1])
         self.assertIn("fdt set /boot_dev nfs_dir $nfs_domd_dir", uboot[0][-1])
         self.assertNotIn("device_domu", uboot[0][-1])
         self.assertNotIn("nfs_dir_domu", uboot[0][-1])
         self.assertNotIn("guest_domains", uboot[0][-1])
         self.assertIn("tftp_initramfs_load=", uboot[0][-1])
-        self.assertIn("tftp 0x50000000 vgoncharuk/projects/current/uInitramfs", uboot[0][-1])
-        self.assertIn("tftp 0x54000000 vgoncharuk/projects/current/r8a78000-ironhide-xen.dtb && fdt addr", uboot[0][-1])
+        self.assertIn("tftp 0x50000000 demo/projects/current/uInitramfs", uboot[0][-1])
+        self.assertIn("tftp 0x54000000 demo/projects/current/r8a78000-ironhide-xen.dtb && fdt addr", uboot[0][-1])
         self.assertIn("bootcmd_moulin=", uboot[0][-1])
         self.assertIn("env delete bootargs; run tftp_xen_load", uboot[0][-1])
         self.assertIn("run tftp_xen_load && run tftp_dtb_load && run tftp_kernel_load", uboot[0][-1])
         self.assertIn("run tftp_xenpolicy_load && run tftp_initramfs_load", uboot[0][-1])
         self.assertIn("bootm 0x54080000 0x50000000 0x54000000", uboot[0][-1])
-        self.assertIn("setenv user_vgoncharuk", uboot[1][-1])
+        self.assertIn("setenv user_demo", uboot[1][-1])
         self.assertIn("env import -t ${loadaddr} ${filesize}; run bootcmd_moulin", uboot[1][-1])
         self.assertNotIn("setenv bootcmd", uboot[1][-1])
         self.assertIn("--power-off-command x5h_off", ufs[1][-1])
@@ -253,15 +253,15 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("ufs_xen_load=", ufs[0][-1])
         self.assertIn("ufs_xenpolicy_load=", ufs[0][-1])
         self.assertIn("bootcmd_moulin=", ufs[0][-1])
-        self.assertIn("setenv user_vgoncharuk", ufs[1][-1])
-        self.assertIn("--verify-variable user_vgoncharuk", ufs[1][-1])
+        self.assertIn("setenv user_demo", ufs[1][-1])
+        self.assertIn("--verify-variable user_demo", ufs[1][-1])
         self.assertIn("saveenv", ufs[1][-1])
         self.assertNotIn("The board must be stopped at the U-Boot prompt", ufs[0][-1])
 
     def test_android_unpack_uses_existing_board_archive_without_upload(self) -> None:
         config = sample_copy_config()
         config["board_hosts"][0].update(
-            {"nfs_root": "/srv/nfs", "deploy_subdir": "vgoncharuk/projects"}
+            {"nfs_root": "/srv/nfs", "deploy_subdir": "demo/projects"}
         )
         config_profiles.normalize_remote_profiles(config)
         config_profiles.normalize_board_host_profiles(config)
@@ -271,12 +271,12 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         commands = service.board_action_commands(config, "unpack_network_android")
 
         self.assertEqual(len(commands), 1)
-        self.assertIn("testrpi5@10.13.64.242", commands[0])
+        self.assertIn("board@192.0.2.10", commands[0])
         self.assertNotIn("builder@10.0.0.1", commands[0])
         self.assertNotIn("rsync", commands[0][-1])
         self.assertIn(
-            "--install-android /srv/nfs/vgoncharuk/projects/prod "
-            "/srv/nfs/vgoncharuk/projects/prod/.moulin-android_only.img.gz",
+            "--install-android /srv/nfs/demo/projects/prod "
+            "/srv/nfs/demo/projects/prod/.moulin-android_only.img.gz",
             commands[0][-1],
         )
         self.assertIn("--refresh-current", commands[0][-1])
@@ -328,7 +328,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
             {
                 "tftp_root": "/srv/tftp",
                 "nfs_root": "/srv/nfs",
-                "deploy_subdir": "vgoncharuk/projects",
+                "deploy_subdir": "demo/projects",
             }
         )
         config_profiles.normalize_remote_profiles(config)
@@ -355,7 +355,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
             {
                 "tftp_root": "/srv/tftp",
                 "nfs_root": "/srv/nfs",
-                "deploy_subdir": "vgoncharuk/projects",
+                "deploy_subdir": "demo/projects",
             }
         )
         config_profiles.normalize_remote_profiles(config)
@@ -402,9 +402,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
             {
                 "tftp_root": "/srv/tftp",
                 "nfs_root": "/srv/nfs",
-                "deploy_subdir": "vgoncharuk/projects",
-                "server_ip": "10.13.64.242",
-                "board_ip": "10.13.64.120",
+                "deploy_subdir": "demo/projects",
+                "server_ip": "192.0.2.10",
+                "board_ip": "192.0.2.20",
             }
         )
         config_profiles.normalize_remote_profiles(config)
@@ -435,8 +435,8 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         uboot = service.board_action_commands(config, "apply_uboot_network_env", build_params={"ENABLE_DOMU": "yes"})
 
-        self.assertIn("nfs_domd_dir=/srv/nfs/vgoncharuk/projects/current/rootfs/domd", uboot[0][-1])
-        self.assertIn("nfs_domu_dir=/srv/nfs/vgoncharuk/projects/current/rootfs/domu", uboot[0][-1])
+        self.assertIn("nfs_domd_dir=/srv/nfs/demo/projects/current/rootfs/domd", uboot[0][-1])
+        self.assertIn("nfs_domu_dir=/srv/nfs/demo/projects/current/rootfs/domu", uboot[0][-1])
         self.assertIn("fdt set /boot_dev nfs_dir $nfs_domd_dir", uboot[0][-1])
         self.assertIn("fdt set /boot_dev device_domu nfs", uboot[0][-1])
         self.assertIn("fdt set /boot_dev nfs_dir_domu $nfs_domu_dir", uboot[0][-1])
@@ -456,7 +456,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertTrue(actions["install_nfs_deploy_helper"].interactive)
         self.assertEqual(helper[0][0], "ssh")
         self.assertIn("-tt", helper[0])
-        self.assertIn("testrpi5@10.13.64.242", helper[0])
+        self.assertIn("board@192.0.2.10", helper[0])
         self.assertIn("/usr/local/sbin/moulin-deploy-rootfs", helper[0][-1])
         self.assertIn('if [ "$dest" = "--check" ]', helper[0][-1])
         self.assertIn('if [ "$dest" = "--prepare" ]', helper[0][-1])
@@ -470,7 +470,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("rootfs/domd/android_only.img", helper[0][-1])
         self.assertIn("linked DomD /android_only.img", helper[0][-1])
         self.assertIn("android_only.img", helper[0][-1])
-        self.assertIn("testrpi5 ALL=(root) NOPASSWD: /usr/local/sbin/moulin-deploy-rootfs", helper[0][-1])
+        self.assertIn("board ALL=(root) NOPASSWD: /usr/local/sbin/moulin-deploy-rootfs", helper[0][-1])
         self.assertIn("visudo -cf /etc/sudoers.d/moulin-rootfs-deploy", helper[0][-1])
 
     def test_open_board_serial_console_runs_picocom_without_restart(self) -> None:
@@ -485,7 +485,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertEqual(commands[0][0], "ssh")
         self.assertIn("-tt", commands[0])
-        self.assertIn("testrpi5@10.13.64.242", commands[0])
+        self.assertIn("board@192.0.2.10", commands[0])
         self.assertNotIn("x5h_off", commands[0][-1])
         self.assertNotIn("x5h_boot", commands[0][-1])
         self.assertNotIn("x5h_on", commands[0][-1])
@@ -504,7 +504,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertEqual(commands[0][0], "ssh")
         self.assertIn("-tt", commands[0])
-        self.assertIn("testrpi5@10.13.64.242", commands[0])
+        self.assertIn("board@192.0.2.10", commands[0])
         self.assertIn("x5h_off", commands[0][-1])
         self.assertIn("x5h_boot", commands[0][-1])
         self.assertIn("x5h_on", commands[0][-1])
@@ -513,7 +513,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
     def test_network_workspace_commands_sync_local_workspace(self) -> None:
         config = sample_copy_config()
-        config["board_hosts"][0].update({"deploy_subdir": "vgoncharuk/projects"})
+        config["board_hosts"][0].update({"deploy_subdir": "demo/projects"})
         config_profiles.normalize_remote_profiles(config)
         config_profiles.normalize_board_host_profiles(config)
         config_profiles.normalize_project_profiles(config)
@@ -524,16 +524,16 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertIn("/tmp/app/workspace/board-network/prod/tftp", pull[0][2])
         self.assertEqual(pull[1][0], "rsync")
-        self.assertIn("testrpi5@10.13.64.242:/srv/tftp/vgoncharuk/projects/prod/", pull[1])
+        self.assertIn("board@192.0.2.10:/srv/tftp/demo/projects/prod/", pull[1])
         self.assertEqual(push[1][0], "rsync")
         self.assertIn("--delete", push[1])
-        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --prepare /srv/nfs/vgoncharuk/projects/prod testrpi5", push[0][-1])
-        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --refresh-current /srv/nfs/vgoncharuk/projects /srv/nfs/vgoncharuk/projects/current prod", push[0][-1])
-        self.assertNotIn("mkdir -p /srv/tftp/vgoncharuk/projects/prod /srv/nfs/vgoncharuk/projects/prod", push[0][-1])
+        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --prepare /srv/nfs/demo/projects/prod board", push[0][-1])
+        self.assertIn("sudo -n /usr/local/sbin/moulin-deploy-rootfs --refresh-current /srv/nfs/demo/projects /srv/nfs/demo/projects/current prod", push[0][-1])
+        self.assertNotIn("mkdir -p /srv/tftp/demo/projects/prod /srv/nfs/demo/projects/prod", push[0][-1])
 
     def test_dom0_initramfs_workspace_commands_unpack_and_repack(self) -> None:
         config = sample_copy_config()
-        config["board_hosts"][0].update({"deploy_subdir": "vgoncharuk/projects"})
+        config["board_hosts"][0].update({"deploy_subdir": "demo/projects"})
         config_profiles.normalize_remote_profiles(config)
         config_profiles.normalize_board_host_profiles(config)
         config_profiles.normalize_project_profiles(config)
@@ -544,14 +544,14 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertIn("uInitramfs", pull[0][2])
         self.assertIn("/tmp/app/workspace/board-network/prod/dom0-initramfs/rootfs", pull[0][-1])
-        self.assertIn("testrpi5@10.13.64.242:/srv/tftp/vgoncharuk/projects/prod/uInitramfs", pull[1])
+        self.assertIn("board@192.0.2.10:/srv/tftp/demo/projects/prod/uInitramfs", pull[1])
         self.assertIn("dumpimage", pull[2][-1])
         self.assertIn("find \"$rootfs\" -mindepth 1 -maxdepth 1", pull[2][-1])
         self.assertIn("cpio -idmu", pull[2][-1])
         self.assertIn("mkimage", push[0][-1])
         self.assertIn("cpio --null -o --format=newc", push[0][-1])
         self.assertIn("/tmp/app/workspace/board-network/prod/dom0-initramfs/uInitramfs", push[2])
-        self.assertIn("testrpi5@10.13.64.242:/srv/tftp/vgoncharuk/projects/prod/uInitramfs", push[2])
+        self.assertIn("board@192.0.2.10:/srv/tftp/demo/projects/prod/uInitramfs", push[2])
 
     def test_flash_services_match_command_builders(self) -> None:
         config = sample_config()
@@ -569,7 +569,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(len(ufs), 4)
         self.assertIn("gen5_x5h_flash_ufs.py", ufs[2][-1])
         self.assertIn("x5h_boot", ufs[3][-1])
-        self.assertIn("python3 /srv/tftp/vgon/gen5_x5h_flash_ufs.py", ufs[3][-1])
+        self.assertIn("python3 /srv/tftp/demo/gen5_x5h_flash_ufs.py", ufs[3][-1])
         self.assertEqual(restart[0][0], "ssh")
         self.assertIn("-tt", restart[0])
         self.assertIn("bash -lic", restart[0][-1])
@@ -613,7 +613,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("relayctl flash", bootloaders[2][-1])
         self.assertIn("relayctl boot", bootloaders[5][-1])
         self.assertIn("gen5_x5h_flash_ufs.py", ufs[2][-1])
-        self.assertIn("python3 /srv/tftp/vgon/gen5_x5h_flash_ufs.py", ufs[3][-1])
+        self.assertIn("python3 /srv/tftp/demo/gen5_x5h_flash_ufs.py", ufs[3][-1])
         self.assertIn("relayctl off", restart[0][-1])
         self.assertIn("relayctl boot", restart[0][-1])
         self.assertIn("relayctl on", restart[0][-1])

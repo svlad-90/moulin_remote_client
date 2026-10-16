@@ -379,7 +379,7 @@ stored in `active_board_host`.
 | `ufs_buffersize` | Optional `xt-imager.py --buffersize` override. |
 | `tftp_root` | Board-host TFTP server root. Defaults to `/srv/tftp`. |
 | `nfs_root` | Board-host NFS export root. Defaults to `/srv/nfs`. |
-| `deploy_subdir` | Shared subdirectory below TFTP/NFS roots, for example `vgoncharuk/projects`. |
+| `deploy_subdir` | Shared subdirectory below TFTP/NFS roots, for example `demo/projects`. |
 | `server_ip` | TFTP/NFS server IP visible from U-Boot. |
 | `board_ip` | Board IP assigned in U-Boot before network boot. |
 | `direct_copy` | `yes` allows build host to SSH directly to board host for artifact copy. |

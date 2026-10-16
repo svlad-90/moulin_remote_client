@@ -211,7 +211,7 @@ def demo_config() -> dict[str, Any]:
                 "ufs_buffersize": "",
                 "tftp_root": "/srv/tftp",
                 "nfs_root": "/srv/nfs",
-                "deploy_subdir": "vgon/artifacts",
+                "deploy_subdir": "demo/artifacts",
                 "server_ip": "192.0.2.10",
                 "board_ip": "192.0.2.20",
                 "direct_copy": "no",
@@ -222,13 +222,13 @@ def demo_config() -> dict[str, Any]:
             {
                 "name": "gen5",
                 "label": "GEN5 product",
-                "project_dir": "meta-xt-prod-devel-rcar-gen5",
+                "project_dir": "demo-product",
                 "local_project_dir": "/home/user/work/project-overlay",
-                "git_url": "git@gitbud.epam.com:rec-aaos/meta-xt-prod-devel-rcar-gen5.git",
-                "git_ref": "virtio-scmi",
-                "moulin_manifest": "prod-devel-rcar-gen5.yaml",
+                "git_url": "https://example.com/demo/product.git",
+                "git_ref": "main",
+                "moulin_manifest": "product.yaml",
                 "dockerfile": "doc/Dockerfile",
-                "docker_image": "vgonch_gen5",
+                "docker_image": "moulin-builder",
                 "parameters": {"ENABLE_DOMU": "yes", "ENABLE_ANDROID": "no"},
                 "targets": "boot_artifacts dom0 domd domu full.img.gz full_ufs.img.gz",
                 "board_artifacts": "boot_artifacts dom0 domd domu full.img.gz full_ufs.img.gz",
@@ -241,8 +241,8 @@ def demo_config() -> dict[str, Any]:
             }
         ],
         "local": {"project_dir": "workspace/project-overlay"},
-        "moulin": {"manifest": "prod-devel-rcar-gen5.yaml"},
-        "docker": {"image": "vgonch_gen5", "dockerfile": "doc/Dockerfile"},
+        "moulin": {"manifest": "product.yaml"},
+        "docker": {"image": "moulin-builder", "dockerfile": "doc/Dockerfile"},
         "state": {"build_settings": "workspace/moulin-build-settings.json"},
         "inventory": {
             "mapping_selection": "workspace/readme-selected-mappings.txt",
@@ -257,7 +257,7 @@ def demo_config() -> dict[str, Any]:
 
 
 def fake_remote_read(_config: dict[str, Any], path: str) -> str:
-    if path.endswith("prod-devel-rcar-gen5.yaml"):
+    if path.endswith("product.yaml"):
         return """
 parameters:
   ENABLE_DOMU:
@@ -278,7 +278,7 @@ images:
 
 def make_app(
     *,
-    preflight: str = "project ok | disk 230G free | git ## virtio-scmi...origin/virtio-scmi | docker ok",
+    preflight: str = "project ok | disk 230G free | git ## main...origin/main | docker ok",
     preflight_values: dict[str, str] | None = None,
     connection_state: str = "connected",
     board_connection_state: str = "connected",
@@ -292,14 +292,14 @@ def make_app(
     app.preflight_values = preflight_values or {
         "project": "ok",
         "disk": "230G free",
-        "git": "## virtio-scmi...origin/virtio-scmi",
+        "git": "## main...origin/main",
         "docker": "ok",
         "origin": "ok",
         "ref": "ok",
     }
     app.mapping_selection_cache = ["layers", "shared"]
     app.build_params = {"ENABLE_DOMU": "yes", "ENABLE_ANDROID": "no"}
-    app.docker_image = "vgonch_gen5"
+    app.docker_image = "moulin-builder"
     app.build_targets = "boot_artifacts dom0 domd domu full.img.gz full_ufs.img.gz"
     app.board_artifacts = app.build_targets
     app.status = status

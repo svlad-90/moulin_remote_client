@@ -43,7 +43,7 @@ class ConfigAccessorBehaviorTests(unittest.TestCase):
                     "ufs_buffersize": "0x4000000",
                     "tftp_root": "/srv/tftp/",
                     "nfs_root": "/srv/nfs/",
-                    "deploy_subdir": "vgon/projects/",
+                    "deploy_subdir": "demo/projects/",
                     "server_ip": "10.0.0.10",
                     "board_ip": "10.0.0.20",
                     "mac_address": "2E:09:0A:12:F7:EA",
@@ -69,13 +69,13 @@ class ConfigAccessorBehaviorTests(unittest.TestCase):
         self.assertEqual(accessors.board_ufs_buffersize_for_config(config), accessors.board_ufs_buffersize(host))
         self.assertEqual(accessors.board_tftp_root_for_config(config), "/srv/tftp")
         self.assertEqual(accessors.board_nfs_root_for_config(config), "/srv/nfs")
-        self.assertEqual(accessors.board_deploy_subdir_for_config(config), "vgon/projects")
+        self.assertEqual(accessors.board_deploy_subdir_for_config(config), "demo/projects")
         self.assertEqual(accessors.board_server_ip_for_config(config), "10.0.0.10")
         self.assertEqual(accessors.board_ipaddr_for_config(config), "10.0.0.20")
         self.assertEqual(accessors.board_mac_address_for_config(config), "2E:09:0A:12:F7:EA")
         self.assertEqual(accessors.network_deploy_project_name_for_config(config), "prod")
-        self.assertEqual(accessors.board_tftp_project_dir_for_config(config), "/srv/tftp/vgon/projects/prod")
-        self.assertEqual(accessors.board_nfs_current_dir_for_config(config), "/srv/nfs/vgon/projects/current")
+        self.assertEqual(accessors.board_tftp_project_dir_for_config(config), "/srv/tftp/demo/projects/prod")
+        self.assertEqual(accessors.board_nfs_current_dir_for_config(config), "/srv/nfs/demo/projects/current")
         self.assertEqual(
             accessors.local_board_network_dir(config, Path("/tmp/app"), "tftp"),
             Path("/tmp/app/workspace/board-network/prod/tftp"),
