@@ -1008,22 +1008,25 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             yocto_item.handler(app)
 
+            self.assertEqual(app.dialog_workflow.confirm_calls, [])
             _title, commands = app.workflow.command_calls[0]
-            self.assertEqual(len(commands), 7)
-            self.assertIn("moulin product.yaml", commands[1][-1])
+            self.assertEqual(len(commands), 6)
+            command_text = "\n".join(command[-1] for command in commands if command)
+            self.assertNotIn('ACTION = "clean"', command_text)
+            self.assertIn("moulin product.yaml", commands[0][-1])
             self.assertIn(
                 "tools/bazel --max_idle_secs=1 build //common-modules/xen-virtual-device:xen_virtual_device_aarch64/.config",
-                commands[2][-1],
+                commands[1][-1],
             )
             self.assertIn(
                 "cd android_kernel && tools/bazel --max_idle_secs=1 run //common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist -- --destdir=../android/out/android_kernel/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64",
-                commands[3][-1],
+                commands[2][-1],
             )
+            self.assertIn("ninja doma_kernel doma", commands[3][-1])
             self.assertIn("ninja doma_kernel doma", commands[4][-1])
-            self.assertIn("ninja doma_kernel doma", commands[5][-1])
-            self.assertIn("marked mapped-file changes as applied by build", commands[6][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[5][-1])
 
-    def test_incremental_handler_runs_yocto_impact_even_without_selected_yocto_component(self) -> None:
+    def test_incremental_handler_skips_yocto_impact_without_selected_yocto_component(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
             manifest_text = "\n".join(
@@ -1053,15 +1056,16 @@ class MainMenuBuilderTests(unittest.TestCase):
             yocto_item.handler(app)
 
             self.assertEqual(app.reload_config_calls, 1)
+            self.assertEqual(app.dialog_workflow.confirm_calls, [])
             _title, commands = app.workflow.command_calls[0]
-            self.assertEqual(len(commands), 5)
-            self.assertIn('ACTION = "clean"', commands[0][-1])
-            self.assertIn('IMAGE_RECIPES = ""', commands[0][-1])
-            self.assertIn('ALLOW_EMPTY = "1" == "1"', commands[0][-1])
-            self.assertIn("moulin product.yaml", commands[1][-1])
+            self.assertEqual(len(commands), 4)
+            command_text = "\n".join(command[-1] for command in commands if command)
+            self.assertNotIn('ACTION = "clean"', command_text)
+            self.assertNotIn("Scanning available recipes", command_text)
+            self.assertIn("moulin product.yaml", commands[0][-1])
+            self.assertIn("ninja doma", commands[1][-1])
             self.assertIn("ninja doma", commands[2][-1])
-            self.assertIn("ninja doma", commands[3][-1])
-            self.assertIn("marked mapped-file changes as applied by build", commands[4][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[3][-1])
 
     def test_incremental_handler_runs_custom_script_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

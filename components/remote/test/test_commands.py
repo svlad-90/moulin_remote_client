@@ -432,6 +432,17 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         self.assertIn("-v /mnt/projects/meta-product:/home/builder/workspace", command)
         self.assertIn(shlex.quote("cd /home/builder/workspace && ninja boot_artifacts full_ufs.img.gz"), command)
 
+    def test_remote_build_command_allocates_tty_through_ssh_and_docker(self) -> None:
+        argv = commands.build_remote_build_command(
+            "builder@10.0.0.1",
+            "/mnt/projects/meta-product",
+            "prod_img",
+            "boot_artifacts full_ufs.img.gz",
+        )
+
+        self.assertIn("-tt", argv)
+        self.assertIn("-it --rm prod_img", argv[-1])
+
     def test_bazel_config_command_builds_requested_config_targets(self) -> None:
         config = sample_config()
         prepare_config(config)

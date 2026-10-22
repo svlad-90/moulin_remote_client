@@ -26,7 +26,7 @@ class MainMenuBuilder:
         flash_bootloaders_tool: Path,
         xt_imager_tool: Path,
         remote_read_project_file: Callable[..., Any],
-        manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+        manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     ) -> None:
         self.app_dir = app_dir
         self.default_config_path = default_config_path
@@ -80,7 +80,7 @@ def main_menu_builder(
     flash_bootloaders_tool: Path,
     xt_imager_tool: Path,
     remote_read_project_file: Callable[..., Any],
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]],
 ) -> MainMenuBuilder:
     return MainMenuBuilder(
         app_dir=app_dir,

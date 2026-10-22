@@ -243,10 +243,18 @@ if not build_dirs:
             )
         )
 
-    def product_docker_command(self, project_dir: str, docker_image: str, inner_command: str) -> str:
+    def product_docker_command(
+        self,
+        project_dir: str,
+        docker_image: str,
+        inner_command: str,
+        *,
+        tty: bool = False,
+    ) -> str:
         workspace = shlex.quote(project_dir)
         image = shlex.quote(docker_image)
         inner = shlex.quote(f"cd /home/builder/workspace && {inner_command}")
+        docker_flags = "-it" if tty else "-i"
         return (
             "docker run --network=host --privileged --security-opt apparmor=unconfined "
             "-e PYTHONUNBUFFERED=1 "
@@ -254,7 +262,7 @@ if not build_dirs:
             '--mount type=bind,source="$HOME"/.gitconfig,target=/home/builder/.gitconfig '
             '--mount type=bind,source="$HOME"/.git-credentials,target=/home/builder/.git-credentials '
             f"-v {workspace}:/home/builder/workspace "
-            f"-i --rm {image} /bin/bash -lc {inner}"
+            f"{docker_flags} --rm {image} /bin/bash -lc {inner}"
         )
 
     def product_docker_shell_command(self, project_dir: str, docker_image: str) -> str:
@@ -335,7 +343,13 @@ if not build_dirs:
         return self.session_service.remote_shell_command(
             remote,
             project_dir,
-            self.product_docker_command(project_dir, docker_image, f"ninja {quoted_targets}"),
+            self.product_docker_command(
+                project_dir,
+                docker_image,
+                f"ninja {quoted_targets}",
+                tty=True,
+            ),
+            tty="-tt",
         )
 
     def component_clean_command(
