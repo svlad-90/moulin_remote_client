@@ -36,6 +36,9 @@ class ProjectFieldService:
     def runtime_reload_needed(self, key: str) -> bool:
         return key in ("project_dir", "docker_image", "board_artifacts")
 
+    def project_source_reload_needed(self, key: str) -> bool:
+        return key in ("git_url", "git_ref")
+
     def preflight_reset_needed(self, key: str) -> bool:
         return key in ("project_dir", "git_url", "git_ref")
 
@@ -57,6 +60,7 @@ class ProjectFieldService:
             "value": value,
             "status": f"{key} updated",
             "runtime_reload": active and self.runtime_reload_needed(key),
+            "project_source_reload": active and self.project_source_reload_needed(key),
             "preflight_reset": active and self.preflight_reset_needed(key),
             "docker_image": value if active and self.docker_image_update_needed(key) else None,
         }
@@ -168,7 +172,7 @@ class ProjectFieldService:
             "project_dir": f"Project checkout directory name under Projects dir ({build_host_projects_dir or '<not set>'}).",
             "local_project_dir": f"Local overlay for mapped pull/push. Relative paths are resolved from {app_dir}.",
             "git_url": "Git URL used by Prepare remote project when checkout origin should be validated.",
-            "git_ref": "Enter selects a branch from the remote Git URL when reachable, otherwise manual input. Existing checkouts are checked but not switched automatically.",
+            "git_ref": "Enter selects a branch from the remote Git URL when reachable, otherwise manual input. Parameters are read from the selected ref; the checkout is switched separately.",
             "moulin_manifest": "Search tracked root YAML files on the active remote and save a Moulin manifest.",
             "dockerfile": "Search tracked Dockerfiles on the active remote and save a Dockerfile path.",
             "targets": "Space toggles Ninja build targets, Enter saves, Esc cancels.",

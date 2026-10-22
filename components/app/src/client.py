@@ -33,7 +33,7 @@ class ClientAppDependencies:
     flash_bootloaders_tool: Path
     xt_imager_tool: Path
     remote_read_project_file: Callable[..., Any]
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]]
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]]
     load_config: Callable[[Path], dict[str, Any]]
     save_config: Callable[[dict[str, Any]], Any]
     env: dict[str, str]
@@ -95,13 +95,20 @@ class ClientApp:
             write_line=deps.write_line,
         )
 
-    def load_active_project_runtime(self) -> None:
-        self.app_state.load_active_project_runtime(self)
+    def load_active_project_runtime(self, remote_read_project_file: Callable[..., Any] | None = None) -> None:
+        if remote_read_project_file is None:
+            self.app_state.load_active_project_runtime(self)
+            return
+        self.app_state.load_active_project_runtime(
+            self,
+            remote_read_project_file=remote_read_project_file,
+        )
 
     def refresh_mapping_selection_cache(self) -> None:
         self.app_state.refresh_mapping_selection_cache(self)
 
     def reload_config_from_disk(self) -> None:
+        self.dependencies.manifest_cache.clear()
         self.config = self.dependencies.load_config(self.dependencies.default_config_path)
         self.load_active_project_runtime()
         self.refresh_mapping_selection_cache()
@@ -257,6 +264,9 @@ class ClientApp:
 
     def poll_active_jobs(self) -> None:
         self.services.poll_active_jobs(self)
+
+    def poll_background_tasks(self) -> None:
+        self.services.poll_background_tasks(self)
 
     def poll_active_job(self, job: dict[str, Any] | None = None) -> None:
         self.services.poll_active_job(self, job)

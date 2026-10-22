@@ -138,6 +138,7 @@ class ProjectConfigFieldBehaviorTests(unittest.TestCase):
                 "value": "meta-prod",
                 "status": "project_dir updated",
                 "runtime_reload": True,
+                "project_source_reload": False,
                 "preflight_reset": True,
                 "docker_image": None,
             },
@@ -152,7 +153,12 @@ class ProjectConfigFieldBehaviorTests(unittest.TestCase):
         plan = fields.apply_project_inline_field_update_for_config(config, other, "git_ref", "mirror")
         self.assertEqual(other["git_ref"], "mirror")
         self.assertFalse(plan["runtime_reload"])
+        self.assertFalse(plan["project_source_reload"])
         self.assertFalse(plan["preflight_reset"])
+
+        plan = fields.apply_project_inline_field_update_for_config(config, active, "git_ref", "next")
+        self.assertTrue(plan["project_source_reload"])
+        self.assertTrue(plan["preflight_reset"])
         self.assertIsNone(plan["docker_image"])
 
     def test_project_field_enabled_matches_current_behavior(self) -> None:

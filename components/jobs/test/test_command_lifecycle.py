@@ -34,11 +34,15 @@ class FakePort:
         self.preflight_values: dict[str, str] = {}
         self.connection_state = "disconnected"
         self.board_auto_connect_count = 0
+        self.config_reload_count = 0
         self.render_cache: dict[str, Any] = {"header": "cached"}
 
     def start_pending_auto_board_connect(self) -> bool:
         self.board_auto_connect_count += 1
         return True
+
+    def reload_config_from_disk(self) -> None:
+        self.config_reload_count += 1
 
 
 def _service(
@@ -121,6 +125,7 @@ class CommandLifecycleServiceTests(unittest.TestCase):
         self.assertEqual(port.status, "Prepare remote project: done; refreshing preflight")
         self.assertEqual(port.preflight, "not run")
         self.assertNotIn("header", port.render_cache)
+        self.assertEqual(port.config_reload_count, 1)
         self.assertEqual(preflight_refreshes, [port])
 
     def test_start_next_command_refreshes_preflight_after_checkout_repair(self) -> None:
@@ -143,6 +148,7 @@ class CommandLifecycleServiceTests(unittest.TestCase):
         self.assertEqual(port.status, "Checkout project Git ref: done; refreshing preflight")
         self.assertEqual(port.preflight, "not run")
         self.assertEqual(port.preflight_values, {})
+        self.assertEqual(port.config_reload_count, 1)
         self.assertEqual(preflight_refreshes, [port])
 
     def test_poll_job_advances_successful_command_step(self) -> None:

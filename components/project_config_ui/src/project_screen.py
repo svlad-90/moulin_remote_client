@@ -42,13 +42,26 @@ def project_fields(params: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return fields
 
 
+def read_key_while_polling(port: Any) -> int:
+    while True:
+        task = getattr(port, "project_source_reload_task", None)
+        ch = port.read_key()
+        if ch != -1 or task is None:
+            return ch
+        poll_background_tasks = getattr(port, "poll_background_tasks", None)
+        if callable(poll_background_tasks):
+            poll_background_tasks()
+        if getattr(port, "project_source_reload_task", None) is not task:
+            return -1
+
+
 def run_project_configurations_screen(
     port: Any,
     config: dict[str, Any],
     app_dir: Path,
     *,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str,
     default_config_path: Path,
     save_config: Callable[[dict[str, Any]], Any],
@@ -89,8 +102,23 @@ def run_project_configurations_screen(
     editing_cursor_yx: tuple[int, int] | None = None
     params: list[dict[str, Any]] = []
     params_loaded = getattr(port, "connection_state", "disconnected") != "connected"
+    reload_completed = int(getattr(port, "project_source_reload_completed", 0))
     port.screen.timeout(-1)
     while True:
+        poll_background_tasks = getattr(port, "poll_background_tasks", None)
+        if callable(poll_background_tasks):
+            poll_background_tasks()
+        current_reload_completed = int(getattr(port, "project_source_reload_completed", 0))
+        if current_reload_completed != reload_completed:
+            params = moulin_manifest_api.parameters_for_config(
+                config,
+                app_dir=app_dir,
+                remote_read_project_file=remote_read_project_file,
+                cache=manifest_cache,
+                default_moulin_manifest=default_moulin_manifest,
+            )
+            params_loaded = True
+            reload_completed = current_reload_completed
         state = screen_state.state
         editing_cursor_yx = None
         connected = getattr(port, "connection_state", "disconnected") == "connected"
@@ -127,7 +155,8 @@ def run_project_configurations_screen(
                 pass
         else:
             port.set_cursor(False)
-        port.screen.timeout(-1)
+        timeout = 100 if getattr(port, "project_source_reload_task", None) is not None else -1
+        port.screen.timeout(timeout)
         if connected and not params_loaded:
             port.add(height - 1, 0, "Loading Moulin parameters...".ljust(width), curses.A_REVERSE)
         port.screen.refresh()
@@ -141,7 +170,7 @@ def run_project_configurations_screen(
             )
             params_loaded = True
             continue
-        ch = port.read_key()
+        ch = read_key_while_polling(port)
         if ch == -1:
             continue
         if state.editing_key:

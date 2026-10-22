@@ -27,10 +27,12 @@ class Harness:
         self.config = config
         self.save_count = 0
         self.reload_count = 0
+        self.project_source_reload_count = 0
         self.controller = field_actions.FieldActionController(
             config,
             save_config=self.save_config,
             reload_runtime=self.reload_runtime,
+            reload_project_source_runtime=self.reload_project_source_runtime,
         )
 
     def save_config(self, _config: dict[str, Any]) -> None:
@@ -38,6 +40,9 @@ class Harness:
 
     def reload_runtime(self) -> None:
         self.reload_count += 1
+
+    def reload_project_source_runtime(self) -> None:
+        self.project_source_reload_count += 1
 
 
 def config() -> dict[str, Any]:
@@ -231,6 +236,19 @@ class FieldActionControllerTests(unittest.TestCase):
         self.assertEqual(port.docker_image, "image")
         self.assertEqual(port.preflight, "ok")
         self.assertEqual(harness.reload_count, 1)
+        self.assertEqual(harness.save_count, 1)
+
+    def test_project_git_ref_update_reloads_selected_ref_and_resets_preflight(self) -> None:
+        cfg = config()
+        port = FakeFieldPort()
+        harness = Harness(cfg)
+
+        harness.controller.apply_project_inline_value(port, cfg["projects"][0], "git_ref", "next")
+
+        self.assertEqual(cfg["projects"][0]["git_ref"], "next")
+        self.assertEqual(harness.project_source_reload_count, 1)
+        self.assertEqual(harness.reload_count, 0)
+        self.assertEqual(port.preflight, "not run")
         self.assertEqual(harness.save_count, 1)
 
     def test_project_inline_update_handles_missing_selection(self) -> None:

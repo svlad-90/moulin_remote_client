@@ -294,6 +294,27 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
             self.assertEqual(parameters.call_count, 1)
             self.assertTrue(any("Loading Moulin parameters..." in row[2] for row in port.rows))
 
+    def test_background_poll_timeouts_do_not_redraw_while_reload_is_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            port = FakeProjectConfigPort([-1, -1, ord("q")])
+            port.project_source_reload_task = {}
+            port.poll_background_tasks = Mock()
+
+            project_screen.run_project_configurations_screen(
+                port,
+                config_with_projects(),
+                Path(tmpdir),
+                remote_read_project_file=lambda _config, _path: "",
+                manifest_cache={},
+                default_moulin_manifest="missing.yaml",
+                default_config_path=Path(tmpdir) / "config.json",
+                save_config=lambda _config: None,
+            )
+
+            self.assertEqual(port.screen.clear_count, 1)
+            self.assertEqual(port.screen.refresh_count, 1)
+            self.assertEqual(port.poll_background_tasks.call_count, 3)
+
     def test_run_project_configurations_screen_add_action_uses_port(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             port = FakeProjectConfigPort([ord("a"), ord("q")])

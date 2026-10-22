@@ -21,7 +21,7 @@ class BoardArtifactTransferService:
         app_dir: Path,
         default_moulin_manifest: str,
         remote_read_project_file: Callable[[dict[str, Any], str], str],
-        manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+        manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     ) -> None:
         self.command_builder = command_builder
         self.app_dir = app_dir
@@ -238,7 +238,7 @@ def board_artifact_transfer_service(
     app_dir: Path,
     default_moulin_manifest: str,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]],
 ) -> BoardArtifactTransferService:
     return BoardArtifactTransferService(
         command_builder=command_builder,

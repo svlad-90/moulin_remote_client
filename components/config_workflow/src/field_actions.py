@@ -19,6 +19,7 @@ class FieldActionController:
         *,
         save_config: Callable[[dict[str, Any]], None],
         reload_runtime: Callable[[], None],
+        reload_project_source_runtime: Callable[[], None] | None = None,
         board_field_service: host_field_api.BoardHostFieldService | None = None,
         build_field_service: host_field_api.BuildHostFieldService | None = None,
         project_field_service: project_field_api.ProjectFieldService | None = None,
@@ -26,6 +27,7 @@ class FieldActionController:
         self.config = config
         self.save_config = save_config
         self.reload_runtime = reload_runtime
+        self.reload_project_source_runtime = reload_project_source_runtime
         self.board_field_service = board_field_service or host_field_api.board_host_field_service()
         self.build_field_service = build_field_service or host_field_api.build_host_field_service()
         self.project_field_service = project_field_service or project_field_api.project_field_service()
@@ -149,14 +151,20 @@ class FieldActionController:
         except ValueError as exc:
             port.status = str(exc)
             return
-        if plan["runtime_reload"] and getattr(port, "connection_state", "disconnected") == "connected":
-            self.reload_runtime()
+        reload_project_source = False
+        if getattr(port, "connection_state", "disconnected") == "connected":
+            if plan["project_source_reload"] and self.reload_project_source_runtime is not None:
+                reload_project_source = True
+            elif plan["runtime_reload"]:
+                self.reload_runtime()
         if plan["preflight_reset"]:
             ui_session_api.reset_preflight(port)
         if plan["docker_image"] is not None:
             port.docker_image = str(plan["docker_image"])
         self.save_config(self.config)
         port.status = str(plan["status"])
+        if reload_project_source:
+            self.reload_project_source_runtime()
 
 
 def field_action_controller(
@@ -164,9 +172,11 @@ def field_action_controller(
     *,
     save_config: Callable[[dict[str, Any]], None],
     reload_runtime: Callable[[], None],
+    reload_project_source_runtime: Callable[[], None] | None = None,
 ) -> FieldActionController:
     return FieldActionController(
         config,
         save_config=save_config,
         reload_runtime=reload_runtime,
+        reload_project_source_runtime=reload_project_source_runtime,
     )

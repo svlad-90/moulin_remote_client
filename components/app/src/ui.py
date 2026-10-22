@@ -27,7 +27,7 @@ class AppUiController:
         flash_bootloaders_tool: Path,
         xt_imager_tool: Path,
         remote_read_project_file: Callable[..., Any],
-        manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+        manifest_cache: dict[tuple[str, ...], dict[str, Any]],
         env: dict[str, str],
         confirm_action: Callable[[Any, Any], bool],
     ) -> None:
@@ -82,7 +82,7 @@ def app_ui_controller(
     flash_bootloaders_tool: Path,
     xt_imager_tool: Path,
     remote_read_project_file: Callable[..., Any],
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     env: dict[str, str],
     confirm_action: Callable[[Any, Any], bool],
 ) -> AppUiController:

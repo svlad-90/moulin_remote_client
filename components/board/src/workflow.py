@@ -26,7 +26,7 @@ class BoardCommandWorkflowService:
         flash_bootloaders_tool: Path,
         xt_imager_tool: Path,
         remote_read_project_file: Callable[[dict[str, Any], str], str],
-        manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+        manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     ) -> None:
         self.app_dir = app_dir
         self.default_moulin_manifest = default_moulin_manifest
@@ -256,7 +256,7 @@ def board_command_workflow_service(
     flash_bootloaders_tool: Path,
     xt_imager_tool: Path,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]],
 ) -> BoardCommandWorkflowService:
     return BoardCommandWorkflowService(
         app_dir=app_dir,
