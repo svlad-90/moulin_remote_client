@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import curses
 import time
 from typing import Any, Callable
 
 from components.jobs.api import jobs as job_api
+
+
+MAX_MOUSE_EVENTS_PER_DRAW = 256
 
 
 class MainRunLoopController:
@@ -78,21 +82,33 @@ class MainRunLoopController:
 
     def _handle_input(self, port: Any, ch: int) -> None:
         batch_started = self.monotonic()
-        key_started = self.monotonic()
-        port.handle_main_key(ch)
-        port.ui_profile_slow(
-            "key-handler-slow",
-            key_started,
-            threshold_ms=5.0,
-            key=ch,
-            selected=port.selected,
-            active=job_api.has_active_job(port.active_job, port.board_job),
-        )
+        keys = 0
+        while True:
+            key_started = self.monotonic()
+            port.handle_main_key(ch)
+            keys += 1
+            port.ui_profile_slow(
+                "key-handler-slow",
+                key_started,
+                threshold_ms=5.0,
+                key=ch,
+                selected=port.selected,
+                active=job_api.has_active_job(port.active_job, port.board_job),
+            )
+            if ch != curses.KEY_MOUSE or keys >= MAX_MOUSE_EVENTS_PER_DRAW or port.done:
+                break
+            port.screen.timeout(0)
+            ch = port.read_key()
+            if ch == -1:
+                break
+            if ch != curses.KEY_MOUSE:
+                port.unread_key(ch)
+                break
         port.ui_profile_slow(
             "input-batch-slow",
             batch_started,
             threshold_ms=10.0,
-            keys=1,
+            keys=keys,
             selected=port.selected,
             active=job_api.has_active_job(port.active_job, port.board_job),
         )
