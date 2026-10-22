@@ -735,6 +735,7 @@ class JobsBehaviorTests(unittest.TestCase):
                 "status": "Prepare remote project: done; refreshing preflight",
                 "needs_preflight_reset": True,
                 "needs_preflight_refresh": True,
+                "needs_config_reload": True,
             },
         )
         self.assertEqual(
@@ -744,7 +745,12 @@ class JobsBehaviorTests(unittest.TestCase):
                 "status": "Checkout project Git ref: done; refreshing preflight",
                 "needs_preflight_reset": True,
                 "needs_preflight_refresh": True,
+                "needs_config_reload": True,
             },
+        )
+        self.assertEqual(
+            jobs.completed_command_sequence_state({"title": "Checkout project Git ref", "rc": 1}),
+            {"last_exit": 1, "status": "Checkout project Git ref: exit 1"},
         )
         self.assertEqual(
             jobs.completed_command_sequence_state({"title": "Clean project folder", "rc": 0}),

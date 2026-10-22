@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import curses
 import unittest
 from typing import Any
 
@@ -44,6 +45,7 @@ class FakePort:
         self.draw_calls = 0
         self.poll_calls = 0
         self.key_calls: list[int] = []
+        self.unread_keys: list[int] = []
         self.profile_events: list[str] = []
         self.flush_calls = 0
 
@@ -73,7 +75,11 @@ class FakePort:
 
     def handle_main_key(self, ch: int) -> None:
         self.key_calls.append(ch)
-        self.done = True
+        self.done = ch == ord("q")
+
+    def unread_key(self, ch: int) -> None:
+        self.unread_keys.append(ch)
+        self.screen.keys.insert(0, ch)
 
     def ui_profile_slow(self, event: str, _started: float, **_fields: Any) -> float:
         self.profile_events.append(event)
@@ -151,6 +157,21 @@ class MainRunLoopControllerTests(unittest.TestCase):
         controller.run(port)
 
         self.assertEqual(port.screen.timeouts, [250, 50])
+
+    def test_mouse_events_are_drained_before_single_draw_without_consuming_keyboard_input(self) -> None:
+        port = FakePort([curses.KEY_MOUSE, curses.KEY_MOUSE, ord("q")])
+        controller = main_run_loop.main_run_loop_controller(
+            auto_connect_enabled=False,
+            monotonic=lambda: 1.0,
+        )
+
+        controller._handle_input(port, curses.KEY_MOUSE)
+
+        self.assertEqual(port.key_calls, [curses.KEY_MOUSE] * 3)
+        self.assertEqual(port.unread_keys, [ord("q")])
+        self.assertEqual(port.screen.keys, [ord("q")])
+        self.assertEqual(port.draw_calls, 1)
+        self.assertEqual(port.screen.timeouts, [0, 0, 0])
 
 
 if __name__ == "__main__":

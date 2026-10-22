@@ -80,27 +80,53 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
 
     @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
     def test_load_manifest_for_config_prefers_remote_and_caches_by_project(self) -> None:
-        calls: list[tuple[str, str]] = []
+        calls: list[tuple[str, str, str, str]] = []
 
-        def read_remote(config: dict[str, object], path: str) -> str:
-            calls.append((str(config["active_project"]), path))
+        def read_remote(config: dict[str, Any], path: str) -> str:
+            project = config["projects"][0]
+            calls.append((str(project["git_url"]), str(project["git_ref"]), str(config["active_project"]), path))
             return "min_ver: '1.0'\nimages:\n  full_ufs: {}\n"
 
         config = {
             "remotes": [{"name": "build", "user": "builder", "host": "10.0.0.1", "projects_dir": "/mnt/projects"}],
             "active_remote": "build",
-            "projects": [{"name": "prod", "project_dir": "meta-product", "moulin_manifest": "prod.yaml"}],
+            "projects": [
+                {
+                    "name": "prod",
+                    "project_dir": "meta-product",
+                    "git_url": "https://example.test/product.git",
+                    "git_ref": "main",
+                    "moulin_manifest": "prod.yaml",
+                }
+            ],
             "active_project": "prod",
             "local": {"project_dir": "missing"},
         }
-        cache: dict[tuple[str, str, str], dict[str, object]] = {}
+        cache: dict[tuple[str, ...], dict[str, object]] = {}
 
         first = manifest.load_manifest_for_config(config, app_dir=Path("/tmp/app"), remote_read_project_file=read_remote, cache=cache)
         second = manifest.load_manifest_for_config(config, app_dir=Path("/tmp/app"), remote_read_project_file=read_remote, cache=cache)
 
         self.assertEqual(first, {"min_ver": "1.0", "images": {"full_ufs": {}}})
         self.assertIs(first, second)
-        self.assertEqual(calls, [("prod", "prod.yaml")])
+        self.assertEqual(calls, [("https://example.test/product.git", "main", "prod", "prod.yaml")])
+
+        config["projects"][0]["git_ref"] = "next"
+        manifest.load_manifest_for_config(config, app_dir=Path("/tmp/app"), remote_read_project_file=read_remote, cache=cache)
+        config["projects"][0]["git_url"] = "https://example.test/fork.git"
+        manifest.load_manifest_for_config(config, app_dir=Path("/tmp/app"), remote_read_project_file=read_remote, cache=cache)
+        config["projects"][0]["moulin_manifest"] = "next.yaml"
+        manifest.load_manifest_for_config(config, app_dir=Path("/tmp/app"), remote_read_project_file=read_remote, cache=cache)
+
+        self.assertEqual(
+            calls,
+            [
+                ("https://example.test/product.git", "main", "prod", "prod.yaml"),
+                ("https://example.test/product.git", "next", "prod", "prod.yaml"),
+                ("https://example.test/fork.git", "next", "prod", "prod.yaml"),
+                ("https://example.test/fork.git", "next", "prod", "next.yaml"),
+            ],
+        )
 
     @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
     def test_load_manifest_for_config_falls_back_when_remote_returns_no_manifest(self) -> None:

@@ -34,7 +34,7 @@ class AppServicesController:
         flash_bootloaders_tool: Path,
         xt_imager_tool: Path,
         remote_read_project_file: Callable[..., Any],
-        manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+        manifest_cache: dict[tuple[str, ...], dict[str, Any]],
         save_config: Callable[[dict[str, Any]], Any],
         env: dict[str, str],
         read_input: Callable[[str], str],
@@ -122,6 +122,10 @@ class AppServicesController:
 
     def poll_active_jobs(self, port: Any) -> None:
         self.jobs.poll_active_jobs(port)
+        self.poll_background_tasks(port)
+
+    def poll_background_tasks(self, port: Any) -> None:
+        self.workflows.poll_project_source_reload(port)
 
     def poll_active_job(self, port: Any, job: dict[str, Any] | None = None) -> None:
         self.jobs.poll_active_job(port, job)
@@ -176,7 +180,7 @@ def app_services_controller(
     flash_bootloaders_tool: Path,
     xt_imager_tool: Path,
     remote_read_project_file: Callable[..., Any],
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     save_config: Callable[[dict[str, Any]], Any],
     env: dict[str, str],
     read_input: Callable[[str], str],

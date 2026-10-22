@@ -221,7 +221,7 @@ def target_selection_controller_for_config(
     *,
     app_dir: Path,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str,
     default_config_path: Path,
     save_config: Callable[[dict[str, Any]], Any],

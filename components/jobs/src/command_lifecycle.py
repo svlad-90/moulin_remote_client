@@ -66,8 +66,11 @@ class CommandLifecycleService:
             if state.pop("needs_preflight_reset", False):
                 ui_session_api.reset_preflight(port)
             needs_preflight_refresh = bool(state.pop("needs_preflight_refresh", False))
+            needs_config_reload = bool(state.pop("needs_config_reload", False))
             ui_session_api.apply_state(port, state)
             self.finish_job(port, job)
+            if needs_config_reload:
+                port.reload_config_from_disk()
             if needs_preflight_refresh:
                 self.refresh_build_host_preflight(port)
             return

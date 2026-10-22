@@ -24,7 +24,7 @@ class AppStateController:
         default_build_targets: str,
         default_moulin_manifest: str,
         remote_read_project_file: Callable[..., Any],
-        manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+        manifest_cache: dict[tuple[str, ...], dict[str, Any]],
         profile_slow_ms: float,
         monotonic: Callable[[], float],
     ) -> None:
@@ -106,7 +106,12 @@ class AppStateController:
         port.build_targets = str(context["build_targets"]) or config_env.build_targets_from_env(self.env, self.default_build_targets)
         port.board_artifacts = str(context["board_artifacts"]) or port.build_targets
 
-    def load_active_project_runtime(self, port: Any) -> None:
+    def load_active_project_runtime(
+        self,
+        port: Any,
+        *,
+        remote_read_project_file: Callable[..., Any] | None = None,
+    ) -> None:
         context = moulin_manifest.build_runtime_context_for_config(
             port.config,
             app_dir=self.app_dir,
@@ -114,7 +119,7 @@ class AppStateController:
             default_docker_image=self.default_docker_image,
             default_build_targets=self.default_build_targets,
             default_moulin_manifest=self.default_moulin_manifest,
-            remote_read_project_file=self.remote_read_project_file,
+            remote_read_project_file=remote_read_project_file or self.remote_read_project_file,
             cache=self.manifest_cache,
         )
         port.docker_image = str(context["docker_image"])
@@ -190,7 +195,7 @@ def app_state_controller(
     default_build_targets: str,
     default_moulin_manifest: str,
     remote_read_project_file: Callable[..., Any],
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     profile_slow_ms: float,
     monotonic: Callable[[], float],
 ) -> AppStateController:

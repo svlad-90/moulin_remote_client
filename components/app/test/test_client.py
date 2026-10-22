@@ -132,7 +132,9 @@ class ClientAppFactoryTests(unittest.TestCase):
             fake_services = FakeServices()
             fake_terminal = FakeTerminalPort()
             fake_terminal_adapter = FakeTerminalAdapter()
-            ClientApp = client.client_app_class(self.make_dependencies(Path(tmpdir)))
+            dependencies = self.make_dependencies(Path(tmpdir))
+            dependencies.manifest_cache[("remote", "project", "manifest")] = {"cached": True}
+            ClientApp = client.client_app_class(dependencies)
 
             with (
                 patch.object(ClientApp, "app_state_controller", return_value=fake_state),
@@ -159,6 +161,7 @@ class ClientAppFactoryTests(unittest.TestCase):
             app.quit()
 
             self.assertEqual(app.config, {"reloaded": True})
+            self.assertEqual(dependencies.manifest_cache, {})
             self.assertEqual(fake_state.runtime_calls, [app, app])
             self.assertEqual(fake_state.refresh_calls, [app, app])
             self.assertEqual(fake_state.profile_calls, [(app, "event", {"value": "x"})])

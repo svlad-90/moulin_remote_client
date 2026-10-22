@@ -44,7 +44,7 @@ class BoardActionContext:
     app_dir: Path | None = None
     default_moulin_manifest: str = "product.yaml"
     remote_read_project_file: Any = None
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]] | None = None
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]] | None = None
     flash_bootloaders_tool: Path | None = None
     xt_imager_tool: Path | None = None
     command_builder: Any = None

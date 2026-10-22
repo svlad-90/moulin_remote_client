@@ -144,7 +144,7 @@ def load_manifest_for_config(
     *,
     app_dir: Path,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    cache: dict[tuple[str, str, str], dict[str, Any]],
+    cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str = "product.yaml",
 ) -> dict[str, Any]:
     if not yaml_available():
@@ -158,6 +158,8 @@ def load_manifest_for_config(
         cache_key = (
             config_accessors.remote_spec_for_config(config),
             config_accessors.remote_project_dir_for_config(config),
+            config_accessors.project_git_url_for_config(config),
+            config_accessors.project_git_ref_for_config(config),
             manifest_name,
         )
         if cache_key in cache:
@@ -218,7 +220,7 @@ def parameters_for_config(
     *,
     app_dir: Path,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    cache: dict[tuple[str, str, str], dict[str, Any]],
+    cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str = "product.yaml",
 ) -> list[dict[str, Any]]:
     data = load_manifest_for_config(
@@ -240,7 +242,7 @@ def default_parameters_for_config(
     *,
     app_dir: Path,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    cache: dict[tuple[str, str, str], dict[str, Any]],
+    cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str = "product.yaml",
 ) -> dict[str, str]:
     return {
@@ -264,7 +266,7 @@ def build_runtime_context_for_config(
     default_build_targets: str,
     default_moulin_manifest: str,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    cache: dict[tuple[str, str, str], dict[str, Any]],
+    cache: dict[tuple[str, ...], dict[str, Any]],
 ) -> dict[str, Any]:
     manifest_params = default_parameters_for_config(
         config,
@@ -373,7 +375,7 @@ def target_candidates_for_config(
     *,
     app_dir: Path,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    cache: dict[tuple[str, str, str], dict[str, Any]],
+    cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str = "product.yaml",
     build_params: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
@@ -435,7 +437,7 @@ def effective_manifest_for_config(
     *,
     app_dir: Path,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    cache: dict[tuple[str, str, str], dict[str, Any]],
+    cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str = "product.yaml",
     build_params: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -519,7 +521,7 @@ def artifact_copy_specs_for_config(
     *,
     app_dir: Path,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    cache: dict[tuple[str, str, str], dict[str, Any]],
+    cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str = "product.yaml",
     build_params: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
@@ -637,7 +639,7 @@ def component_builders_for_config(
     *,
     app_dir: Path,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    cache: dict[tuple[str, str, str], dict[str, Any]],
+    cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str = "product.yaml",
     build_params: dict[str, str] | None = None,
     include_disabled: bool = False,
@@ -669,7 +671,7 @@ def yocto_image_recipes_for_config(
     *,
     app_dir: Path,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    cache: dict[tuple[str, str, str], dict[str, Any]],
+    cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str = "product.yaml",
     build_params: dict[str, str] | None = None,
 ) -> list[str]:

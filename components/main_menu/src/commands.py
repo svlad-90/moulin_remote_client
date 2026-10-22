@@ -40,7 +40,7 @@ class MainMenuCommandItemsService:
         app_dir: Path,
         default_moulin_manifest: str,
         remote_read_project_file: Callable[[dict[str, Any], str], str],
-        manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+        manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     ) -> None:
         self.remote_command_workflow = remote_command_workflow
         self.sync_command_workflow = sync_command_workflow
@@ -609,8 +609,10 @@ class MainMenuCommandItemsService:
             for component in selected
             if str(component.get("builder_type", "")) == "yocto" and str(component.get("target", "")).strip()
         ]
+        if not yocto_targets:
+            return True
         selected_components = ", ".join(selected_names)
-        yocto_target_text = ", ".join(yocto_targets) if yocto_targets else "none"
+        yocto_target_text = ", ".join(yocto_targets)
         return app.dialog_workflow_controller().run_confirm_dialog(
             app,
             ui_dialog_api.ConfirmContent(
@@ -731,8 +733,7 @@ class MainMenuCommandItemsService:
         applied_files = self.applied_incremental_files(app, selected, changed_files)
 
         commands: list[list[str]] = []
-        if clean_yocto and changed_files:
-            added_yocto_clean = False
+        if clean_yocto and changed_files and yocto_recipes:
             for component in selected:
                 if component["builder_type"] != "yocto" or not str(component["target"]).strip():
                     continue
@@ -749,21 +750,7 @@ class MainMenuCommandItemsService:
                         changed_files=changed_files,
                     )
                 )
-                added_yocto_clean = True
-            if not added_yocto_clean:
-                commands.append(
-                    self.remote_command_workflow.yocto_impact_command(
-                        app.config,
-                        docker_image=app.docker_image,
-                        targets="",
-                        action="clean",
-                        image_recipes=[],
-                        build_dirs=[],
-                        allow_empty=True,
-                        changed_files=changed_files,
-                    )
-                )
-        elif clean_yocto:
+        elif clean_yocto and yocto_recipes:
             commands.append(
                 self.remote_command_workflow.yocto_impact_command(
                     app.config,
@@ -1856,7 +1843,7 @@ def main_menu_command_items_service(
     app_dir: Path,
     default_moulin_manifest: str,
     remote_read_project_file: Callable[[dict[str, Any], str], str],
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]],
 ) -> MainMenuCommandItemsService:
     return MainMenuCommandItemsService(
         remote_command_workflow=remote_command_workflow,

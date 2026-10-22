@@ -12,10 +12,21 @@ from components.remote.src import transport
 class RemoteSessionCommandService:
     """Own build-host SSH session and shell command use cases."""
 
-    def remote_shell_command(self, remote: str, project_dir: str, command: str) -> list[str]:
+    def remote_shell_command(
+        self,
+        remote: str,
+        project_dir: str,
+        command: str,
+        *,
+        tty: str = "",
+    ) -> list[str]:
         if not project_dir:
             raise SystemExit("Remote project directory is not configured")
-        return transport.ssh_command(remote, f"cd {shlex.quote(project_dir)} && {command}")
+        return transport.ssh_command(
+            remote,
+            f"cd {shlex.quote(project_dir)} && {command}",
+            tty=tty,
+        )
 
     def interactive_shell_command(self, remote: str, project_dir: str) -> list[str]:
         if not project_dir:

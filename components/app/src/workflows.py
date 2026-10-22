@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import copy
+import queue
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
 from components.board.api import session as board_session_api
 from components.build_runtime.api import env as config_env
+from components.config.api import accessors as config_accessors
 from components.config_workflow.api import workflow as config_workflow
 from components.process.api import terminal_session as local_terminal_session
+from components.remote.api import discovery as remote_discovery_api
 from components.remote.api import workflow as remote_workflow_api
 from components.sync.api import workflow as sync_workflow
 from components.ui.api import dialog_workflow as ui_dialog_workflow
@@ -28,7 +33,7 @@ class AppWorkflowController:
         default_moulin_manifest: str,
         default_build_targets: str,
         remote_read_project_file: Callable[..., Any],
-        manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+        manifest_cache: dict[tuple[str, ...], dict[str, Any]],
         save_config: Callable[[dict[str, Any]], Any],
         env: dict[str, str],
         read_input: Callable[[str], str],
@@ -74,8 +79,92 @@ class AppWorkflowController:
             manifest_cache=self.manifest_cache,
             confirm_action=port.confirm_sync_action,
             reload_runtime=port.load_active_project_runtime,
+            reload_project_source_runtime=lambda: self.start_project_source_reload(port),
             restore_project_menu_input=lambda: port.screen.timeout(-1),
             reset_preflight=lambda: ui_session.reset_preflight(port),
+        )
+
+    def start_project_source_reload(self, port: Any) -> None:
+        config = copy.deepcopy(port.config)
+        path = config_accessors.moulin_manifest_name_for_config(config, self.default_moulin_manifest)
+        generation = int(getattr(port, "project_source_reload_generation", 0)) + 1
+        results: queue.SimpleQueue[tuple[str, Any]] = queue.SimpleQueue()
+        identity = self._project_source_identity(config)
+
+        def load() -> None:
+            try:
+                discovery = remote_discovery_api.remote_project_discovery_service()
+                text = discovery.read_git_remote_file_for_config(
+                    config,
+                    path,
+                    lambda argv: self.capture_command(argv, echo=False, timeout=20),
+                )
+            except Exception as exc:
+                results.put(("error", exc))
+            else:
+                results.put(("ok", text))
+
+        thread = threading.Thread(target=load, name="moulin-parameter-reload", daemon=True)
+        port.project_source_reload_generation = generation
+        port.project_source_reload_task = {
+            "generation": generation,
+            "identity": identity,
+            "path": path,
+            "results": results,
+            "thread": thread,
+        }
+        port.status = "Loading parameters from selected Git ref..."
+        port.menu_dirty = True
+        port.main_full_redraw = True
+        thread.start()
+
+    def poll_project_source_reload(self, port: Any) -> None:
+        task = getattr(port, "project_source_reload_task", None)
+        if not isinstance(task, dict):
+            return
+        try:
+            outcome, value = task["results"].get_nowait()
+        except queue.Empty:
+            return
+        if task is not getattr(port, "project_source_reload_task", None):
+            return
+        port.project_source_reload_task = None
+        if task["identity"] != self._project_source_identity(port.config):
+            return
+        if outcome == "error":
+            port.status = f"Parameter reload failed: {value}"
+            port.menu_dirty = True
+            port.main_full_redraw = True
+            return
+
+        navigation = {
+            name: getattr(port, name)
+            for name in ("focus_panel", "active_menu_tab", "selected", "menu_scroll")
+            if hasattr(port, name)
+        }
+        try:
+            self.manifest_cache.clear()
+            port.load_active_project_runtime(lambda _config, _path: str(value))
+            port.project_config_source = "Git remote"
+            port.items = port.build_items()
+            port.project_source_reload_completed = int(getattr(port, "project_source_reload_completed", 0)) + 1
+            port.status = "Parameters loaded from selected Git ref"
+        except Exception as exc:
+            port.status = f"Parameter reload failed: {exc}"
+        finally:
+            for name, current in navigation.items():
+                setattr(port, name, current)
+            port.menu_dirty = True
+            port.main_full_redraw = True
+            port.logs_dirty = True
+
+    def _project_source_identity(self, config: dict[str, Any]) -> tuple[str, ...]:
+        return (
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            config_accessors.project_git_url_for_config(config),
+            config_accessors.project_git_ref_for_config(config),
+            config_accessors.moulin_manifest_name_for_config(config, self.default_moulin_manifest),
         )
 
     def sync_workflow_controller(self, port: Any) -> sync_workflow.SyncWorkflowController:
@@ -126,7 +215,7 @@ def app_workflow_controller(
     default_moulin_manifest: str,
     default_build_targets: str,
     remote_read_project_file: Callable[..., Any],
-    manifest_cache: dict[tuple[str, str, str], dict[str, Any]],
+    manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     save_config: Callable[[dict[str, Any]], Any],
     env: dict[str, str],
     read_input: Callable[[str], str],

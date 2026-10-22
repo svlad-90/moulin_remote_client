@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,11 @@ class FakePort:
         self.draw = Mock()
         self.suspend_tui = Mock()
         self.restore_tui = Mock()
+        self.build_items = Mock(return_value=["updated-item"])
+        self.focus_panel = "details"
+        self.active_menu_tab = "board"
+        self.selected = 7
+        self.menu_scroll = 3
 
 
 class FakeJobSession:
@@ -173,6 +179,20 @@ class AppServicesControllerTests(unittest.TestCase):
 
             config_factory.assert_called_once()
             self.assertEqual(config_factory.call_args.kwargs["default_build_targets"], "target")
+            controller.workflows.manifest_cache[("cached",)] = {"old": True}
+            controller.workflows.capture_command = Mock(return_value="min_ver: '1.0'\nimages:\n  full: {}\n")
+            config_factory.call_args.kwargs["reload_project_source_runtime"]()
+            task = port.project_source_reload_task
+            task["thread"].join(timeout=1)
+            controller.workflows.poll_project_source_reload(port)
+            self.assertEqual(controller.workflows.manifest_cache, {})
+            port.load_active_project_runtime.assert_called_once()
+            self.assertEqual(port.project_config_source, "Git remote")
+            self.assertEqual(port.items, ["updated-item"])
+            self.assertEqual(
+                (port.focus_panel, port.active_menu_tab, port.selected, port.menu_scroll),
+                ("details", "board", 7, 3),
+            )
             sync_factory.assert_called_once()
             sync_controller.run_sync_screen.assert_called_once_with(port)
             terminal_factory.assert_called_once()
@@ -182,6 +202,51 @@ class AppServicesControllerTests(unittest.TestCase):
                 ("show", port, ("Title", ["line"])),
                 ("prompt", port, ("Field", "old")),
             ])
+
+    def test_project_source_reload_is_nonblocking_and_preserves_navigation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            controller = self.make_controller(Path(tmpdir))
+            port = FakePort()
+            port.config = {
+                "active_project": "prod",
+                "projects": [
+                    {
+                        "name": "prod",
+                        "project_dir": "product",
+                        "git_url": "git@example:product",
+                        "git_ref": "next",
+                        "moulin_manifest": "product.yaml",
+                    }
+                ],
+            }
+            release = threading.Event()
+
+            def delayed_capture(*_args: Any, **_kwargs: Any) -> str:
+                release.wait(timeout=1)
+                return "min_ver: '1.0'\nimages:\n  full: {}\n"
+
+            controller.workflows.capture_command = delayed_capture
+            workflow = controller.config_workflow_controller(port)
+
+            workflow.reload_project_source_runtime()
+
+            task = port.project_source_reload_task
+            self.assertTrue(task["thread"].is_alive())
+            self.assertEqual(port.status, "Loading parameters from selected Git ref...")
+            self.assertEqual(
+                (port.focus_panel, port.active_menu_tab, port.selected, port.menu_scroll),
+                ("details", "board", 7, 3),
+            )
+
+            release.set()
+            task["thread"].join(timeout=1)
+            controller.poll_background_tasks(port)
+
+            self.assertEqual(port.status, "Parameters loaded from selected Git ref")
+            self.assertEqual(
+                (port.focus_panel, port.active_menu_tab, port.selected, port.menu_scroll),
+                ("details", "board", 7, 3),
+            )
 
 
 if __name__ == "__main__":
