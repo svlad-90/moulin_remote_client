@@ -4,9 +4,14 @@ import base64
 import contextlib
 import io
 import json
+import os
 import re
 import shlex
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import moulin_remote_client as client
@@ -498,6 +503,87 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         self.assertIn("touch \"$p\"", argv[-1])
         self.assertIn("tools/bazel shutdown", argv[-1])
         self.assertIn("exit ${BUILD_RESULT}", argv[-1])
+
+    def test_incremental_build_command_invalidates_builder_outputs_before_single_ninja_run(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+
+        argv = commands.build_remote_incremental_build_command_for_config(
+            config,
+            docker_image="prod_img",
+            targets="doma_kernel doma",
+            invalidate_components=[
+                {"name": "doma_kernel", "builder_type": "bazel"},
+                {"name": "doma", "builder_type": "android"},
+            ],
+        )
+
+        self.assertIn("-tt", argv)
+        self.assertIn("-it --rm prod_img", argv[-1])
+        self.assertIn("TARGETS = [", argv[-1])
+        self.assertIn("doma_kernel", argv[-1])
+        self.assertIn("bazel_build", argv[-1])
+        self.assertIn("doma", argv[-1])
+        self.assertIn("android_build", argv[-1])
+        self.assertIn('["ninja", "-t", "query", target]', argv[-1])
+        self.assertIn('subprocess.run(["ninja", *TARGETS]', argv[-1])
+        self.assertIn("backup.rename(output)", argv[-1])
+
+    def test_incremental_build_script_replaces_output_on_success_and_restores_it_on_failure(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        argv = commands.build_remote_incremental_build_command_for_config(
+            config,
+            docker_image="prod_img",
+            targets="doma",
+            invalidate_components=[{"name": "doma", "builder_type": "android"}],
+        )
+        inner = shlex.split(argv[-1])[-1]
+        script = inner.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ninja = root / "ninja"
+            ninja.write_text(
+                "\n".join(
+                    [
+                        "#!/usr/bin/env python3",
+                        "import os",
+                        "import sys",
+                        "from pathlib import Path",
+                        "if sys.argv[1:3] == ['-t', 'query']:",
+                        "    target = sys.argv[3]",
+                        "    if target == 'doma':",
+                        "        print('doma:\\n  input: phony\\n    out.img\\n  outputs:')",
+                        "    else:",
+                        "        print('out.img:\\n  input: android_build\\n    sync.stamp\\n  outputs:\\n    doma')",
+                        "    raise SystemExit(0)",
+                        "Path('out.img').write_text('partial' if os.environ.get('FAIL_NINJA') else 'new')",
+                        "raise SystemExit(7 if os.environ.get('FAIL_NINJA') else 0)",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            ninja.chmod(0o755)
+            output = root / "out.img"
+            env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}"}
+
+            output.write_text("old", encoding="utf-8")
+            success = subprocess.run([sys.executable, "-c", script], cwd=root, env=env, check=False)
+            self.assertEqual(success.returncode, 0)
+            self.assertEqual(output.read_text(encoding="utf-8"), "new")
+            self.assertEqual(list(root.glob(".mrc-ninja-backup-*")), [])
+
+            output.write_text("old", encoding="utf-8")
+            failure = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=root,
+                env={**env, "FAIL_NINJA": "1"},
+                check=False,
+            )
+            self.assertEqual(failure.returncode, 7)
+            self.assertEqual(output.read_text(encoding="utf-8"), "old")
+            self.assertEqual(list(root.glob(".mrc-ninja-backup-*")), [])
 
     def test_structured_script_api_is_used_directly(self) -> None:
         steps = [

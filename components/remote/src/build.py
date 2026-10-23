@@ -352,6 +352,141 @@ if not build_dirs:
             tty="-tt",
         )
 
+    def incremental_build_command(
+        self,
+        remote: str,
+        project_dir: str,
+        docker_image: str,
+        targets: str,
+        invalidate_components: list[dict[str, Any]],
+    ) -> list[str]:
+        target_names = shlex.split(targets)
+        expected_rules = {
+            str(component.get("name", "")): {
+                "android": "android_build",
+                "bazel": "bazel_build",
+            }.get(str(component.get("builder_type", "")), "")
+            for component in invalidate_components
+            if str(component.get("name", "")).strip()
+        }
+        expected_rules = {name: rule for name, rule in expected_rules.items() if rule}
+        script = r'''
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+TARGETS = __TARGETS__
+EXPECTED_RULES = __EXPECTED_RULES__
+
+
+def query_edge(target: str) -> tuple[str, list[str]]:
+    result = subprocess.run(
+        ["ninja", "-t", "query", target],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if result.returncode:
+        print(result.stdout, end="")
+        raise SystemExit(result.returncode)
+
+    rule = ""
+    inputs: list[str] = []
+    reading_inputs = False
+    for line in result.stdout.splitlines()[1:]:
+        if line.startswith("  input: "):
+            rule = line.removeprefix("  input: ").strip()
+            reading_inputs = True
+            continue
+        if line == "  outputs:":
+            break
+        if reading_inputs and line.startswith("    "):
+            inputs.append(line.strip())
+    return rule, inputs
+
+
+def builder_output(target: str, expected_rule: str) -> str:
+    rule, inputs = query_edge(target)
+    if rule == expected_rule:
+        return target
+    if rule != "phony":
+        raise SystemExit(
+            f"Cannot invalidate {target}: expected phony or {expected_rule} edge, got {rule or '<none>'}"
+        )
+    for candidate in inputs:
+        candidate_rule, _candidate_inputs = query_edge(candidate)
+        if candidate_rule == expected_rule:
+            return candidate
+    raise SystemExit(f"Cannot find {expected_rule} output behind Ninja target {target}")
+
+
+def remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def restore_backups(backups: list[tuple[Path, Path]]) -> None:
+    for output, backup in backups:
+        remove_path(output)
+        backup.rename(output)
+
+
+root = Path.cwd()
+outputs: list[tuple[str, Path]] = []
+seen: set[Path] = set()
+for target, expected_rule in EXPECTED_RULES.items():
+    raw_output = builder_output(target, expected_rule)
+    output = Path(os.path.abspath(raw_output))
+    if os.path.commonpath((str(root), str(output))) != str(root):
+        raise SystemExit(f"Refusing to invalidate output outside the project: {raw_output}")
+    if output in seen:
+        continue
+    seen.add(output)
+    outputs.append((target, output))
+
+backup_root = Path(tempfile.mkdtemp(prefix=".mrc-ninja-backup-", dir=root))
+backups: list[tuple[Path, Path]] = []
+try:
+    for target, output in outputs:
+        print(f"Invalidate Ninja target {target}: {output.relative_to(root)}")
+        if os.path.lexists(output):
+            backup = backup_root / str(len(backups))
+            output.rename(backup)
+            backups.append((output, backup))
+
+    result = subprocess.run(["ninja", *TARGETS], check=False).returncode
+    if result == 0:
+        missing = [str(output.relative_to(root)) for _target, output in outputs if not os.path.lexists(output)]
+        if missing:
+            print("Ninja did not recreate invalidated outputs: " + ", ".join(missing))
+            result = 1
+
+    if result != 0:
+        raise SystemExit(result)
+except BaseException:
+    restore_backups(backups)
+    raise
+finally:
+    shutil.rmtree(backup_root, ignore_errors=True)
+'''
+        inner = "python3 - <<'PY'\n" + script.replace("__TARGETS__", repr(target_names)).replace(
+            "__EXPECTED_RULES__", repr(expected_rules)
+        ) + "\nPY"
+        return self.session_service.remote_shell_command(
+            remote,
+            project_dir,
+            self.product_docker_command(project_dir, docker_image, inner, tty=True),
+            tty="-tt",
+        )
+
     def component_clean_command(
         self,
         remote: str,
@@ -712,6 +847,22 @@ raise SystemExit(main())
             config_accessors.remote_project_dir_for_config(config),
             docker_image,
             targets,
+        )
+
+    def incremental_build_command_for_config(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        targets: str,
+        invalidate_components: list[dict[str, Any]],
+    ) -> list[str]:
+        return self.incremental_build_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            docker_image,
+            targets,
+            invalidate_components,
         )
 
     def component_clean_command_for_config(
