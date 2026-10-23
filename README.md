@@ -163,11 +163,26 @@ components/
   project/                           # mappings and project inventory domain
   project_config_ui/                 # project config screens
   project_mapping_ui/                # mapping browser screens
+  plugins/                           # plugin discovery, capabilities, and custom views
   remote/                            # build-host commands
   sync/                              # mapping sync and explicit mapped-file copy
   ui/                                # curses rendering/session state
 workspace/                           # local runtime state, ignored by Git
 ```
+
+## Plugins
+
+The client discovers extensions from `plugins/*/plugin.yaml`. Plugins are
+disabled by default and can be enabled from **Settings**, where their declared
+configuration is also editable. A declarative plugin can add tabs and actions
+without implementing terminal rendering. Python handlers receive a restricted
+context for commands, dialogs, plugin configuration, and all configured board
+profiles.
+
+Plugins that need a specialized screen can declare a custom view. The client
+continues to own the curses event loop, redraws, resize handling, navigation,
+background jobs, and dialogs; the view receives host-delivered events and a
+bounded drawing canvas. See `plugins/README.md` for the manifest and API shape.
 
 ## Requirements
 

@@ -30,6 +30,7 @@ class ConfigFileBehaviorTests(unittest.TestCase):
                 "__config_path": str(path),
                 "__runtime": "skip",
                 "ui": {"title": "New"},
+                "plugins": {"diagnostics": {"enabled": True, "config": {"timeout": 10}}},
                 "active_project": "prod",
             }
             synced = []
@@ -39,6 +40,7 @@ class ConfigFileBehaviorTests(unittest.TestCase):
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["preserve"], True)
             self.assertEqual(data["ui"], {"title": "New"})
+            self.assertEqual(data["plugins"], config["plugins"])
             self.assertEqual(data["active_project"], "prod")
             self.assertNotIn("__runtime", data)
             self.assertIs(synced[0], config)

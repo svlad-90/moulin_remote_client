@@ -8,6 +8,8 @@ from typing import Any
 
 from components.config.api import accessors as config_accessor_api
 from components.config.api import profiles as config_profile_api
+from components.plugins.api import model as plugin_model_api
+from components.plugins.api import settings as plugin_settings_api
 from components.remote.api import workflow as remote_workflow_api
 from components.ui.api import input as ui_input_api
 from components.ui.api import preflight as ui_preflight_api
@@ -204,13 +206,24 @@ def toggle_ui_setting(app: Any, name: str, label: str) -> None:
 
 def run_general_settings_screen(app: Any) -> None:
     index = 0
-    entries = [
+    entries: list[dict[str, Any]] = [
         {
             "label": "Show commands in logs",
             "key": "show_commands",
             "description": "Show the exact command or script before each action runs.",
+            "kind": "ui",
         }
     ]
+    plugin_runtime = app.plugin_runtime() if hasattr(app, "plugin_runtime") else None
+    for definition in plugin_runtime.definitions(refresh=True) if plugin_runtime is not None else []:
+        entries.append(
+            {
+                "label": f"Plugin: {definition.name}",
+                "description": definition.error or "Enable this plugin. Press c to configure its settings.",
+                "kind": "plugin",
+                "definition": definition,
+            }
+        )
     app.screen.timeout(-1)
     while True:
         app.screen.erase()
@@ -226,16 +239,23 @@ def run_general_settings_screen(app: Any) -> None:
 
         app.add(0, 0, "Settings"[:width], curses.A_BOLD)
         app.add(1, 0, "Up/Down: select | Enter/Space: toggle | q/Esc: back"[:width], app.accent_attr())
-        app.draw_box(3, 0, height - 6, width, "General")
+        app.draw_box(3, 0, height - 5, width, "General")
         visible_width = max(1, width - 4)
-        for row_offset, entry in enumerate(entries):
+        visible_entries = max(1, height - 10)
+        first_visible = min(max(0, index - visible_entries + 1), max(0, len(entries) - visible_entries))
+        for row_offset, entry in enumerate(entries[first_visible : first_visible + visible_entries]):
+            entry_index = first_visible + row_offset
             row = 4 + row_offset
-            checked = setting_enabled_text(app.config, str(entry["key"])) == "yes"
+            if entry["kind"] == "plugin":
+                definition = entry["definition"]
+                checked = plugin_model_api.plugin_enabled(app.config, definition.plugin_id)
+            else:
+                checked = setting_enabled_text(app.config, str(entry["key"])) == "yes"
             marker = "[x]" if checked else "[ ]"
             text = f"{marker} {entry['label']}"
-            attr = app.selected_attr() if row_offset == index else 0
+            attr = app.selected_attr() if entry_index == index else 0
             app.add(row, 2, text[:visible_width].ljust(visible_width), attr)
-        detail_row = 6 + len(entries)
+        detail_row = height - 5
         current = entries[index]
         app.add(detail_row, 2, str(current["description"])[:visible_width])
         app.add(height - 1, 0, app.status[:width].ljust(width), curses.A_REVERSE)
@@ -248,7 +268,14 @@ def run_general_settings_screen(app: Any) -> None:
             index = min(len(entries) - 1, index + 1)
         elif ch in (10, 13, ord(" ")):
             current = entries[index]
-            toggle_ui_setting(app, str(current["key"]), str(current["label"]))
+            if current["kind"] == "plugin":
+                definition = current["definition"]
+                enabled = not plugin_model_api.plugin_enabled(app.config, definition.plugin_id)
+                plugin_runtime.set_enabled(app, definition, enabled)
+            else:
+                toggle_ui_setting(app, str(current["key"]), str(current["label"]))
+        elif ui_input_api.key_code_matches(ch, "c") and entries[index]["kind"] == "plugin":
+            plugin_settings_api.run_plugin_settings_screen(app, entries[index]["definition"])
         elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
             app.screen.timeout(250)
             app.status = "Settings closed"

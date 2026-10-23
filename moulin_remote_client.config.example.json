@@ -2,6 +2,7 @@
   "ui": {
     "title": "Moulin Remote Client"
   },
+  "plugins": {},
   "remote": {
     "name": "",
     "label": "",

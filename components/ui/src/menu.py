@@ -42,6 +42,9 @@ class MenuItem:
     requires_ssh: bool = False
     requires_project: bool = False
     allow_during_job: bool = False
+    job_slot: str | None = None
+    tab_id: str = ""
+    tab_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,8 @@ class MenuAvailabilityContext:
 
 
 def item_job_slot(item: MenuItem) -> str | None:
+    if item.job_slot is not None:
+        return item.job_slot
     if is_open_item(item):
         return None
     if is_board_command_item(item) or item.label in {"Connect board host", "Disconnect board host"}:
@@ -155,18 +160,27 @@ def tab_for_group(group: str) -> str:
 
 
 def item_tab(item: MenuItem) -> str:
-    return tab_for_group(item.group)
+    return item.tab_id or tab_for_group(item.group)
 
 
 def menu_tabs(items: list[MenuItem]) -> list[str]:
-    present = {item_tab(item) for item in items}
+    encountered = list(dict.fromkeys(item_tab(item) for item in items))
+    present = set(encountered)
     ordered = [tab for tab in TAB_ORDER if tab in present]
-    ordered.extend(sorted(present - set(ordered)))
+    ordered.extend(tab for tab in encountered if tab not in ordered)
     return ordered
 
 
-def tab_label(tab: str) -> str:
+def tab_label(tab: str, items: list[MenuItem] | None = None) -> str:
+    if items is not None:
+        for item in items:
+            if item_tab(item) == tab and item.tab_label:
+                return item.tab_label
     return TAB_LABELS.get(tab, tab.capitalize())
+
+
+def menu_tab_labels(items: list[MenuItem]) -> dict[str, str]:
+    return {tab: tab_label(tab, items) for tab in menu_tabs(items)}
 
 
 def normalize_active_tab(active_tab: str, items: list[MenuItem], selected: int) -> str:

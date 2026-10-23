@@ -268,6 +268,9 @@ class ClientApp:
     def poll_background_tasks(self) -> None:
         self.services.poll_background_tasks(self)
 
+    def plugin_runtime(self) -> Any:
+        return self.services.plugin_runtime()
+
     def poll_active_job(self, job: dict[str, Any] | None = None) -> None:
         self.services.poll_active_job(self, job)
 

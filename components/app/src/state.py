@@ -75,6 +75,7 @@ class AppStateController:
         port.log_scroll = 0
         port.log_follow = True
         port.logs_expanded = False
+        port.active_plugin_view = None
         port.focus_before_logs_expanded = "actions"
         port.last_exit = None
         port.done = False

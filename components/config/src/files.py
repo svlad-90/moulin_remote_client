@@ -35,6 +35,7 @@ CONFIG_SAVE_KEYS = (
     "mappings",
     "exclude",
     "ui",
+    "plugins",
 )
 
 
