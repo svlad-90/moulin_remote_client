@@ -1,11 +1,52 @@
 from __future__ import annotations
 
 import unittest
+from uuid import UUID
 
 from components.config.api import profiles
 
 
 class ConfigProfileBehaviorTests(unittest.TestCase):
+    def test_legacy_profile_names_migrate_to_stable_ids(self) -> None:
+        config = {
+            "remotes": [{"name": "build"}],
+            "active_remote": "build",
+            "board_hosts": [
+                {"name": "lab", "boards": [{"name": "board"}]},
+            ],
+            "active_board_host": "lab",
+            "active_board": "board",
+            "projects": [{"name": "product"}],
+            "active_project": "product",
+        }
+
+        profiles.normalize_remote_profiles(config)
+        profiles.normalize_board_host_profiles(config)
+        profiles.normalize_project_profiles(config)
+
+        remote = config["remotes"][0]
+        host = config["board_hosts"][0]
+        board = host["boards"][0]
+        project = config["projects"][0]
+        for record in (remote, host, board, project):
+            UUID(record["id"])
+        self.assertEqual(board["board_host_id"], host["id"])
+        self.assertEqual(config["active_remote"], remote["id"])
+        self.assertEqual(config["active_board_host"], host["id"])
+        self.assertEqual(config["active_board"], board["id"])
+        self.assertEqual(config["active_project"], project["id"])
+
+        ids = tuple(record["id"] for record in (remote, host, board, project))
+        profiles.update_remote_profile_field(config, remote, "name", "renamed-build")
+        profiles.update_board_host_profile_field(config, host, "name", "renamed-lab")
+        profiles.update_board_field(config, board, "name", "renamed-board")
+        profiles.update_project_profile_field(config, project, "name", "renamed-product")
+        self.assertEqual(tuple(record["id"] for record in (remote, host, board, project)), ids)
+        self.assertEqual(config["active_remote"], remote["id"])
+        self.assertEqual(config["active_board_host"], host["id"])
+        self.assertEqual(config["active_board"], board["id"])
+        self.assertEqual(config["active_project"], project["id"])
+
     def test_legacy_remote_project_dir_splits_into_projects_dir_and_project_name(self) -> None:
         config = {
             "remote": {
@@ -38,28 +79,44 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
 
         profiles.normalize_board_host_profiles(config)
 
-        self.assertEqual(
-            profiles.active_board_host(config),
-            {
-                "name": "build",
-                "label": "Build",
-                "type": "gen5_x5h",
-                "user": "builder",
-                "host": "10.0.0.1",
-                "work_dir": "~/moulin-board-work",
-                "direct_copy": "no",
-                "console_device": "",
-                "ufs_loadaddr": "",
-                "ufs_buffersize": "",
-                "tftp_root": "/srv/tftp",
-                "nfs_root": "/srv/nfs",
-                "deploy_subdir": "",
-                "server_ip": "",
-                "board_ip": "",
-                "mac_address": "",
-                "commands": {},
-            },
-        )
+        target = profiles.active_board_host(config)
+        self.assertEqual(target["name"], "build")
+        self.assertEqual(target["user"], "builder")
+        self.assertEqual(target["host"], "10.0.0.1")
+        self.assertEqual(config["active_board_host"], target["board_host_id"])
+
+    def test_legacy_boards_on_same_access_host_are_grouped(self) -> None:
+        config = {
+            "board_hosts": [
+                {
+                    "name": "carla.ih1",
+                    "label": "Carla IH1",
+                    "user": "carla",
+                    "host": "10.13.64.198",
+                    "tftp_root": "/srv/tftp",
+                    "console_device": "/dev/GEN5_CONSOLE1",
+                },
+                {
+                    "name": "carla.ih2",
+                    "label": "Carla IH2",
+                    "user": "carla",
+                    "host": "10.13.64.198",
+                    "tftp_root": "/srv/tftp",
+                    "console_device": "/dev/GEN5_CONSOLE2",
+                },
+            ],
+            "active_board_host": "carla.ih2",
+        }
+
+        profiles.normalize_board_host_profiles(config)
+
+        self.assertEqual(len(config["board_hosts"]), 1)
+        host = config["board_hosts"][0]
+        self.assertEqual(host["name"], "carla")
+        self.assertEqual([board["name"] for board in host["boards"]], ["carla.ih1", "carla.ih2"])
+        self.assertEqual(host["boards"][1]["console_device"], "/dev/GEN5_CONSOLE2")
+        self.assertEqual(config["active_board_host"], host["id"])
+        self.assertEqual(config["active_board"], host["boards"][1]["id"])
 
     def test_existing_project_profiles_get_defaults_and_copy_legacy_mappings(self) -> None:
         config = {
@@ -81,7 +138,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
         )
 
         project = profiles.active_project(config)
-        self.assertEqual(config["active_project"], "p")
+        self.assertEqual(config["active_project"], project["id"])
         self.assertEqual(project["project_dir"], "product")
         self.assertEqual(project["local_project_dir"], "overlay")
         self.assertEqual(project["moulin_manifest"], "prod.yaml")
@@ -90,6 +147,16 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
         self.assertEqual(project["parameters"], {})
         self.assertEqual(project["mappings"], [{"name": "layer", "remote": "layers/meta", "local": "layers/meta"}])
         self.assertIsNot(project["mappings"], config["mappings"])
+
+    def test_existing_gen5_xen_product_type_is_renamed(self) -> None:
+        config = {
+            "projects": [{"name": "p", "product_type": "gen5_xen"}],
+            "active_project": "p",
+        }
+
+        profiles.normalize_project_profiles(config)
+
+        self.assertEqual(profiles.active_project(config)["product_type"], "gen5_xen_android")
 
     def test_profile_component_defaults_for_new_config(self) -> None:
         config = {
@@ -110,6 +177,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
 
         project = profiles.active_project(config)
         self.assertEqual(project["name"], "default")
+        self.assertEqual(project["product_type"], "gen5_xen_android")
         self.assertEqual(project["project_dir"], "meta-product")
         self.assertEqual(project["git_url"], "git@example:repo")
         self.assertEqual(project["local_project_dir"], "overlay")
@@ -167,7 +235,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
 
         created = profiles.add_remote_profile(config, "three")
         self.assertEqual(created["name"], "three")
-        self.assertEqual(config["active_remote"], "two")
+        self.assertEqual(config["active_remote"], config["remotes"][1]["id"])
         self.assertTrue(profiles.set_active_remote_profile(config, "three"))
         self.assertFalse(profiles.set_active_remote_profile(config, "three"))
         self.assertEqual(profiles.active_remote(config)["name"], "three")
@@ -176,7 +244,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
             profiles.add_remote_profile(config, "three")
 
         self.assertTrue(profiles.delete_remote_profile(config, "three"))
-        self.assertEqual(config["active_remote"], "one")
+        self.assertEqual(config["active_remote"], config["remotes"][0]["id"])
         self.assertEqual(profiles.active_remote(config)["name"], "one")
         self.assertFalse(profiles.delete_remote_profile(config, "missing"))
 
@@ -193,14 +261,14 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
             {"status": "Build host profile added: two"},
         )
         self.assertEqual(config["remotes"][1]["name"], "two")
-        self.assertEqual(config["active_remote"], "one")
+        self.assertEqual(config["active_remote"], config["remotes"][0]["id"])
 
         self.assertEqual(
             profiles.apply_add_board_host_profile_for_config(config, " lab "),
             {"status": "Board host profile added: lab"},
         )
         self.assertEqual(config["board_hosts"][1]["name"], "lab")
-        self.assertEqual(config["active_board_host"], "board")
+        self.assertEqual(config["active_board_host"], config["board_hosts"][0]["id"])
 
     def test_remote_profile_field_update_renames_active_and_preserves_custom_label(self) -> None:
         config = {
@@ -215,7 +283,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
         profiles.update_remote_profile_field(config, remote, "name", "renamed")
         self.assertEqual(remote["name"], "renamed")
         self.assertEqual(remote["label"], "Custom")
-        self.assertEqual(config["active_remote"], "renamed")
+        self.assertEqual(config["active_remote"], remote["id"])
         self.assertEqual(profiles.active_remote(config), remote)
 
         profiles.update_remote_profile_field(config, remote, "host", "10.0.0.1")
@@ -244,7 +312,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
 
         created = profiles.add_board_host_profile(config, "three")
         self.assertEqual(created["name"], "three")
-        self.assertEqual(config["active_board_host"], "one")
+        self.assertEqual(config["active_board_host"], config["board_hosts"][0]["id"])
         self.assertTrue(profiles.set_active_board_host_profile(config, "two"))
         self.assertFalse(profiles.set_active_board_host_profile(config, "two"))
         self.assertEqual(profiles.active_board_host(config)["name"], "two")
@@ -253,7 +321,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
             profiles.add_board_host_profile(config, "three")
 
         self.assertTrue(profiles.delete_board_host_profile(config, "two"))
-        self.assertEqual(config["active_board_host"], "one")
+        self.assertEqual(config["active_board_host"], config["board_hosts"][0]["id"])
         self.assertEqual(profiles.active_board_host(config)["name"], "one")
         self.assertFalse(profiles.delete_board_host_profile(config, "missing"))
 
@@ -270,7 +338,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
         profiles.update_board_host_profile_field(config, host, "name", "renamed")
         self.assertEqual(host["name"], "renamed")
         self.assertEqual(host["label"], "Custom")
-        self.assertEqual(config["active_board_host"], "renamed")
+        self.assertEqual(config["active_board_host"], host["id"])
         self.assertEqual(profiles.active_board_host(config), host)
 
         profiles.update_board_host_profile_field(config, host, "work_dir", "/srv/tftp/demo")
@@ -314,7 +382,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
                 "preflight_reset": True,
             },
         )
-        self.assertEqual(config["active_remote"], "other")
+        self.assertEqual(config["active_remote"], config["remotes"][1]["id"])
 
         self.assertEqual(
             profiles.apply_active_board_host_profile_for_config(config, config["board_hosts"][0]),
@@ -332,7 +400,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
                 "connection_reset": True,
             },
         )
-        self.assertEqual(config["active_board_host"], "lab")
+        self.assertEqual(config["active_board_host"], config["board_hosts"][1]["id"])
 
     def test_delete_host_profile_plans_preserve_current_status_and_reset_policy(self) -> None:
         config = {
@@ -350,7 +418,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
                 "preflight_reset": False,
             },
         )
-        self.assertEqual(config["active_remote"], "build")
+        self.assertEqual(config["active_remote"], config["remotes"][0]["id"])
         self.assertEqual(
             profiles.apply_delete_remote_profile_for_config(config, config["remotes"][0]),
             {
@@ -408,7 +476,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
         self.assertEqual(created["name"], "three")
         self.assertEqual(created["project_dir"], "meta-one")
         self.assertEqual(created["parameters"], {"B": "2"})
-        self.assertEqual(config["active_project"], "three")
+        self.assertEqual(config["active_project"], config["projects"][2]["id"])
         self.assertEqual(config["docker"]["image"], "image")
         self.assertTrue(profiles.can_delete_project_profile(config))
 
@@ -417,7 +485,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
         self.assertEqual(profiles.active_project(config)["name"], "two")
 
         self.assertTrue(profiles.delete_project_profile(config, "two"))
-        self.assertEqual(config["active_project"], "one")
+        self.assertEqual(config["active_project"], config["projects"][0]["id"])
         self.assertEqual(profiles.active_project(config)["name"], "one")
         self.assertFalse(profiles.delete_project_profile(config, "missing"))
 
@@ -458,7 +526,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
 
         self.assertEqual(plan, {"status": "Project added: two", "runtime_reload": True})
         self.assertEqual(config["projects"][1]["name"], "two")
-        self.assertEqual(config["active_project"], "two")
+        self.assertEqual(config["active_project"], config["projects"][1]["id"])
         self.assertEqual(config["docker"]["image"], "image")
 
     def test_project_profile_field_update_renames_active_and_updates_remote_projects_dir(self) -> None:
@@ -477,7 +545,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
         profiles.update_project_profile_field(config, project, "name", "renamed")
         self.assertEqual(project["name"], "renamed")
         self.assertEqual(project["label"], "renamed")
-        self.assertEqual(config["active_project"], "renamed")
+        self.assertEqual(config["active_project"], project["id"])
         self.assertEqual(profiles.active_project(config), project)
 
         profiles.update_project_profile_field(
@@ -521,7 +589,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
                 "preflight_reset": True,
             },
         )
-        self.assertEqual(config["active_project"], "two")
+        self.assertEqual(config["active_project"], config["projects"][1]["id"])
 
     def test_project_picker_selection_plan_preserves_current_screen_behavior(self) -> None:
         config = {
@@ -536,12 +604,12 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
             profiles.apply_project_picker_selection_for_config(config, config["projects"][0]),
             {"status": "Active project: One", "runtime_reload": True, "save": True},
         )
-        self.assertEqual(config["active_project"], "one")
+        self.assertEqual(config["active_project"], config["projects"][0]["id"])
         self.assertEqual(
             profiles.apply_project_picker_selection_for_config(config, config["projects"][1]),
             {"status": "Active project: Two", "runtime_reload": True, "save": True},
         )
-        self.assertEqual(config["active_project"], "two")
+        self.assertEqual(config["active_project"], config["projects"][1]["id"])
 
     def test_delete_project_profile_plan_preserves_status_and_reload_policy(self) -> None:
         config = {
@@ -561,7 +629,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
                 "preflight_reset": False,
             },
         )
-        self.assertEqual(config["active_project"], "one")
+        self.assertEqual(config["active_project"], config["projects"][0]["id"])
         self.assertEqual(
             profiles.apply_delete_project_profile_for_config(config, config["projects"][0]),
             {
@@ -570,7 +638,7 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
                 "preflight_reset": True,
             },
         )
-        self.assertEqual(config["active_project"], "three")
+        self.assertEqual(config["active_project"], config["projects"][0]["id"])
 
     def test_project_profile_delete_rejects_single_project(self) -> None:
         config = {"projects": [{"name": "only"}], "active_project": "only"}

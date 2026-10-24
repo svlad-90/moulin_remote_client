@@ -42,55 +42,6 @@ class ProjectConfigFieldBehaviorTests(unittest.TestCase):
         self.assertEqual(fields.project_field_value(project, fallback_param), "no")
         self.assertEqual(fields.project_field_value(project, {"kind": "text", "key": "project_dir"}), "meta")
 
-    def test_active_project_file_selection_plan_preserves_status_and_side_effect_flags(self) -> None:
-        config = {
-            "projects": [{"name": "prod", "moulin_manifest": "old.yaml", "dockerfile": "old/Dockerfile"}],
-            "active_project": "prod",
-        }
-
-        self.assertEqual(
-            fields.apply_active_project_file_selection_for_config(config, "moulin_manifest", "product.yaml"),
-            {
-                "status": "Moulin manifest: product.yaml",
-                "manifest_cache_reset": True,
-                "build_params_reload": True,
-                "preflight_reset": True,
-            },
-        )
-        self.assertEqual(config["project"]["moulin_manifest"], "product.yaml")
-        self.assertEqual(
-            fields.apply_active_project_file_selection_for_config(config, "dockerfile", "doc/Dockerfile"),
-            {
-                "status": "Dockerfile: doc/Dockerfile",
-                "manifest_cache_reset": False,
-                "build_params_reload": False,
-                "preflight_reset": True,
-            },
-        )
-        self.assertEqual(config["project"]["dockerfile"], "doc/Dockerfile")
-
-    def test_active_project_settings_field_plan_preserves_current_side_effects(self) -> None:
-        config = {
-            "projects": [{"name": "prod", "local_project_dir": "old", "git_url": "old", "docker_image": "old"}],
-            "active_project": "prod",
-        }
-
-        self.assertEqual(
-            fields.apply_active_project_settings_field_for_config(config, "local_project_dir", " overlay "),
-            {"value": "overlay", "preflight_reset": False, "docker_image": None},
-        )
-        self.assertEqual(config["project"]["local_project_dir"], "overlay")
-        self.assertEqual(
-            fields.apply_active_project_settings_field_for_config(config, "git_url", " https://example/repo "),
-            {"value": "https://example/repo", "preflight_reset": True, "docker_image": None},
-        )
-        self.assertEqual(config["project"]["git_url"], "https://example/repo")
-        self.assertEqual(
-            fields.apply_active_project_settings_field_for_config(config, "docker_image", " image "),
-            {"value": "image", "preflight_reset": False, "docker_image": "image"},
-        )
-        self.assertEqual(config["project"]["docker_image"], "image")
-
     def test_project_field_update_helpers_match_current_behavior(self) -> None:
         self.assertEqual(fields.normalize_project_field_value("git_ref", "  mirror  "), "mirror")
         self.assertEqual(fields.project_dir_field_update("project_dir", "/mnt/storage/proj/"), ("proj", "/mnt/storage"))
@@ -108,58 +59,6 @@ class ProjectConfigFieldBehaviorTests(unittest.TestCase):
 
         self.assertTrue(fields.project_docker_image_update_needed("docker_image"))
         self.assertFalse(fields.project_docker_image_update_needed("project_dir"))
-
-    def test_project_inline_update_plan_mutates_config_and_reports_side_effects(self) -> None:
-        config = {
-            "remote": {"name": "build", "projects_dir": ""},
-            "remotes": [{"name": "build", "projects_dir": ""}],
-            "active_remote": "build",
-            "projects": [
-                {"name": "active", "project_dir": "old", "docker_image": "old-image"},
-                {"name": "other", "project_dir": "other", "docker_image": "other-image"},
-            ],
-            "active_project": "active",
-        }
-        active = config["projects"][0]
-        other = config["projects"][1]
-
-        plan = fields.apply_project_inline_field_update_for_config(
-            config,
-            active,
-            "project_dir",
-            " /mnt/storage/meta-prod ",
-        )
-
-        self.assertEqual(active["project_dir"], "meta-prod")
-        self.assertEqual(config["remote"]["projects_dir"], "/mnt/storage")
-        self.assertEqual(
-            plan,
-            {
-                "value": "meta-prod",
-                "status": "project_dir updated",
-                "runtime_reload": True,
-                "project_source_reload": False,
-                "preflight_reset": True,
-                "docker_image": None,
-            },
-        )
-
-        plan = fields.apply_project_inline_field_update_for_config(config, active, "docker_image", " image ")
-        self.assertEqual(active["docker_image"], "image")
-        self.assertEqual(plan["docker_image"], "image")
-        self.assertTrue(plan["runtime_reload"])
-        self.assertFalse(plan["preflight_reset"])
-
-        plan = fields.apply_project_inline_field_update_for_config(config, other, "git_ref", "mirror")
-        self.assertEqual(other["git_ref"], "mirror")
-        self.assertFalse(plan["runtime_reload"])
-        self.assertFalse(plan["project_source_reload"])
-        self.assertFalse(plan["preflight_reset"])
-
-        plan = fields.apply_project_inline_field_update_for_config(config, active, "git_ref", "next")
-        self.assertTrue(plan["project_source_reload"])
-        self.assertTrue(plan["preflight_reset"])
-        self.assertIsNone(plan["docker_image"])
 
     def test_project_field_enabled_matches_current_behavior(self) -> None:
         project = {"name": "prod"}

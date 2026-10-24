@@ -67,7 +67,7 @@ class BoardScreenRendererTests(unittest.TestCase):
         self.assertEqual(result.hosts, cfg["board_hosts"])
         self.assertEqual(result.fields, [("Display label", "label")])
         self.assertEqual(port.boxes, [(3, 0, 24, 120, "Board hosts")])
-        self.assertTrue(any("Active: board-a" in row[2] for row in port.rows))
+        self.assertTrue(any("Active host: board-a" in row[2] for row in port.rows))
         self.assertFalse(any(row[2].strip() == "Fields:" for row in port.rows))
 
     def test_render_groups_board_host_fields(self) -> None:
@@ -88,7 +88,7 @@ class BoardScreenRendererTests(unittest.TestCase):
         renderer.render(port, height=30, width=120, screen_state=state)
 
         rendered = [row[2].strip() for row in port.rows]
-        self.assertIn("PROFILE", rendered)
+        self.assertIn("HOST PROFILE", rendered)
         self.assertIn("SSH", rendered)
         self.assertIn("FLASHING", rendered)
         self.assertIn("NETWORK BOOT", rendered)

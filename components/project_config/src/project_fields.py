@@ -6,13 +6,17 @@ from typing import Any
 
 from components.config.api import accessors
 from components.config.api import profiles as config_profiles
+from components.product_types.api import registry as product_type_registry_api
 
 
 class ProjectFieldService:
     """Own project field update, availability, and enter-action use cases."""
 
     def project_is_active(self, project: dict[str, Any], active_project: str) -> bool:
-        return str(project.get("name", "")) == str(active_project)
+        return str(active_project) in {
+            str(project.get("id") or ""),
+            str(project.get("name") or ""),
+        }
 
     def field_value(self, project: dict[str, Any], field: dict[str, Any]) -> str:
         key = str(field["key"])
@@ -26,6 +30,28 @@ class ProjectFieldService:
 
     def normalize_value(self, key: str, value: str) -> str:
         return value.strip()
+
+    def available_product_type_options(self) -> list[dict[str, str]]:
+        return [
+            {
+                "type": adapter.type_id,
+                "label": adapter.label or adapter.type_id,
+                "description": adapter.description,
+            }
+            for adapter in product_type_registry_api.product_type_registry().adapters()
+        ]
+
+    def available_product_types(self) -> list[str]:
+        return [option["type"] for option in self.available_product_type_options()]
+
+    def next_product_type_value(self, current: str) -> str:
+        product_types = self.available_product_types()
+        if not product_types:
+            return "gen5_xen_android"
+        clean_current = current.strip()
+        if clean_current not in product_types:
+            return product_types[0]
+        return product_types[(product_types.index(clean_current) + 1) % len(product_types)]
 
     def project_dir_field_update(self, key: str, value: str) -> tuple[str, str]:
         if key != "project_dir" or not value.startswith("/"):
@@ -45,68 +71,6 @@ class ProjectFieldService:
     def docker_image_update_needed(self, key: str) -> bool:
         return key == "docker_image"
 
-    def apply_inline_field_update_for_config(
-        self,
-        config: dict[str, Any],
-        project: dict[str, Any],
-        key: str,
-        raw_value: str,
-    ) -> dict[str, Any]:
-        value = self.normalize_value(key, raw_value)
-        value, projects_dir = self.project_dir_field_update(key, value)
-        config_profiles.update_project_profile_field(config, project, key, value, projects_dir=projects_dir)
-        active = self.project_is_active_for_config(project, config)
-        return {
-            "value": value,
-            "status": f"{key} updated",
-            "runtime_reload": active and self.runtime_reload_needed(key),
-            "project_source_reload": active and self.project_source_reload_needed(key),
-            "preflight_reset": active and self.preflight_reset_needed(key),
-            "docker_image": value if active and self.docker_image_update_needed(key) else None,
-        }
-
-    def apply_active_file_selection_for_config(
-        self,
-        config: dict[str, Any],
-        key: str,
-        selected: str,
-    ) -> dict[str, Any]:
-        config_profiles.update_project_profile_field(
-            config,
-            config_profiles.active_project(config),
-            key,
-            selected,
-        )
-        labels = {
-            "moulin_manifest": "Moulin manifest",
-            "dockerfile": "Dockerfile",
-        }
-        return {
-            "status": f"{labels.get(key, key)}: {selected}",
-            "manifest_cache_reset": key == "moulin_manifest",
-            "build_params_reload": key == "moulin_manifest",
-            "preflight_reset": True,
-        }
-
-    def apply_active_settings_field_for_config(
-        self,
-        config: dict[str, Any],
-        key: str,
-        raw_value: str,
-    ) -> dict[str, Any]:
-        value = self.normalize_value(key, raw_value)
-        config_profiles.update_project_profile_field(
-            config,
-            config_profiles.active_project(config),
-            key,
-            value,
-        )
-        return {
-            "value": value,
-            "preflight_reset": key == "git_url",
-            "docker_image": value if key == "docker_image" else None,
-        }
-
     def field_enabled(
         self,
         field: dict[str, Any],
@@ -118,7 +82,7 @@ class ProjectFieldService:
         remote_has_project_dir: bool,
     ) -> bool:
         kind = str(field["kind"])
-        if kind in ("text", "git_ref"):
+        if kind in ("text", "git_ref", "product_type"):
             return True
         if not self.project_is_active(project, active_project):
             return False
@@ -169,6 +133,7 @@ class ProjectFieldService:
         hints = {
             "name": "Unique local project id. Renaming an active project preserves active selection.",
             "label": "Display label for this project profile.",
+            "product_type": "Enter selects the product model used to derive domains and runtime capabilities.",
             "project_dir": f"Project checkout directory name under Projects dir ({build_host_projects_dir or '<not set>'}).",
             "local_project_dir": f"Local overlay for mapped pull/push. Relative paths are resolved from {app_dir}.",
             "git_url": "Git URL used by Prepare remote project when checkout origin should be validated.",
@@ -184,7 +149,11 @@ class ProjectFieldService:
         return hints.get(key, "")
 
     def project_is_active_for_config(self, project: dict[str, Any], config: dict[str, Any]) -> bool:
-        return self.project_is_active(project, str(config.get("active_project", "")))
+        active = config_profiles.active_project(config)
+        return self.project_is_active(project, str(config.get("active_project", ""))) or (
+            bool(str(project.get("name") or ""))
+            and str(project.get("name") or "") == str(active.get("name") or "")
+        )
 
     def field_enabled_for_config(
         self,
@@ -197,7 +166,11 @@ class ProjectFieldService:
         return self.field_enabled(
             field,
             project,
-            active_project=str(config.get("active_project", "")),
+            active_project=(
+                str(project.get("id") or project.get("name") or "")
+                if self.project_is_active_for_config(project, config)
+                else str(config.get("active_project", ""))
+            ),
             connected=connected,
             remote_has_ssh=accessors.remote_has_ssh_for_config(config),
             remote_has_project_dir=accessors.remote_has_project_dir_for_config(config),
@@ -212,7 +185,11 @@ class ProjectFieldService:
         return self.field_disabled_reason(
             field,
             project,
-            active_project=str(config.get("active_project", "")),
+            active_project=(
+                str(project.get("id") or project.get("name") or "")
+                if self.project_is_active_for_config(project, config)
+                else str(config.get("active_project", ""))
+            ),
             remote_has_user=accessors.remote_has_user_for_config(config),
             remote_has_host=accessors.remote_has_host_for_config(config),
             remote_has_project_dir=accessors.remote_has_project_dir_for_config(config),
@@ -246,6 +223,8 @@ class ProjectFieldService:
             return {"action": "select-board-artifacts"}
         if kind == "param":
             return {"action": "cycle-parameter", "param": field["param"]}
+        if kind == "product_type":
+            return {"action": "select-product-type"}
         return {
             "action": "edit-text",
             "key": str(field["key"]),

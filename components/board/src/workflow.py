@@ -157,6 +157,21 @@ class BoardCommandWorkflowService:
     def flash_ufs_image_commands(self, config: dict[str, Any]) -> list[list[str]]:
         return self.board_action_commands(config, "flash_ufs_image")
 
+    def board_capabilities(self, config: dict[str, Any]) -> frozenset[board_type_base_api.BoardCapability]:
+        return self._adapter_for_config(config).capabilities(config_profiles.board_target(config))
+
+    def board_operation_plan(
+        self,
+        config: dict[str, Any],
+        capability: board_type_base_api.BoardCapability,
+        *,
+        build_params: dict[str, str] | None = None,
+    ) -> board_type_base_api.BoardOperationPlan | None:
+        return self._adapter_for_config(config).operation_plan(
+            self._action_context(config, build_params=build_params),
+            capability,
+        )
+
     def run_flash_ufs_image(
         self,
         config: dict[str, Any],
@@ -166,7 +181,8 @@ class BoardCommandWorkflowService:
         return self.run_board_action(config, "flash_ufs_image", runner=runner)
 
     def _adapter_for_config(self, config: dict[str, Any]) -> board_type_base_api.BoardTypeAdapter:
-        return self.board_type_registry.adapter_for_host(config_profiles.active_board_host(config))
+        config_profiles.normalize_board_host_profiles(config)
+        return self.board_type_registry.adapter_for_host(config_profiles.board_target(config))
 
     def _action_by_id(
         self,

@@ -27,12 +27,16 @@ def config() -> dict[str, Any]:
     }
 
 
+def unused_create(_values: dict[str, Any]) -> dict[str, Any]:
+    raise AssertionError("create callback must not be called")
+
+
 class RemoteDraftWorkflowServiceTests(unittest.TestCase):
     def test_edit_name_updates_label_when_label_is_empty(self) -> None:
         service = remote_draft_workflow.RemoteDraftWorkflowService(
             config(),
-            save_config=lambda _config: None,
             reset_preflight=lambda: None,
+            create_remote=unused_create,
         )
         port = FakePort(["new-build"])
 
@@ -42,14 +46,24 @@ class RemoteDraftWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(service.draft["name"], "new-build")
         self.assertEqual(service.draft["label"], "new-build")
 
-    def test_create_remote_saves_config_resets_preflight_and_closes(self) -> None:
+    def test_create_remote_uses_callback_resets_preflight_and_closes(self) -> None:
         cfg = config()
-        saves: list[dict[str, Any]] = []
         resets: list[bool] = []
+
+        def create_remote(values: dict[str, Any]) -> dict[str, Any]:
+            record = {"id": "new-id", **values}
+            cfg["remotes"].append(record)
+            cfg["active_remote"] = record["id"]
+            return {
+                "connection_reset": True,
+                "preflight_reset": True,
+                "status": f"Remote profile added: {record['name']}",
+            }
+
         service = remote_draft_workflow.RemoteDraftWorkflowService(
             cfg,
-            save_config=saves.append,
             reset_preflight=lambda: resets.append(True),
+            create_remote=create_remote,
         )
         service.draft.update({"name": "new-build", "label": "New Build", "user": "me", "host": "10.0.0.2"})
         service.index = 4
@@ -58,18 +72,17 @@ class RemoteDraftWorkflowServiceTests(unittest.TestCase):
         closed = service.handle_enter(port)
 
         self.assertTrue(closed)
-        self.assertEqual(cfg["active_remote"], "new-build")
+        self.assertEqual(cfg["active_remote"], cfg["remotes"][-1]["id"])
         self.assertEqual(cfg["remotes"][-1]["label"], "New Build")
         self.assertEqual(port.connection_state, "disconnected")
         self.assertEqual(resets, [True])
-        self.assertEqual(saves, [cfg])
         self.assertEqual(port.status, "Remote profile added: new-build")
 
     def test_disabled_create_reports_status_and_keeps_screen_open(self) -> None:
         service = remote_draft_workflow.RemoteDraftWorkflowService(
             config(),
-            save_config=lambda _config: None,
             reset_preflight=lambda: None,
+            create_remote=unused_create,
         )
         service.index = 4
         port = FakePort()

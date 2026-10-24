@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from components.config.api import accessors as config_accessor_api
 from components.config.api import profiles as config_profile_api
+from components.config.api import store as config_store_api
 from components.host_config_ui.api import board_screen as config_board_screen_api
 from components.config_workflow.api import field_actions as config_field_actions_api
 from components.config_workflow.api import profile_actions as config_profile_actions_api
@@ -33,11 +34,10 @@ class ConfigWorkflowController:
         config: dict[str, Any],
         *,
         app_dir: Path,
-        default_config_path: Path,
         default_build_targets: str,
         default_moulin_manifest: str,
         default_dockerfile: str,
-        save_config: Callable[[dict[str, Any]], Any],
+        config_store: config_store_api.ConfigStore,
         capture_command: Callable[..., Any],
         remote_read_project_file: Callable[[dict[str, Any], str], str],
         manifest_cache: dict[tuple[str, ...], dict[str, Any]],
@@ -49,11 +49,10 @@ class ConfigWorkflowController:
     ) -> None:
         self.config = config
         self.app_dir = app_dir
-        self.default_config_path = default_config_path
         self.default_build_targets = default_build_targets
         self.default_moulin_manifest = default_moulin_manifest
         self.default_dockerfile = default_dockerfile
-        self.save_config = save_config
+        self.config_store = config_store
         self.capture_command = capture_command
         self.remote_read_project_file = remote_read_project_file
         self.manifest_cache = manifest_cache
@@ -67,24 +66,22 @@ class ConfigWorkflowController:
         config_board_screen_api.run_board_host_configurations_screen(
             port,
             self.config,
-            save_config=self.save_config,
             profile_action_controller=self._profile_action_controller(),
             field_action_controller=self._field_action_controller(),
         )
 
     def select_active_board_host(self, port: Any) -> None:
-        hosts = [host for host in self.config.get("board_hosts", []) if isinstance(host, dict)]
-        current = str(config_profile_api.active_board_host(self.config).get("name", ""))
-        host = self._select_profile_from_list(port, "Select board host", hosts, current)
-        if host is None:
+        boards = config_profile_api.board_profiles(self.config)
+        current = str(config_profile_api.active_board(self.config).get("id", ""))
+        board = self._select_profile_from_list(port, "Select board", boards, current)
+        if board is None:
             return
-        self._profile_action_controller().set_active_board_host(port, host)
+        self._profile_action_controller().set_active_board(port, board)
 
     def run_remote_configurations_screen(self, port: Any) -> None:
         config_remote_screen_api.run_remote_configurations_screen(
             port,
             self.config,
-            save_config=self.save_config,
             remote_file_selection_controller=self._remote_file_selection_controller(),
             profile_action_controller=self._profile_action_controller(),
             field_action_controller=self._field_action_controller(),
@@ -92,7 +89,7 @@ class ConfigWorkflowController:
 
     def select_active_remote(self, port: Any) -> None:
         remotes = [remote for remote in self.config.get("remotes", []) if isinstance(remote, dict)]
-        current = str(config_profile_api.active_remote(self.config).get("name", ""))
+        current = str(config_profile_api.active_remote(self.config).get("id", ""))
         remote = self._select_profile_from_list(port, "Select build host", remotes, current)
         if remote is None:
             return
@@ -108,8 +105,8 @@ class ConfigWorkflowController:
         if not profiles:
             port.status = f"{title}: no profiles configured"
             return None
-        names = [str(profile.get("name", "")) for profile in profiles]
-        index = names.index(current) if current in names else 0
+        identities = [str(profile.get("id") or profile.get("name") or "") for profile in profiles]
+        index = identities.index(current) if current in identities else 0
         port.screen.timeout(-1)
         while True:
             port.screen.erase()
@@ -130,7 +127,7 @@ class ConfigWorkflowController:
             scroll = ui_menu_api.list_scroll(index, len(profiles), visible)
             for offset, profile in enumerate(profiles[scroll : scroll + visible]):
                 item_index = scroll + offset
-                marker = "*" if names[item_index] == current else " "
+                marker = "*" if identities[item_index] == current else " "
                 label = self._profile_picker_label(profile, marker)
                 attr = port.selected_attr() if item_index == index else 0
                 port.add(4 + offset, 2, ui_text_api.fit_text(label, width - 4).ljust(width - 4), attr)
@@ -166,7 +163,6 @@ class ConfigWorkflowController:
             port,
             self.config,
             remote,
-            save_config=self.save_config,
             profile_action_controller=self._profile_action_controller(),
             field_action_controller=self._field_action_controller(),
             browse_project_directory=lambda start_path: self.browse_remote_directory_screen(port, start_path),
@@ -176,8 +172,10 @@ class ConfigWorkflowController:
         config_remote_screen_api.run_add_remote_screen(
             port,
             self.config,
-            save_config=self.save_config,
             reset_preflight=self.reset_preflight,
+            create_remote=lambda values: self._profile_action_controller().create_remote_from_values(
+                port, values
+            ),
         )
 
     def browse_remote_directory_screen(self, port: Any, start_path: str) -> str | None:
@@ -201,8 +199,6 @@ class ConfigWorkflowController:
             remote_read_project_file=lambda config, path: self._read_project_file_with_git_fallback(port, config, path),
             manifest_cache=self.manifest_cache,
             default_moulin_manifest=self.default_moulin_manifest,
-            default_config_path=self.default_config_path,
-            save_config=self.save_config,
             target_selection_controller_factory=self._target_selection_controller,
             remote_file_selection_controller=self._remote_file_selection_controller(),
             project_remote_dir_editor=self._project_remote_dir_editor(),
@@ -231,7 +227,7 @@ class ConfigWorkflowController:
     def _profile_action_controller(self) -> Any:
         return config_profile_actions_api.profile_action_controller(
             self.config,
-            save_config=self.save_config,
+            config_store=self.config_store,
             confirm_action=self.confirm_action,
             reload_runtime=self.reload_runtime,
             restore_project_menu_input=self.restore_project_menu_input,
@@ -240,7 +236,7 @@ class ConfigWorkflowController:
     def _field_action_controller(self) -> Any:
         return config_field_actions_api.field_action_controller(
             self.config,
-            save_config=self.save_config,
+            config_store=self.config_store,
             reload_runtime=self.reload_runtime,
             reload_project_source_runtime=self.reload_project_source_runtime,
         )
@@ -266,8 +262,7 @@ class ConfigWorkflowController:
             ),
             manifest_cache=self.manifest_cache,
             default_moulin_manifest=self.default_moulin_manifest,
-            save_config=self.save_config,
-            reset_preflight=self.reset_preflight,
+            field_action_controller=self._field_action_controller(),
         )
 
     def _target_selection_controller(self) -> Any:
@@ -277,8 +272,7 @@ class ConfigWorkflowController:
             remote_read_project_file=self._read_project_file_with_git_fallback,
             manifest_cache=self.manifest_cache,
             default_moulin_manifest=self.default_moulin_manifest,
-            default_config_path=self.default_config_path,
-            save_config=self.save_config,
+            field_action_controller=self._field_action_controller(),
         )
 
     def _read_project_file_with_git_fallback(self, port: Any, config: dict[str, Any], path: str) -> str:
@@ -311,24 +305,18 @@ class ConfigWorkflowController:
     def _project_settings_action_controller(self) -> Any:
         return config_project_settings_actions_api.project_settings_action_controller(
             self.config,
-            app_dir=self.app_dir,
-            default_config_path=self.default_config_path,
-            save_config=self.save_config,
             target_selection_controller_factory=self._target_selection_controller,
             remote_file_selection_controller=self._remote_file_selection_controller(),
             profile_action_controller=self._profile_action_controller(),
             project_picker_controller=self._project_picker_controller(),
+            field_action_controller=self._field_action_controller(),
             reload_runtime=self.reload_runtime,
         )
 
     def _project_picker_controller(self) -> Any:
         return config_project_picker_api.project_picker_controller(
             self.config,
-            app_dir=self.app_dir,
-            default_build_targets=self.default_build_targets,
-            default_moulin_manifest=self.default_moulin_manifest,
-            default_dockerfile=self.default_dockerfile,
-            save_config=self.save_config,
+            profile_action_controller=self._profile_action_controller(),
         )
 
 
@@ -336,11 +324,10 @@ def config_workflow_controller(
     config: dict[str, Any],
     *,
     app_dir: Path,
-    default_config_path: Path,
     default_build_targets: str,
     default_moulin_manifest: str,
     default_dockerfile: str,
-    save_config: Callable[[dict[str, Any]], Any],
+    config_store: config_store_api.ConfigStore,
     capture_command: Callable[..., Any],
     remote_read_project_file: Callable[[dict[str, Any], str], str],
     manifest_cache: dict[tuple[str, ...], dict[str, Any]],
@@ -353,11 +340,10 @@ def config_workflow_controller(
     return ConfigWorkflowController(
         config,
         app_dir=app_dir,
-        default_config_path=default_config_path,
         default_build_targets=default_build_targets,
         default_moulin_manifest=default_moulin_manifest,
         default_dockerfile=default_dockerfile,
-        save_config=save_config,
+        config_store=config_store,
         capture_command=capture_command,
         remote_read_project_file=remote_read_project_file,
         manifest_cache=manifest_cache,

@@ -4,7 +4,10 @@ import unittest
 from typing import Any
 from unittest.mock import Mock
 
+from components.config.api import entities as config_entities
+from components.config.api import store as config_store
 from components.config_workflow.api import profile_actions
+from plugins.cts_vts import config_entities as cts_vts_config_entities
 
 
 class FakeProfilePort:
@@ -26,6 +29,7 @@ class FakeProfilePort:
         self.board_job = None
         self.action_running = False
         self.connection_workflow_service = Mock()
+        self.plugin_runtime = Mock(return_value=None)
 
     def prompt(self, label: str, current: str) -> str:
         return self.prompt_values.get(label, current)
@@ -39,9 +43,14 @@ class Harness:
         self.save_count = 0
         self.reload_count = 0
         self.restore_count = 0
+        self.store = config_store.config_store(config, save=self.save_config)
+        self.store.initialize([
+            config_entities.core_profile_contributor(),
+            cts_vts_config_entities.config_contributor(),
+        ])
         self.controller = profile_actions.ProfileActionController(
             config,
-            save_config=self.save_config,
+            config_store=self.store,
             confirm_action=self.confirm_action,
             reload_runtime=self.reload_runtime,
             restore_project_menu_input=self.restore_project_menu_input,
@@ -63,12 +72,12 @@ class Harness:
 
 def config() -> dict[str, Any]:
     return {
-        "remotes": [{"name": "build"}, {"name": "other"}],
-        "active_remote": "build",
-        "board_hosts": [{"name": "board"}, {"name": "lab"}],
-        "active_board_host": "board",
-        "projects": [{"name": "one"}, {"name": "two"}],
-        "active_project": "one",
+        "remotes": [{"id": "build-id", "name": "build"}, {"id": "other-id", "name": "other"}],
+        "active_remote": "build-id",
+        "board_hosts": [{"id": "board-host-id", "name": "board"}, {"id": "lab-host-id", "name": "lab"}],
+        "active_board_host": "board-host-id",
+        "projects": [{"id": "project-one-id", "name": "one"}, {"id": "project-two-id", "name": "two"}],
+        "active_project": "project-one-id",
     }
 
 
@@ -81,7 +90,7 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         harness.controller.add_remote(port)
 
-        self.assertEqual(cfg["active_remote"], "build")
+        self.assertEqual(cfg["active_remote"], "build-id")
         self.assertEqual(cfg["remotes"][-1]["name"], "new-build")
         self.assertEqual(port.status, "Build host profile added: new-build")
         self.assertEqual(harness.save_count, 1)
@@ -106,9 +115,80 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         harness.controller.add_board_host(port)
 
-        self.assertEqual(cfg["active_board_host"], "board")
+        self.assertEqual(cfg["active_board_host"], "board-host-id")
         self.assertEqual(cfg["board_hosts"][-1]["name"], "lab2")
         self.assertEqual(port.status, "Board host profile added: lab2")
+        self.assertEqual(harness.save_count, 1)
+
+    def test_add_board_adds_physical_board_to_selected_host(self) -> None:
+        cfg = config()
+        host = cfg["board_hosts"][0]
+        port = FakeProfilePort()
+        port.prompt_values["Board name"] = "board-a"
+        harness = Harness(cfg)
+
+        board = harness.controller.add_board(port, host)
+
+        self.assertEqual(board["name"], "board-a")
+        self.assertEqual(host["boards"][0]["name"], "board-a")
+        self.assertEqual(port.status, "Board added: board-a")
+        self.assertEqual(harness.save_count, 1)
+
+    def test_delete_board_updates_plugin_references(self) -> None:
+        cfg = config()
+        host = cfg["board_hosts"][0]
+        board = {"id": "board-a-id", "board_host_id": "board-host-id", "name": "board-a", "type": "gen5_x5h"}
+        host["boards"] = [board]
+        cfg["active_board"] = "board-a-id"
+        cfg["plugins"] = {
+            "cts-vts": {
+                "enabled": True,
+                "config": {
+                    "board_profiles": [
+                        {
+                            "id": "profile-id",
+                            "name": "lab",
+                            "devices": [{"board_id": "board-a-id"}],
+                        }
+                    ]
+                },
+            }
+        }
+        port = FakeProfilePort()
+        harness = Harness(cfg)
+        port.config_store = config_store.config_store(cfg, save=harness.save_config)
+        port.config_store.initialize(
+            [
+                config_entities.core_profile_contributor(),
+                cts_vts_config_entities.config_contributor(),
+            ]
+        )
+
+        deleted = harness.controller.delete_board(port, host, board)
+
+        self.assertTrue(deleted)
+        self.assertEqual(cfg["board_hosts"][0]["boards"], [])
+        self.assertEqual(cfg["plugins"]["cts-vts"]["config"]["board_profiles"][0]["devices"], [])
+        self.assertIn("CTS/VTS board profile lab", harness.confirm_requests[0][1])
+        self.assertEqual(harness.save_count, 1)
+
+    def test_switching_boards_on_same_host_preserves_connection(self) -> None:
+        cfg = config()
+        host = cfg["board_hosts"][0]
+        host["boards"] = [
+            {"id": "board-a-id", "board_host_id": "board-host-id", "name": "board-a"},
+            {"id": "board-b-id", "board_host_id": "board-host-id", "name": "board-b"},
+        ]
+        cfg["active_board_host"] = "board-host-id"
+        cfg["active_board"] = "board-a-id"
+        port = FakeProfilePort()
+        harness = Harness(cfg)
+
+        harness.controller.set_active_board(port, host["boards"][1])
+
+        self.assertEqual(cfg["active_board"], "board-b-id")
+        self.assertEqual(port.board_connection_state, "connected")
+        port.connection_workflow_service.assert_not_called()
         self.assertEqual(harness.save_count, 1)
 
     def test_add_project_profile_uses_current_runtime_context(self) -> None:
@@ -119,7 +199,7 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         harness.controller.add_project_profile(port)
 
-        self.assertEqual(cfg["active_project"], "copy")
+        self.assertEqual(cfg["active_project"], cfg["projects"][-1]["id"])
         self.assertEqual(cfg["projects"][-1]["name"], "copy")
         self.assertEqual(port.status, "Project added: copy")
         self.assertEqual(harness.reload_count, 1)
@@ -134,7 +214,7 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         harness.controller.add_project_profile(port)
 
-        self.assertEqual(cfg["active_project"], "copy")
+        self.assertEqual(cfg["active_project"], cfg["projects"][-1]["id"])
         self.assertEqual(port.status, "Project added: copy")
         self.assertEqual(harness.reload_count, 0)
         self.assertEqual(harness.save_count, 1)
@@ -197,7 +277,7 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         harness.controller.set_active_remote(port, cfg["remotes"][1])
 
-        self.assertEqual(cfg["active_remote"], "other")
+        self.assertEqual(cfg["active_remote"], "other-id")
         self.assertEqual(port.connection_state, "disconnected")
         self.assertEqual(port.preflight, "not run")
         self.assertEqual(port.status, "Active build host: other")
@@ -219,7 +299,7 @@ class ProfileActionControllerTests(unittest.TestCase):
 
                 def check_state(_port: Any) -> None:
                     self.assertIs(_port, port)
-                    self.assertEqual(cfg[active], target["name"])
+                    self.assertEqual(cfg[active], target["id"])
                     self.assertEqual(harness.save_count, 1)
                     if profiles == "remotes":
                         self.assertEqual(port.connection_state, "disconnected")
@@ -298,7 +378,7 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         harness.controller.set_active_board_host(port, cfg["board_hosts"][1])
 
-        self.assertEqual(cfg["active_board_host"], "lab")
+        self.assertEqual(cfg["active_board_host"], "lab-host-id")
         self.assertEqual(port.board_connection_state, "disconnected")
         self.assertEqual(port.status, "Active board host: lab")
         self.assertEqual(harness.save_count, 1)
@@ -310,7 +390,7 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         harness.controller.delete_project_profile(port, cfg["projects"][0])
 
-        self.assertEqual(cfg["active_project"], "two")
+        self.assertEqual(cfg["active_project"], "project-two-id")
         self.assertEqual(port.preflight, "not run")
         self.assertEqual(port.status, "Project deleted: one")
         self.assertEqual(harness.reload_count, 1)
@@ -324,7 +404,7 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         harness.controller.set_active_project(port, cfg["projects"][1])
 
-        self.assertEqual(cfg["active_project"], "two")
+        self.assertEqual(cfg["active_project"], "project-two-id")
         self.assertEqual(port.preflight, "not run")
         self.assertEqual(port.status, "Active project: two")
         self.assertEqual(harness.reload_count, 1)
@@ -338,7 +418,7 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         harness.controller.set_active_project(port, cfg["projects"][1])
 
-        self.assertEqual(cfg["active_project"], "two")
+        self.assertEqual(cfg["active_project"], "project-two-id")
         self.assertEqual(port.preflight, "not run")
         self.assertEqual(port.status, "Active project: two")
         self.assertEqual(harness.reload_count, 0)
@@ -373,7 +453,7 @@ class ProfileActionControllerTests(unittest.TestCase):
 
         harness.controller.delete_active_project_profile(port)
 
-        self.assertEqual(cfg["active_project"], "two")
+        self.assertEqual(cfg["active_project"], "project-two-id")
         self.assertEqual(port.preflight, "ok")
         self.assertEqual(port.status, "Project deleted: one")
         self.assertEqual(harness.reload_count, 1)

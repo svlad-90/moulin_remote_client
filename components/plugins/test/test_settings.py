@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from components.config.api.store import config_store
 from components.plugins.src import settings
 from components.plugins.src.model import PluginDefinition, PluginSetting, plugin_config
 
@@ -13,6 +14,7 @@ class FakeApp:
     def __init__(self) -> None:
         self.config: dict[str, object] = {}
         self.dependencies = SimpleNamespace(save_config=Mock())
+        self.config_store = config_store(self.config, save=self.dependencies.save_config)
         self.status = ""
         self.prompt_cancelled = False
         self.prompt = Mock(return_value="12")

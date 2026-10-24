@@ -71,7 +71,7 @@ class MainMenuSetupItemsService:
 
     def build_host_session_items(self, app: Any) -> list[MenuItem]:
         has_build_hosts = bool([remote for remote in app.config.get("remotes", []) if isinstance(remote, dict)])
-        has_board_hosts = bool([host for host in app.config.get("board_hosts", []) if isinstance(host, dict)])
+        has_boards = bool(config_profile_api.board_profiles(app.config))
         return [
             MenuItem(
                 "Select build host" if has_build_hosts else "Add build host",
@@ -111,17 +111,17 @@ class MainMenuSetupItemsService:
                 allow_during_job=True,
             ),
             MenuItem(
-                "Select board host" if has_board_hosts else "Add board host",
+                "Select board" if has_boards else "Configure board hosts",
                 "sessions / board host",
                 (
-                    "Choose the active board host profile used by flashing, TFTP/NFS deploy, and board shell commands."
-                    if has_board_hosts
-                    else "Open board host profile setup."
+                    "Choose the physical board used by flashing, TFTP/NFS deploy, and board shell commands."
+                    if has_boards
+                    else "Configure a board access host and add a physical board."
                 ),
-                lambda app: self._host_selection_preview(app.config, "active_board_host", "board_hosts"),
+                lambda app: self._board_selection_preview(app.config),
                 (
                     lambda app: app.config_workflow_controller().select_active_board_host(app)
-                    if has_board_hosts
+                    if has_boards
                     else app.config_workflow_controller().run_board_host_configurations_screen(app)
                 ),
                 allow_during_job=True,
@@ -131,6 +131,11 @@ class MainMenuSetupItemsService:
     def _host_selection_preview(self, config: dict[str, Any], active_key: str, list_key: str) -> str:
         active = str(config.get(active_key, ""))
         names = [str(profile.get("name", "")) for profile in config.get(list_key, []) if isinstance(profile, dict)]
+        return f"Active: {active or '<none>'} | Available: {', '.join(names) or '<none>'}"
+
+    def _board_selection_preview(self, config: dict[str, Any]) -> str:
+        active = str(config.get("active_board") or "")
+        names = [str(board.get("name") or "") for board in config_profile_api.board_profiles(config)]
         return f"Active: {active or '<none>'} | Available: {', '.join(names) or '<none>'}"
 
     def preflight_action_items(self, app: Any) -> list[MenuItem]:
@@ -197,8 +202,7 @@ def set_ui_setting(config: dict[str, Any], name: str, enabled: bool) -> None:
 def toggle_ui_setting(app: Any, name: str, label: str) -> None:
     ui = app.config.get("ui")
     enabled = not (isinstance(ui, dict) and bool(ui.get(name)))
-    set_ui_setting(app.config, name, enabled)
-    app.dependencies.save_config(app.config)
+    app.config_store.update_config(lambda config: set_ui_setting(config, name, enabled))
     app.status = f"{label}: {'yes' if enabled else 'no'}"
     app.menu_dirty = True
     app.main_full_redraw = True

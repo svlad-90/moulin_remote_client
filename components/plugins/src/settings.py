@@ -73,14 +73,14 @@ def _edit_setting(app: Any, definition: PluginDefinition, setting: PluginSetting
     values = plugin_config(app.config, definition.plugin_id)
     current = values.get(setting.key, setting.default)
     if setting.kind == "boolean":
-        values[setting.key] = not bool(current)
+        value: Any = not bool(current)
     elif setting.kind == "choice":
         choices = setting.choices
         try:
             current_index = choices.index(str(current))
         except ValueError:
             current_index = -1
-        values[setting.key] = choices[(current_index + 1) % len(choices)]
+        value = choices[(current_index + 1) % len(choices)]
     else:
         entered = app.prompt(setting.label, str(current))
         if app.prompt_cancelled:
@@ -97,8 +97,9 @@ def _edit_setting(app: Any, definition: PluginDefinition, setting: PluginSetting
             if setting.maximum is not None and value > setting.maximum:
                 app.status = f"{setting.label}: maximum is {setting.maximum}"
                 return
-            values[setting.key] = value
         else:
-            values[setting.key] = entered
-    app.dependencies.save_config(app.config)
+            value = entered
+    app.config_store.update_config(
+        lambda config: plugin_config(config, definition.plugin_id).__setitem__(setting.key, value)
+    )
     app.status = f"Updated plugin setting: {setting.label}"

@@ -6,9 +6,18 @@ import shlex
 import re
 import ipaddress
 import json
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
-from components.board_types.src.base import BoardAction, BoardActionContext, BoardCommandDefault, BoardTypeAdapter
+from components.board_types.src.base import (
+    BoardAction,
+    BoardActionContext,
+    BoardCapability,
+    BoardCommandDefault,
+    BoardOperationPlan,
+    BoardTypeAdapter,
+)
 from components.config.api import accessors as config_accessors
 from components.config.api import profiles as config_profiles
 from components.moulin.api import manifest as moulin_manifest_api
@@ -51,7 +60,7 @@ class Gen5X5hBoardAdapter(BoardTypeAdapter):
         ]
 
     def board_command(self, ctx: BoardActionContext, command_id: str) -> str:
-        return self.command_value_for_host(config_profiles.active_board_host(ctx.config), command_id)
+        return self.command_value_for_host(config_profiles.board_target(ctx.config), command_id)
 
     def board_command_script(self, ctx: BoardActionContext, command_id: str, label: str) -> str:
         command = self.board_command(ctx, command_id)
@@ -146,12 +155,14 @@ sys.stdout.buffer.flush()
                 "flash_ufs_image",
                 "Flash UFS image",
                 "Deploy the UFS imager to the board host and flash artifacts/full_ufs.img.gz to UFS over /dev/GEN5_CONSOLE.",
+                target_patterns=("full_ufs.img.gz",),
             ),
             BoardAction(
                 "restart_board",
                 "Restart board",
                 "Power-cycle the GEN5 X5H board on the board host and leave it in boot mode.",
                 confirm=True,
+                required_commands=("power_off", "boot_mode", "power_on"),
             ),
             BoardAction(
                 "open_board_serial_console",
@@ -346,6 +357,60 @@ sys.stdout.buffer.flush()
         if action_id == "apply_uboot_ufs_env":
             return self.apply_uboot_ufs_env_command_plan(ctx)
         return super().action_commands(ctx, action_id)
+
+    def capabilities(self, board_host: dict[str, Any] | None = None) -> frozenset[BoardCapability]:
+        return super().capabilities(board_host) | {
+            BoardCapability.REFLASH,
+            BoardCapability.REFLASH_BOOTLOADERS,
+        }
+
+    def operation_plan(
+        self,
+        ctx: BoardActionContext,
+        capability: BoardCapability,
+    ) -> BoardOperationPlan | None:
+        if capability == BoardCapability.REFLASH:
+            return self.ufs_reflash_operation_plan(ctx)
+        if capability == BoardCapability.REFLASH_BOOTLOADERS:
+            return self.bootloader_reflash_operation_plan(ctx)
+        return super().operation_plan(ctx, capability)
+
+    def ufs_reflash_operation_plan(self, ctx: BoardActionContext) -> BoardOperationPlan:
+        build_targets = ("full_ufs.img.gz",)
+        reflash_ctx = replace(ctx, artifact_targets=" ".join(build_targets))
+        provision_commands = self.action_commands(reflash_ctx, "copy_build_artifacts")
+        flash_commands = self.action_commands(reflash_ctx, "flash_ufs_image")
+        if not flash_commands:
+            raise ValueError("GEN5 X5H reflash flow produced no execute command")
+        provision_commands.extend(flash_commands[:-1])
+        return BoardOperationPlan(
+            capability=BoardCapability.REFLASH,
+            operation_id="gen5-x5h-ufs-reflash",
+            build_targets=build_targets,
+            provision_commands=tuple(tuple(command) for command in provision_commands),
+            execute_commands=(tuple(flash_commands[-1]),),
+            execute_timeout_seconds=1800,
+            post_execute_delay_seconds=10,
+        )
+
+    def bootloader_reflash_operation_plan(self, ctx: BoardActionContext) -> BoardOperationPlan:
+        build_targets = ("boot_artifacts",)
+        reflash_ctx = replace(ctx, artifact_targets=" ".join(build_targets))
+        provision_commands = self.action_commands(reflash_ctx, "copy_build_artifacts")
+        flash_commands = self.action_commands(reflash_ctx, "flash_bootloaders")
+        if len(flash_commands) != 6:
+            raise ValueError("GEN5 X5H bootloader reflash flow has an unexpected command plan")
+        provision_commands.extend(flash_commands[:2])
+        provision_commands.extend(flash_commands[3:5])
+        return BoardOperationPlan(
+            capability=BoardCapability.REFLASH_BOOTLOADERS,
+            operation_id="gen5-x5h-bootloader-reflash",
+            build_targets=build_targets,
+            provision_commands=tuple(tuple(command) for command in provision_commands),
+            execute_commands=(tuple(flash_commands[2]), tuple(flash_commands[5])),
+            execute_timeout_seconds=1800,
+            post_execute_delay_seconds=10,
+        )
 
     def nfs_deploy_helper_path(self) -> str:
         return "/usr/local/sbin/moulin-deploy-rootfs"

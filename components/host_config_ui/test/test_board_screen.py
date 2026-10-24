@@ -5,6 +5,7 @@ from typing import Any
 
 from components.host_config_ui.api import board_screen
 from components.host_config_ui.src import board_screen as board_screen_src
+from components.ui.api import input as ui_input_api
 
 
 class FakeScreen:
@@ -114,13 +115,30 @@ class FakeProfileActionController:
         self.calls.append(("add", ""))
         port.status = "added by controller"
 
+    def add_board(self, port: Any, host: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(("add-board", str(host.get("name", ""))))
+        board = {"name": "new-board", "label": "new-board", "type": "", "commands": {}}
+        host.setdefault("boards", []).append(board)
+        return board
+
     def delete_board_host(self, port: Any, host: dict[str, Any]) -> None:
         self.calls.append(("delete", str(host.get("name", ""))))
         port.status = "deleted by controller"
 
+    def delete_board(self, port: Any, host: dict[str, Any], board: dict[str, Any]) -> bool:
+        self.calls.append(("delete-board", str(board.get("name", ""))))
+        host["boards"] = [item for item in host.get("boards", []) if item is not board]
+        return True
+
     def set_active_board_host(self, port: Any, host: dict[str, Any]) -> None:
         self.calls.append(("set-active", str(host.get("name", ""))))
         port.status = "active by controller"
+
+    def set_active_board(self, port: Any, board: dict[str, Any]) -> None:
+        self.calls.append(("set-active-board", str(board.get("name", ""))))
+
+    def confirm_action(self, _title: str, _message: str) -> bool:
+        return True
 
 
 class FakeFieldActionController:
@@ -135,6 +153,10 @@ class FakeFieldActionController:
     def toggle_board_host_direct_copy(self, _port: Any, host: dict[str, Any]) -> None:
         self.toggle_calls.append(str(host.get("name", "")))
 
+    def apply_board_inline_value(self, _port: Any, board: dict[str, Any], key: str, value: str) -> None:
+        self.inline_calls.append((str(board.get("name", "")), key, value))
+        board[key] = value
+
 
 class FakeBoardTypeService:
     def __init__(self, options: list[dict[str, str]]) -> None:
@@ -147,48 +169,56 @@ class FakeBoardTypeService:
 def config_with_board_hosts() -> dict[str, Any]:
     return {
         "board_hosts": [
-            {"name": "board-a", "label": "Board A", "user": "user", "host": "10.0.0.1", "direct_copy": "no"},
-            {"name": "board-b", "label": "Board B", "user": "user", "host": "10.0.0.2", "direct_copy": "yes"},
+            {
+                "name": "host-a", "label": "Host A", "user": "user", "host": "10.0.0.1", "direct_copy": "no",
+                "boards": [{"name": "board-a", "label": "Board A", "type": "gen5_x5h", "commands": {}}],
+            },
+            {
+                "name": "host-b", "label": "Host B", "user": "user", "host": "10.0.0.2", "direct_copy": "yes",
+                "boards": [{"name": "board-b", "label": "Board B", "type": "gen5_x5h", "commands": {}}],
+            },
         ],
-        "active_board_host": "board-a",
+        "active_board_host": "host-a",
+        "active_board": "board-a",
     }
 
 
 class BoardHostConfigurationScreenControllerTests(unittest.TestCase):
-    def test_run_board_host_configurations_screen_quit_saves_config(self) -> None:
+    def test_run_board_host_configurations_screen_quit_restores_timeout(self) -> None:
         port = FakeBoardConfigPort([ord("q")])
-        saved: list[dict[str, Any]] = []
 
         board_screen.run_board_host_configurations_screen(
             port,
             config_with_board_hosts(),
-            save_config=saved.append,
         )
 
-        self.assertEqual(len(saved), 1)
         self.assertEqual(port.screen.timeouts[-1], 250)
 
-    def test_run_board_host_configurations_screen_add_action_uses_port(self) -> None:
+    def test_run_board_host_configurations_screen_add_action_uses_controller(self) -> None:
         port = FakeBoardConfigPort([ord("a"), ord("q")])
+        controller = FakeProfileActionController()
 
         board_screen.run_board_host_configurations_screen(
             port,
             config_with_board_hosts(),
-            save_config=lambda _config: None,
+            profile_action_controller=controller,
         )
 
-        self.assertEqual(port.add_calls, 1)
+        self.assertEqual(controller.calls, [("add", "")])
+        self.assertEqual(port.add_calls, 0)
 
     def test_run_board_host_configurations_screen_set_active_uses_selected_host(self) -> None:
-        port = FakeBoardConfigPort([ord("j"), ord("s"), ord("q")])
+        port = FakeBoardConfigPort([ord("j"), ord("l"), ord("s"), ord("q")])
+        config = config_with_board_hosts()
+        controller = FakeProfileActionController()
 
         board_screen.run_board_host_configurations_screen(
             port,
-            config_with_board_hosts(),
-            save_config=lambda _config: None,
+            config,
+            profile_action_controller=controller,
         )
 
-        self.assertEqual(port.set_active_calls, ["board-b"])
+        self.assertEqual(controller.calls, [("set-active-board", "board-b")])
 
     def test_run_board_host_configurations_screen_uses_profile_action_controller_for_add(self) -> None:
         port = FakeBoardConfigPort([ord("a"), ord("q")])
@@ -197,7 +227,6 @@ class BoardHostConfigurationScreenControllerTests(unittest.TestCase):
         board_screen.run_board_host_configurations_screen(
             port,
             config_with_board_hosts(),
-            save_config=lambda _config: None,
             profile_action_controller=controller,
         )
 
@@ -205,62 +234,71 @@ class BoardHostConfigurationScreenControllerTests(unittest.TestCase):
         self.assertEqual(port.add_calls, 0)
 
     def test_run_board_host_configurations_screen_uses_profile_action_controller_for_selected_host(self) -> None:
-        port = FakeBoardConfigPort([ord("j"), ord("s"), ord("d"), ord("q")])
+        port = FakeBoardConfigPort([ord("j"), ord("d"), ord("q")])
         controller = FakeProfileActionController()
 
         board_screen.run_board_host_configurations_screen(
             port,
             config_with_board_hosts(),
-            save_config=lambda _config: None,
             profile_action_controller=controller,
         )
 
-        self.assertEqual(controller.calls, [("set-active", "board-b"), ("delete", "board-b")])
+        self.assertEqual(controller.calls, [("delete", "host-b")])
         self.assertEqual(port.set_active_calls, [])
         self.assertEqual(port.delete_calls, [])
 
     def test_run_board_host_configurations_screen_uses_field_action_controller_for_inline_save(self) -> None:
-        port = FakeBoardConfigPort([ord("l"), ord("j"), 10, ord("X"), 10, ord("q")])
+        port = FakeBoardConfigPort([ord("e"), ord("j"), 10, ord("X"), 10, ord("q")])
         controller = FakeFieldActionController()
         config = config_with_board_hosts()
 
         board_screen.run_board_host_configurations_screen(
             port,
             config,
-            save_config=lambda _config: None,
             field_action_controller=controller,
         )
 
-        self.assertEqual(controller.inline_calls, [("board-a", "label", "Board AX")])
-        self.assertEqual(config["board_hosts"][0]["label"], "Board AX")
+        self.assertEqual(controller.inline_calls, [("host-a", "label", "Host AX")])
+        self.assertEqual(config["board_hosts"][0]["label"], "Host AX")
+
+    def test_russian_physical_key_opens_host_fields(self) -> None:
+        port = FakeBoardConfigPort([ui_input_api.encode_text_key("у"), ord("q")])
+
+        board_screen.run_board_host_configurations_screen(
+            port,
+            config_with_board_hosts(),
+            field_action_controller=FakeFieldActionController(),
+        )
+
+        self.assertTrue(any(row[2].strip() == "HOST PROFILE" for row in port.rows))
 
     def test_run_board_host_configurations_screen_selects_board_type_from_registry(self) -> None:
-        port = FakeBoardConfigPort([ord("l"), ord("j"), ord("j"), ord(" "), 10, ord("q")])
-        config = config_with_board_hosts()
-        config["board_hosts"][0]["type"] = "unknown"
-
-        board_screen.run_board_host_configurations_screen(
-            port,
-            config,
-            save_config=lambda _config: None,
-        )
-
-        self.assertEqual(port.updated_fields, [("board-a", "type", "gen5_x5h")])
-        self.assertEqual(config["board_hosts"][0]["type"], "gen5_x5h")
-
-    def test_run_board_host_configurations_screen_uses_field_action_controller_for_board_type(self) -> None:
-        port = FakeBoardConfigPort([ord("l"), ord("j"), ord("j"), ord(" "), 10, ord("q")])
+        port = FakeBoardConfigPort([ord("l"), 10, ord("j"), ord("j"), 10, 10, ord("q")])
         controller = FakeFieldActionController()
         config = config_with_board_hosts()
-        config["board_hosts"][0]["type"] = "unknown"
+        config["board_hosts"][0]["boards"][0]["type"] = "unknown"
 
         board_screen.run_board_host_configurations_screen(
             port,
             config,
-            save_config=lambda _config: None,
             field_action_controller=controller,
         )
 
+        self.assertEqual(config["board_hosts"][0]["boards"][0]["type"], "gen5_x5h")
+
+    def test_run_board_host_configurations_screen_uses_field_action_controller_for_board_type(self) -> None:
+        port = FakeBoardConfigPort([ord("l"), 10, ord("j"), ord("j"), 10, 10, ord("q")])
+        controller = FakeFieldActionController()
+        config = config_with_board_hosts()
+        config["board_hosts"][0]["boards"][0]["type"] = "unknown"
+
+        board_screen.run_board_host_configurations_screen(
+            port,
+            config,
+            field_action_controller=controller,
+        )
+
+        self.assertEqual(config["board_hosts"][0]["boards"][0]["type"], "gen5_x5h")
         self.assertEqual(controller.inline_calls, [("board-a", "type", "gen5_x5h")])
         self.assertEqual(port.updated_fields, [])
 
@@ -289,29 +327,50 @@ class BoardHostConfigurationScreenControllerTests(unittest.TestCase):
         self.assertEqual(port.status, "Board type selection cancelled")
 
     def test_run_board_host_configurations_screen_toggles_direct_copy(self) -> None:
-        port = FakeBoardConfigPort([ord("l"), *[ord("j")] * 6, ord(" "), ord("q")])
-
-        board_screen.run_board_host_configurations_screen(
-            port,
-            config_with_board_hosts(),
-            save_config=lambda _config: None,
-        )
-
-        self.assertEqual(port.toggle_calls, ["board-a"])
-
-    def test_run_board_host_configurations_screen_uses_field_action_controller_for_direct_copy(self) -> None:
-        port = FakeBoardConfigPort([ord("l"), *[ord("j")] * 6, ord(" "), ord("q")])
+        port = FakeBoardConfigPort([ord("e"), *[ord("j")] * 5, 10, ord("q")])
         controller = FakeFieldActionController()
 
         board_screen.run_board_host_configurations_screen(
             port,
             config_with_board_hosts(),
-            save_config=lambda _config: None,
             field_action_controller=controller,
         )
 
-        self.assertEqual(controller.toggle_calls, ["board-a"])
         self.assertEqual(port.toggle_calls, [])
+        self.assertEqual(controller.toggle_calls, ["host-a"])
+
+    def test_run_board_host_configurations_screen_uses_field_action_controller_for_direct_copy(self) -> None:
+        port = FakeBoardConfigPort([ord("e"), *[ord("j")] * 5, 10, ord("q")])
+        controller = FakeFieldActionController()
+
+        board_screen.run_board_host_configurations_screen(
+            port,
+            config_with_board_hosts(),
+            field_action_controller=controller,
+        )
+
+        self.assertEqual(controller.toggle_calls, ["host-a"])
+        self.assertEqual(port.toggle_calls, [])
+
+    def test_enter_drills_from_host_to_board_fields(self) -> None:
+        port = FakeBoardConfigPort([10, 10, ord("q")])
+
+        board_screen.run_board_host_configurations_screen(
+            port,
+            config_with_board_hosts(),
+        )
+
+        self.assertTrue(any(row[2].strip() == "BOARD PROFILE" for row in port.rows))
+
+    def test_escape_returns_one_navigation_level_at_a_time(self) -> None:
+        port = FakeBoardConfigPort([10, 10, 27, 27, 27])
+
+        board_screen.run_board_host_configurations_screen(
+            port,
+            config_with_board_hosts(),
+        )
+
+        self.assertGreaterEqual(port.screen.refresh_count, 5)
 
 
 if __name__ == "__main__":

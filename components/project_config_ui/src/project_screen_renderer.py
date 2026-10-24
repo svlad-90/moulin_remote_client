@@ -288,7 +288,7 @@ class ProjectScreenRenderer:
     def _field_group(field: dict[str, Any]) -> str:
         key = str(field.get("key", ""))
         kind = str(field.get("kind", ""))
-        if key in ("name", "label"):
+        if key in ("name", "label", "product_type"):
             return "Profile"
         if key in ("project_dir", "local_project_dir"):
             return "Directories"

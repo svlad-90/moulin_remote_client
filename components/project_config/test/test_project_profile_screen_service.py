@@ -52,14 +52,19 @@ def config() -> dict[str, Any]:
 
 
 class ProjectProfileScreenServiceTests(unittest.TestCase):
-    def test_add_project_uses_port_and_focuses_fields_for_new_active_project(self) -> None:
+    def test_add_project_uses_controller_and_focuses_fields_for_new_active_project(self) -> None:
         cfg = config()
         port = FakePort(cfg)
-        service = project_profile_screen_service.ProjectProfileScreenService(cfg)
+        controller = FakeProfileActionController(cfg)
+        service = project_profile_screen_service.ProjectProfileScreenService(
+            cfg,
+            profile_action_controller=controller,
+        )
 
         result = service.add_project(port)
 
-        self.assertEqual(port.calls, ["add"])
+        self.assertEqual(controller.calls, ["add"])
+        self.assertEqual(port.calls, [])
         self.assertEqual([project["name"] for project in result["projects"]], ["prod", "base", "sdk"])
         self.assertEqual(result["project_index"], 2)
         self.assertEqual(result["focus"], "fields")

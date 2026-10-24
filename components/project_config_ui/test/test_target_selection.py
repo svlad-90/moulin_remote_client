@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -69,6 +67,24 @@ class FakeTargetPort:
         return 3
 
 
+class FakeFieldActionController:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def apply_project_values(
+        self,
+        port: Any,
+        project: dict[str, Any],
+        changes: dict[str, Any],
+        *,
+        status: str,
+    ) -> bool:
+        self.calls.append(changes)
+        project.update(changes)
+        port.status = status
+        return True
+
+
 def config() -> dict[str, Any]:
     return {
         "moulin": {"manifest": "product.yaml"},
@@ -93,43 +109,35 @@ def candidates(_build_params: dict[str, str]) -> list[dict[str, str]]:
 class TargetSelectionControllerTests(unittest.TestCase):
     def test_select_build_targets_saves_targets_and_runtime_settings(self) -> None:
         port = FakeTargetPort([ord("j"), ord(" "), 10])
-        saved: list[dict[str, Any]] = []
-        reloaded: list[bool] = []
-        with tempfile.TemporaryDirectory() as tmpdir:
-            controller = target_selection.TargetSelectionController(
-                config(),
-                target_candidates=candidates,
-                app_dir=Path(tmpdir),
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=saved.append,
-            )
+        cfg = config()
+        field_controller = FakeFieldActionController()
+        controller = target_selection.TargetSelectionController(
+            cfg,
+            target_candidates=candidates,
+            field_action_controller=field_controller,
+        )
 
-            with patch("components.project_config_ui.src.target_selection.config_runtime_api.save_current_runtime_build_settings") as save_runtime:
-                controller.select_build_targets(port, reload_runtime=lambda: reloaded.append(True))
+        controller.select_build_targets(port, reload_runtime=lambda: None)
 
         self.assertEqual(port.build_targets, "boot full")
-        self.assertEqual(saved[0]["projects"][0]["targets"], "boot full")
-        self.assertEqual(reloaded, [True])
+        self.assertEqual(cfg["projects"][0]["targets"], "boot full")
+        self.assertEqual(field_controller.calls[0]["parameters"], {"ENABLE_ANDROID": "yes"})
         self.assertEqual(port.status, "Build target selection saved")
-        save_runtime.assert_called_once()
 
     def test_select_board_artifacts_saves_active_project_artifacts(self) -> None:
         port = FakeTargetPort([ord("j"), ord(" "), 10])
-        saved: list[dict[str, Any]] = []
-        reloaded: list[bool] = []
+        cfg = config()
+        field_controller = FakeFieldActionController()
         controller = target_selection.TargetSelectionController(
-            config(),
+            cfg,
             target_candidates=candidates,
-            app_dir=Path("/tmp"),
-            default_config_path=Path("/tmp/config.json"),
-            save_config=saved.append,
+            field_action_controller=field_controller,
         )
 
-        controller.select_board_artifacts(port, reload_runtime=lambda: reloaded.append(True))
+        controller.select_board_artifacts(port, reload_runtime=lambda: None)
 
         self.assertEqual(port.build_targets, "boot")
-        self.assertEqual(saved[0]["projects"][0]["board_artifacts"], "boot full")
-        self.assertEqual(reloaded, [True])
+        self.assertEqual(cfg["projects"][0]["board_artifacts"], "boot full")
         self.assertEqual(port.status, "Board artifact selection saved")
 
     def test_select_targets_cancel_sets_cancel_status_and_returns_none(self) -> None:
@@ -137,9 +145,7 @@ class TargetSelectionControllerTests(unittest.TestCase):
         controller = target_selection.TargetSelectionController(
             config(),
             target_candidates=candidates,
-            app_dir=Path("/tmp"),
-            default_config_path=Path("/tmp/config.json"),
-            save_config=lambda _config: None,
+            field_action_controller=FakeFieldActionController(),
         )
 
         result = controller.select_targets(
@@ -163,9 +169,7 @@ class TargetSelectionControllerTests(unittest.TestCase):
         controller = target_selection.TargetSelectionController(
             config(),
             target_candidates=candidates,
-            app_dir=Path("/tmp"),
-            default_config_path=Path("/tmp/config.json"),
-            save_config=lambda _config: None,
+            field_action_controller=FakeFieldActionController(),
         )
 
         controller.select_targets(
@@ -190,9 +194,7 @@ class TargetSelectionControllerTests(unittest.TestCase):
                 {"target": "boot", "source": "manifest", "desc": ""},
                 {"target": f"android-{build_params['ENABLE_ANDROID']}", "source": "manifest", "desc": ""},
             ],
-            app_dir=Path("/tmp"),
-            default_config_path=Path("/tmp/config.json"),
-            save_config=lambda _config: None,
+            field_action_controller=FakeFieldActionController(),
         )
 
         result = controller.build_target_text_for_params(
@@ -206,9 +208,7 @@ class TargetSelectionControllerTests(unittest.TestCase):
         controller = target_selection.TargetSelectionController(
             config(),
             target_candidates=lambda _build_params: [],
-            app_dir=Path("/tmp"),
-            default_config_path=Path("/tmp/config.json"),
-            save_config=lambda _config: None,
+            field_action_controller=FakeFieldActionController(),
         )
 
         result = controller.build_target_text_for_params({}, current_text=["old", "target"])
@@ -220,9 +220,7 @@ class TargetSelectionControllerTests(unittest.TestCase):
         controller = target_selection.TargetSelectionController(
             config(),
             target_candidates=lambda _build_params: (_ for _ in ()).throw(RuntimeError("manifest read failed")),
-            app_dir=Path("/tmp"),
-            default_config_path=Path("/tmp/config.json"),
-            save_config=lambda _config: None,
+            field_action_controller=FakeFieldActionController(),
         )
 
         result = controller.select_targets(
@@ -244,9 +242,7 @@ class TargetSelectionControllerTests(unittest.TestCase):
         controller = target_selection.TargetSelectionController(
             config(),
             target_candidates=lambda _build_params: [],
-            app_dir=Path("/tmp"),
-            default_config_path=Path("/tmp/config.json"),
-            save_config=lambda _config: None,
+            field_action_controller=FakeFieldActionController(),
         )
 
         result = controller.select_targets(

@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import curses
-from pathlib import Path
 from typing import Any, Callable
 
-from components.build_runtime.api import env as config_env_api
 from components.config.api import profiles as config_profile_api
-from components.build_runtime.api import runtime as config_runtime_api
 from components.ui.api import input as ui_input_api
 from components.ui.api import menu as ui_menu_api
 
@@ -20,18 +17,10 @@ class ProjectPickerController:
         self,
         config: dict[str, Any],
         *,
-        app_dir: Path,
-        default_build_targets: str,
-        default_moulin_manifest: str,
-        default_dockerfile: str,
-        save_config: Callable[[dict[str, Any]], Any],
+        profile_action_controller: Any,
     ) -> None:
         self.config = config
-        self.app_dir = app_dir
-        self.default_build_targets = default_build_targets
-        self.default_moulin_manifest = default_moulin_manifest
-        self.default_dockerfile = default_dockerfile
-        self.save_config = save_config
+        self.profile_action_controller = profile_action_controller
 
     def select_project(self, port: Any, *, reload_runtime: Callable[[], None]) -> None:
         projects = self._projects()
@@ -69,44 +58,21 @@ class ProjectPickerController:
             elif (ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j")) and projects:
                 index = ui_menu_api.move_index(index, len(projects), 1)
             elif ch in (10, 13) and projects:
-                plan = config_profile_api.apply_project_picker_selection_for_config(self.config, projects[index])
-                if plan["runtime_reload"]:
-                    reload_runtime()
-                if plan["save"]:
-                    self.save_config(self.config)
-                port.status = str(plan["status"])
+                self.profile_action_controller.set_active_project(port, projects[index])
                 return
             elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
                 return
 
     def _projects(self) -> list[dict[str, Any]]:
-        projects = config_profile_api.project_profiles_for_config(self.config)
-        if projects:
-            return projects
-        config_runtime_api.normalize_runtime_project_profiles(
-            self.config,
-            app_dir=self.app_dir,
-            default_build_targets=self.default_build_targets,
-            default_moulin_manifest=self.default_moulin_manifest,
-            default_dockerfile=self.default_dockerfile,
-        )
         return config_profile_api.project_profiles_for_config(self.config)
 
 
 def project_picker_controller(
     config: dict[str, Any],
     *,
-    app_dir: Path,
-    default_build_targets: str,
-    default_moulin_manifest: str,
-    default_dockerfile: str,
-    save_config: Callable[[dict[str, Any]], Any],
+    profile_action_controller: Any,
 ) -> ProjectPickerController:
     return ProjectPickerController(
         config,
-        app_dir=app_dir,
-        default_build_targets=default_build_targets,
-        default_moulin_manifest=default_moulin_manifest,
-        default_dockerfile=default_dockerfile,
-        save_config=save_config,
+        profile_action_controller=profile_action_controller,
     )

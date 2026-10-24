@@ -15,8 +15,11 @@ from components.ui.api import text as ui_text_api
 @dataclass(frozen=True)
 class BoardScreenRenderResult:
     hosts: list[dict[str, Any]]
+    boards: list[dict[str, Any]]
     fields: list[tuple[str, str]]
     selected_host: dict[str, Any] | None
+    selected_board: dict[str, Any] | None
+    selected_target: dict[str, Any] | None
     editing_cursor_yx: tuple[int, int] | None
 
 
@@ -54,7 +57,10 @@ class BoardScreenRenderer:
         hosts = screen_state.hosts()
         screen_state.sync_selection(hosts, [])
         selected_host = screen_state.selected_host(hosts)
-        fields = self._board_host_fields(selected_host)
+        boards = screen_state.boards(selected_host)
+        selected_board = screen_state.selected_board(boards)
+        selected_target = selected_host if state.detail_scope == "host" else selected_board
+        fields = self._board_host_fields(selected_host) if state.detail_scope == "host" else config_field_api.board_fields(selected_board)
         screen_state.sync_selection(hosts, fields)
         selected_host = screen_state.selected_host(hosts)
 
@@ -66,16 +72,46 @@ class BoardScreenRenderer:
         detail_x = 2
         detail_w = width - 4
         table_w = width - 4
-        min_detail_rows = 2 + len(fields) + 3
-        visible_hosts = max(1, min(max(1, len(hosts)), panel_height - min_detail_rows))
+        min_detail_rows = 4 + min(len(boards), 4) + len(fields)
+        visible_hosts = max(1, min(max(1, len(hosts)), max(1, panel_height - min_detail_rows)))
         table_y = panel_top + 1
         self._render_host_list(port, hosts, table_y, table_w, visible_hosts, state)
 
         row = self._render_host_count_if_needed(port, hosts, visible_hosts, table_y, detail_x, detail_w, state)
+        port.add(row, detail_x, "Boards on selected host", port.accent_attr())
+        row += 1
+        if not boards:
+            port.add(row, detail_x, "No boards configured. Focus this list and press 'a' to add one.", port.disabled_attr())
+            row += 2
+        else:
+            visible_boards = min(len(boards), 4)
+            board_scroll = config_field_api.host_profile_page_scroll(
+                state.board_index,
+                len(boards),
+                visible_boards,
+            )
+            for offset, board in enumerate(boards[board_scroll : board_scroll + visible_boards]):
+                index = board_scroll + offset
+                active = str(board.get("id") or "") == str(self.config.get("active_board") or "")
+                selected = state.focus == "boards" and index == state.board_index
+                marker = "*" if active else " "
+                text = f"{marker} {str(board.get('name') or '')[:18]:18} {str(board.get('type') or ''):14} {board.get('console_device') or '<auto>'}"
+                attr = port.selected_active_attr() if selected and active else port.selected_attr() if selected else port.active_row_attr() if active else 0
+                port.add(row, detail_x, ui_text_api.fit_text(text, detail_w).ljust(detail_w), attr)
+                row += 1
+            if len(boards) > visible_boards:
+                port.add(
+                    row,
+                    detail_x,
+                    config_field_api.host_profile_count_label(state.board_index, len(boards), "boards")[:detail_w],
+                    port.disabled_attr(),
+                )
+                row += 1
+            row += 1
         editing_cursor_yx = self._render_host_details(
             port,
             fields,
-            selected_host,
+            selected_target,
             row,
             height,
             panel_top,
@@ -84,19 +120,23 @@ class BoardScreenRenderer:
             detail_w,
             state,
         )
-        self._render_footer(port, height, width)
+        self._render_footer(port, height, width, state)
         return BoardScreenRenderResult(
             hosts=hosts,
+            boards=boards,
             fields=fields,
             selected_host=selected_host,
+            selected_board=selected_board,
+            selected_target=selected_target,
             editing_cursor_yx=editing_cursor_yx,
         )
 
     def _render_header(self, port: Any, width: int, focus: str) -> None:
-        active_name = str(config_profile_api.active_board_host(self.config).get("name", "")) or "<none>"
+        active_host = str(config_profile_api.active_board_access_host(self.config).get("name", "")) or "<none>"
+        active_board = str(config_profile_api.active_board(self.config).get("name", "")) or "<none>"
         port.add(0, 0, "Board host configuration"[:width], curses.A_BOLD)
-        port.add(1, 0, f"Active: {active_name} | Board connection: {port.board_connection_state}"[:width])
-        port.add(2, 0, f"Focus: {'board host list' if focus == 'hosts' else 'fields'}"[:width], port.accent_attr())
+        port.add(1, 0, f"Active host: {active_host} | Board: {active_board} | Connection: {port.board_connection_state}"[:width])
+        port.add(2, 0, f"Focus: {focus}"[:width], port.accent_attr())
 
     def _render_host_list(
         self,
@@ -159,7 +199,7 @@ class BoardScreenRenderer:
         if selected_host is None:
             port.add(row, detail_x, "Selected board host: <none>"[:detail_w], port.disabled_attr())
             return None
-        display_rows = self._field_display_rows(fields)
+        display_rows = self._field_display_rows(fields, state.detail_scope)
         hint_row = panel_top + panel_height - 2
         visible_fields = max(0, hint_row - row)
         display_scroll = self._field_display_scroll(display_rows, state.field_index, visible_fields)
@@ -177,11 +217,15 @@ class BoardScreenRenderer:
         self._render_field_hint(port, fields, selected_host, hint_row, detail_x, detail_w, state)
         return editing_cursor_yx
 
-    def _field_display_rows(self, fields: list[tuple[str, str]]) -> list[BoardFieldDisplayRow]:
+    def _field_display_rows(
+        self,
+        fields: list[tuple[str, str]],
+        detail_scope: str,
+    ) -> list[BoardFieldDisplayRow]:
         rows: list[BoardFieldDisplayRow] = []
         last_group = ""
         for field_index, (label, key) in enumerate(fields):
-            group = self._field_group_for_key(key)
+            group = self._field_group_for_key(key, detail_scope)
             if group != last_group:
                 if rows and not rows[-1].group:
                     rows.append(BoardFieldDisplayRow("", "", None, group=True))
@@ -208,16 +252,18 @@ class BoardScreenRenderer:
             max(0, len(display_rows) - visible_rows),
         )
 
-    def _field_group_for_key(self, key: str) -> str:
+    def _field_group_for_key(self, key: str, detail_scope: str = "host") -> str:
         if key in {"name", "label", "type"}:
-            return "PROFILE"
+            return "BOARD PROFILE" if detail_scope == "board" else "HOST PROFILE"
         if key in {"user", "host", "work_dir", "direct_copy"}:
             return "SSH"
         if key in {"console_device", "ufs_loadaddr", "ufs_buffersize"}:
             return "FLASHING"
         if key in {"tftp_root", "nfs_root", "deploy_subdir"}:
             return "NETWORK BOOT"
-        if key in {"server_ip", "board_ip", "mac_address"}:
+        if key == "server_ip":
+            return "NETWORK BOOT"
+        if key in {"board_ip", "mac_address"}:
             return "INVASIVE U-BOOT PARAMETERS"
         if key.startswith("command_"):
             return "COMMANDS"
@@ -295,8 +341,20 @@ class BoardScreenRenderer:
             return
         port.add(row, detail_x, self.board_field_service.field_hint_for_host(selected_key, selected_host)[:detail_w], port.accent_attr())
 
-    def _render_footer(self, port: Any, height: int, width: int) -> None:
-        footer = "Left/Right: hosts/fields | Enter: edit/save | a: add | d: delete | s: set active | Esc: hosts/back | q: back"
+    def _render_footer(
+        self,
+        port: Any,
+        height: int,
+        width: int,
+        state: config_board_screen_state_api.BoardScreenState,
+    ) -> None:
+        if state.focus == "hosts":
+            footer = "Enter/Right: boards | e: edit host | a: add host | d: delete host | q/Esc: close"
+        elif state.focus == "boards":
+            footer = "Enter/Right: edit board | Left/Esc: hosts | a: add board | d: delete | s: set active | q: close"
+        else:
+            target = "host" if state.detail_scope == "host" else "board"
+            footer = f"Enter: edit {target} field | Left/Esc: back | Up/Down: select field | q: close"
         port.add(height - 2, 0, footer[:width], port.accent_attr())
         port.add(height - 1, 0, port.status[:width].ljust(width), curses.A_REVERSE)
 

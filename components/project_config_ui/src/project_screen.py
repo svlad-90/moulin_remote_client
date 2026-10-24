@@ -12,15 +12,17 @@ from components.project_config.api import project_field_action_service as config
 from components.project_config.api import project_profile_screen_service as config_project_profile_screen_api
 from components.project_config_ui.api import project_screen_renderer as config_project_screen_renderer_api
 from components.project_config_ui.api import project_screen_state as config_project_screen_state_api
-from components.build_runtime.api import runtime as config_runtime_api
 from components.moulin.api import manifest as moulin_manifest_api
 from components.ui.api import input as ui_input_api
+from components.ui.api import menu as ui_menu_api
+from components.ui.api import text as ui_text_api
 
 
 def project_fields(params: list[dict[str, Any]]) -> list[dict[str, Any]]:
     fields: list[dict[str, Any]] = [
         {"label": "Profile name", "key": "name", "kind": "text"},
         {"label": "Display label", "key": "label", "kind": "text"},
+        {"label": "Product type", "key": "product_type", "kind": "product_type"},
         {"label": "Project dir", "key": "project_dir", "kind": "text"},
         {"label": "Local overlay dir", "key": "local_project_dir", "kind": "text"},
         {"label": "Project Git URL", "key": "git_url", "kind": "text"},
@@ -55,6 +57,62 @@ def read_key_while_polling(port: Any) -> int:
             return -1
 
 
+def select_product_type(
+    port: Any,
+    project_field_service: project_field_api.ProjectFieldService,
+    current: str,
+) -> str | None:
+    options = project_field_service.available_product_type_options()
+    if not options:
+        port.status = "No product types available"
+        return None
+    values = [option["type"] for option in options]
+    index = values.index(current) if current in values else 0
+    port.screen.timeout(-1)
+    while True:
+        port.screen.clear()
+        height, width = port.screen.getmaxyx()
+        if height < 10 or width < 60:
+            port.add(0, 0, "Terminal is too small. Need at least 60x10.", port.warn_attr())
+            port.screen.refresh()
+            ch = port.read_key()
+            if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                port.status = "Product type selection cancelled"
+                return None
+            continue
+        index = ui_menu_api.clamp_index(index, len(options))
+        visible = max(1, height - 7)
+        scroll = ui_menu_api.list_scroll(index, len(options), visible)
+        port.draw_box(0, 0, height - 2, width, "Product type")
+        port.add(1, 2, "Select product behavior type:", port.accent_attr())
+        for offset, option in enumerate(options[scroll : scroll + visible]):
+            item_index = scroll + offset
+            selected = item_index == index
+            mark = "*" if option["type"] == current else " "
+            label = f"{mark} {option['type']}: {option['label']}"
+            attr = port.selected_attr() if selected else 0
+            port.add(3 + offset, 2, ui_text_api.fit_text(label, width - 4).ljust(width - 4), attr)
+        description = str(options[index].get("description", ""))
+        if description:
+            port.add(height - 4, 2, ui_text_api.fit_text(description, width - 4))
+        footer = "Up/Down: select | Enter: choose | q/Esc: cancel"
+        port.add(height - 2, 0, footer[:width], port.accent_attr())
+        port.add(height - 1, 0, port.status[:width].ljust(width), curses.A_REVERSE)
+        port.screen.refresh()
+        ch = port.read_key()
+        if ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+            index = ui_menu_api.move_index(index, len(options), -1)
+        elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j"):
+            index = ui_menu_api.move_index(index, len(options), 1)
+        elif ch in (10, 13):
+            value = options[index]["type"]
+            port.status = f"Product type: {value}"
+            return value
+        elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
+            port.status = "Product type selection cancelled"
+            return None
+
+
 def run_project_configurations_screen(
     port: Any,
     config: dict[str, Any],
@@ -63,8 +121,6 @@ def run_project_configurations_screen(
     remote_read_project_file: Callable[[dict[str, Any], str], str],
     manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str,
-    default_config_path: Path,
-    save_config: Callable[[dict[str, Any]], Any],
     target_selection_controller_factory: Callable[[], Any] | None = None,
     project_settings_controller: Any | None = None,
     remote_file_selection_controller: Any | None = None,
@@ -77,8 +133,6 @@ def run_project_configurations_screen(
     project_field_service = project_field_api.project_field_service()
     field_action_service = config_project_field_action_api.ProjectFieldActionService(
         config,
-        app_dir=app_dir,
-        default_config_path=default_config_path,
         target_selection_controller_factory=target_selection_controller_factory,
         project_settings_controller=project_settings_controller,
         remote_file_selection_controller=remote_file_selection_controller,
@@ -86,7 +140,8 @@ def run_project_configurations_screen(
         project_git_ref_selector=project_git_ref_selector,
         field_action_controller=field_action_controller,
         reload_runtime=reload_runtime,
-        save_runtime_settings=config_runtime_api.save_current_runtime_build_settings,
+        project_field_service=project_field_service,
+        product_type_selector=select_product_type,
     )
     profile_screen_service = config_project_profile_screen_api.ProjectProfileScreenService(
         config,
@@ -220,6 +275,5 @@ def run_project_configurations_screen(
         elif action["action"] == "set-active":
             profile_screen_service.set_active_project(port, selected_project)
         elif action["action"] == "quit":
-            save_config(config)
             port.screen.timeout(250)
             return

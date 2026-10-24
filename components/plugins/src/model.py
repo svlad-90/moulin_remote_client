@@ -33,6 +33,7 @@ class PluginAction:
     handler: str = ""
     preview: str = ""
     view: str = ""
+    availability: str = ""
     confirm: bool = False
     job_slot: str | None = None
 
@@ -74,9 +75,47 @@ class BoardProfile:
 
 
 @dataclass(frozen=True)
+class BuildHostProfile:
+    host_id: str
+    label: str
+    user: str
+    host: str
+    projects_dir: str
+    values: Mapping[str, Any]
+
+    @property
+    def remote(self) -> str:
+        if self.user and self.host:
+            return f"{self.user}@{self.host}"
+        return self.host
+
+
+@dataclass(frozen=True)
+class ProjectProfile:
+    project_id: str
+    label: str
+    product_type: str
+    project_dir: str
+    moulin_manifest: str
+    docker_image: str
+    build_targets: tuple[str, ...]
+    git_url: str
+    git_ref: str
+    parameters: Mapping[str, str]
+    values: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class UiEvent:
     code: int
     text: str = ""
+
+
+@dataclass(frozen=True)
+class PluginTextEdit:
+    value: str
+    cursor: int
+    action: str
 
 
 class PluginView(Protocol):

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import curses
-import tempfile
 import unittest
-from pathlib import Path
 from typing import Any
 
 from components.project_config_ui.api import project_picker
@@ -59,6 +57,17 @@ class FakePickerPort:
         return 6
 
 
+class FakeProfileActionController:
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.config = config
+        self.calls: list[str] = []
+
+    def set_active_project(self, port: Any, project: dict[str, Any]) -> None:
+        self.calls.append(str(project["name"]))
+        self.config["active_project"] = str(project["name"])
+        port.status = f"Active project: {project['label']}"
+
+
 def config_with_projects() -> dict[str, Any]:
     return {
         "projects": [
@@ -73,44 +82,28 @@ class ProjectPickerControllerTests(unittest.TestCase):
     def test_select_project_moves_selection_and_saves_selected_project(self) -> None:
         cfg = config_with_projects()
         port = FakePickerPort([curses.KEY_DOWN, 10])
-        saved: list[dict[str, Any]] = []
-        reload_count = 0
-
-        def reload_runtime() -> None:
-            nonlocal reload_count
-            reload_count += 1
+        controller = FakeProfileActionController(cfg)
 
         project_picker.ProjectPickerController(
             cfg,
-            app_dir=Path("/app"),
-            default_build_targets="image",
-            default_moulin_manifest="product.yaml",
-            default_dockerfile="doc/Dockerfile",
-            save_config=saved.append,
-        ).select_project(port, reload_runtime=reload_runtime)
+            profile_action_controller=controller,
+        ).select_project(port, reload_runtime=lambda: None)
 
         self.assertEqual(cfg["active_project"], "sdk")
         self.assertEqual(port.status, "Active project: SDK")
-        self.assertEqual(len(saved), 1)
-        self.assertEqual(reload_count, 1)
+        self.assertEqual(controller.calls, ["sdk"])
         self.assertEqual(port.screen.timeouts, [-1])
 
     def test_select_project_quit_leaves_active_project_unchanged(self) -> None:
         cfg = config_with_projects()
         port = FakePickerPort([ord("q")])
-        saved: list[dict[str, Any]] = []
 
         project_picker.ProjectPickerController(
             cfg,
-            app_dir=Path("/app"),
-            default_build_targets="image",
-            default_moulin_manifest="product.yaml",
-            default_dockerfile="doc/Dockerfile",
-            save_config=saved.append,
+            profile_action_controller=FakeProfileActionController(cfg),
         ).select_project(port, reload_runtime=lambda: None)
 
         self.assertEqual(cfg["active_project"], "prod")
-        self.assertEqual(saved, [])
 
     def test_select_project_handles_small_terminal_until_quit(self) -> None:
         cfg = config_with_projects()
@@ -118,32 +111,23 @@ class ProjectPickerControllerTests(unittest.TestCase):
 
         project_picker.ProjectPickerController(
             cfg,
-            app_dir=Path("/app"),
-            default_build_targets="image",
-            default_moulin_manifest="product.yaml",
-            default_dockerfile="doc/Dockerfile",
-            save_config=lambda _config: None,
+            profile_action_controller=FakeProfileActionController(cfg),
         ).select_project(port, reload_runtime=lambda: None)
 
         self.assertIn("Terminal is too small", port.rows[0][2])
         self.assertEqual(cfg["active_project"], "prod")
 
-    def test_select_project_normalizes_missing_project_profiles(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cfg: dict[str, Any] = {}
-            port = FakePickerPort([ord("q")])
+    def test_select_project_does_not_migrate_missing_project_profiles(self) -> None:
+        cfg: dict[str, Any] = {}
+        port = FakePickerPort([ord("q")])
 
-            project_picker.ProjectPickerController(
-                cfg,
-                app_dir=Path(tmpdir),
-                default_build_targets="image",
-                default_moulin_manifest="product.yaml",
-                default_dockerfile="doc/Dockerfile",
-                save_config=lambda _config: None,
-            ).select_project(port, reload_runtime=lambda: None)
+        project_picker.ProjectPickerController(
+            cfg,
+            profile_action_controller=FakeProfileActionController(cfg),
+        ).select_project(port, reload_runtime=lambda: None)
 
-        self.assertTrue(cfg["projects"])
-        self.assertEqual(cfg["active_project"], cfg["projects"][0]["name"])
+        self.assertNotIn("projects", cfg)
+        self.assertNotIn("active_project", cfg)
 
 
 if __name__ == "__main__":

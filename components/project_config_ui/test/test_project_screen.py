@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 from components.project_config_ui.api import project_screen
+from components.project_config_ui.src import project_screen as project_screen_src
 
 
 class FakeScreen:
@@ -130,6 +131,14 @@ class FakeProjectConfigPort:
         return None
 
 
+class FakeProductTypeService:
+    def __init__(self, options: list[dict[str, str]]) -> None:
+        self.options = options
+
+    def available_product_type_options(self) -> list[dict[str, str]]:
+        return self.options
+
+
 class FakeTargetSelector:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -208,6 +217,17 @@ class FakeFieldActionController:
         self.calls.append((str(project.get("name", "")), key, value))
         project[key] = value
 
+    def apply_project_values(
+        self,
+        port: Any,
+        project: dict[str, Any],
+        values: dict[str, Any],
+        *,
+        status: str,
+    ) -> None:
+        project.update(values)
+        port.status = status
+
 
 def config_with_projects() -> dict[str, Any]:
     return {
@@ -223,19 +243,43 @@ def config_with_projects() -> dict[str, Any]:
 
 
 class ProjectConfigurationScreenControllerTests(unittest.TestCase):
+    def test_select_product_type_uses_list_navigation(self) -> None:
+        port = FakeProjectConfigPort([ord("j"), 10])
+        service = FakeProductTypeService([
+            {"type": "gen5_xen_android", "label": "GEN5 Xen Android", "description": "Default product"},
+            {"type": "other_product", "label": "Other Product", "description": "Other workflow"},
+        ])
+
+        result = project_screen_src.select_product_type(port, service, "gen5_xen_android")  # type: ignore[arg-type]
+
+        self.assertEqual(result, "other_product")
+        self.assertEqual(port.status, "Product type: other_product")
+        self.assertTrue(any("other_product" in row[2] for row in port.rows))
+
+    def test_select_product_type_can_cancel(self) -> None:
+        port = FakeProjectConfigPort([27])
+        service = FakeProductTypeService([
+            {"type": "gen5_xen_android", "label": "GEN5 Xen Android", "description": "Default product"},
+        ])
+
+        result = project_screen_src.select_product_type(port, service, "gen5_xen_android")  # type: ignore[arg-type]
+
+        self.assertIsNone(result)
+        self.assertEqual(port.status, "Product type selection cancelled")
+
     def test_project_fields_include_base_params_and_artifact_fields(self) -> None:
         fields = project_screen.project_fields([{"name": "ENABLE_ANDROID"}])
 
         self.assertEqual(fields[0]["key"], "name")
         keys = [field["key"] for field in fields]
+        self.assertIn("product_type", keys)
         self.assertIn("param:ENABLE_ANDROID", keys)
         self.assertLess(keys.index("docker_image"), keys.index("board_artifacts"))
         self.assertEqual(fields[-1]["key"], "board_artifacts")
 
-    def test_run_project_configurations_screen_quit_saves_config(self) -> None:
+    def test_run_project_configurations_screen_quit_restores_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             port = FakeProjectConfigPort([ord("q")])
-            saved: list[dict[str, Any]] = []
 
             project_screen.run_project_configurations_screen(
                 port,
@@ -244,11 +288,8 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                 remote_read_project_file=lambda _config, _path: "",
                 manifest_cache={},
                 default_moulin_manifest="missing.yaml",
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=saved.append,
             )
 
-            self.assertEqual(len(saved), 1)
             self.assertEqual(port.screen.timeouts[-1], 250)
 
     def test_run_project_configurations_screen_disconnected_does_not_load_remote_parameters(self) -> None:
@@ -264,8 +305,6 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                     remote_read_project_file=remote_read,
                     manifest_cache={},
                     default_moulin_manifest="missing.yaml",
-                    default_config_path=Path(tmpdir) / "config.json",
-                    save_config=lambda _config: None,
                 )
 
             parameters.assert_not_called()
@@ -287,8 +326,6 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                     remote_read_project_file=lambda _config, _path: "",
                     manifest_cache={},
                     default_moulin_manifest="missing.yaml",
-                    default_config_path=Path(tmpdir) / "config.json",
-                    save_config=lambda _config: None,
                 )
 
             self.assertEqual(parameters.call_count, 1)
@@ -307,17 +344,16 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                 remote_read_project_file=lambda _config, _path: "",
                 manifest_cache={},
                 default_moulin_manifest="missing.yaml",
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=lambda _config: None,
             )
 
             self.assertEqual(port.screen.clear_count, 1)
             self.assertEqual(port.screen.refresh_count, 1)
             self.assertEqual(port.poll_background_tasks.call_count, 3)
 
-    def test_run_project_configurations_screen_add_action_uses_port(self) -> None:
+    def test_run_project_configurations_screen_add_action_uses_controller(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             port = FakeProjectConfigPort([ord("a"), ord("q")])
+            controller = FakeProfileActionController()
 
             project_screen.run_project_configurations_screen(
                 port,
@@ -326,15 +362,16 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                 remote_read_project_file=lambda _config, _path: "",
                 manifest_cache={},
                 default_moulin_manifest="missing.yaml",
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=lambda _config: None,
+                profile_action_controller=controller,
             )
 
-            self.assertEqual(port.add_calls, 1)
+            self.assertEqual(controller.calls, [("add", "")])
+            self.assertEqual(port.add_calls, 0)
 
     def test_run_project_configurations_screen_set_active_uses_selected_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             port = FakeProjectConfigPort([ord("j"), ord("s"), ord("q")])
+            controller = FakeProfileActionController()
 
             project_screen.run_project_configurations_screen(
                 port,
@@ -343,11 +380,11 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                 remote_read_project_file=lambda _config, _path: "",
                 manifest_cache={},
                 default_moulin_manifest="missing.yaml",
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=lambda _config: None,
+                profile_action_controller=controller,
             )
 
-            self.assertEqual(port.set_active_calls, ["sdk"])
+            self.assertEqual(controller.calls, [("set-active", "sdk")])
+            self.assertEqual(port.set_active_calls, [])
 
     def test_run_project_configurations_screen_uses_profile_action_controller_for_add(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -361,8 +398,6 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                 remote_read_project_file=lambda _config, _path: "",
                 manifest_cache={},
                 default_moulin_manifest="missing.yaml",
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=lambda _config: None,
                 profile_action_controller=controller,
             )
 
@@ -381,8 +416,6 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                 remote_read_project_file=lambda _config, _path: "",
                 manifest_cache={},
                 default_moulin_manifest="missing.yaml",
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=lambda _config: None,
                 profile_action_controller=controller,
             )
 
@@ -403,8 +436,6 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                 remote_read_project_file=lambda _config, _path: "",
                 manifest_cache={},
                 default_moulin_manifest="missing.yaml",
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=lambda _config: None,
                 field_action_controller=controller,
             )
 
@@ -413,7 +444,7 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
 
     def test_run_project_configurations_screen_uses_target_selection_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            keys = [curses.KEY_RIGHT] + [ord("j")] * 8 + [10, ord("q")]
+            keys = [curses.KEY_RIGHT] + [ord("j")] * 9 + [10, ord("q")]
             port = FakeProjectConfigPort(keys)
             port.connection_state = "connected"
             selector = FakeTargetSelector()
@@ -426,8 +457,6 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                 remote_read_project_file=lambda _config, _path: "",
                 manifest_cache={},
                 default_moulin_manifest="missing.yaml",
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=lambda _config: None,
                 target_selection_controller_factory=lambda: selector,
                 reload_runtime=lambda: reloaded.append(True),
             )
@@ -439,7 +468,7 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
 
     def test_run_project_configurations_screen_uses_remote_file_selection_service(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            keys = [curses.KEY_RIGHT] + [ord("j")] * 6 + [10, ord("q")]
+            keys = [curses.KEY_RIGHT] + [ord("j")] * 7 + [10, ord("q")]
             port = FakeProjectConfigPort(keys)
             port.connection_state = "connected"
             selector = FakeRemoteFileSelector()
@@ -451,8 +480,6 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                 remote_read_project_file=lambda _config, _path: "",
                 manifest_cache={},
                 default_moulin_manifest="missing.yaml",
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=lambda _config: None,
                 remote_file_selection_controller=selector,
             )
 
@@ -464,6 +491,7 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
             port = FakeProjectConfigPort(keys)
             port.connection_state = "connected"
             editor = FakeProjectRemoteDirEditor()
+            field_actions = FakeFieldActionController()
             config = config_with_projects()
 
             with patch(
@@ -477,9 +505,8 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                     remote_read_project_file=lambda _config, _path: "",
                     manifest_cache={},
                     default_moulin_manifest="missing.yaml",
-                    default_config_path=Path(tmpdir) / "config.json",
-                    save_config=lambda _config: None,
                     project_remote_dir_editor=editor,
+                    field_action_controller=field_actions,
                 )
 
             self.assertEqual(editor.calls, [("prod", True)])
@@ -487,10 +514,11 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
 
     def test_run_project_configurations_screen_uses_project_git_ref_selector(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            keys = [curses.KEY_RIGHT] + [ord("j")] * 5 + [10, ord("q")]
+            keys = [curses.KEY_RIGHT] + [ord("j")] * 6 + [10, ord("q")]
             port = FakeProjectConfigPort(keys)
             port.connection_state = "connected"
             selector = FakeProjectGitRefSelector()
+            field_actions = FakeFieldActionController()
             config = config_with_projects()
 
             project_screen.run_project_configurations_screen(
@@ -500,9 +528,8 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
                 remote_read_project_file=lambda _config, _path: "",
                 manifest_cache={},
                 default_moulin_manifest="missing.yaml",
-                default_config_path=Path(tmpdir) / "config.json",
-                save_config=lambda _config: None,
                 project_git_ref_selector=selector,
+                field_action_controller=field_actions,
             )
 
             self.assertEqual(selector.calls, [("prod", True)])
@@ -510,34 +537,31 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
 
     def test_run_project_configurations_screen_uses_settings_controller_for_parameter(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            keys = [curses.KEY_RIGHT] + [ord("j")] * 6 + [10, ord("q")]
+            keys = [curses.KEY_RIGHT] + [ord("j")] * 7 + [10, ord("q")]
             port = FakeProjectConfigPort(keys)
             port.connection_state = "connected"
             settings = FakeProjectSettingsController()
-            runtime_saves: list[dict[str, Any]] = []
+            field_actions = FakeFieldActionController()
+            config = config_with_projects()
 
             with patch(
                 "components.project_config_ui.src.project_screen.moulin_manifest_api.parameters_for_config",
                 return_value=[{"name": "ENABLE_ANDROID", "default": "no", "choices": ["no", "yes"]}],
-            ), patch(
-                "components.project_config_ui.src.project_screen.config_runtime_api.save_current_runtime_build_settings",
-                side_effect=lambda _config, **kwargs: runtime_saves.append(kwargs),
             ):
                 project_screen.run_project_configurations_screen(
                     port,
-                    config_with_projects(),
+                    config,
                     Path(tmpdir),
                     remote_read_project_file=lambda _config, _path: "",
                     manifest_cache={},
                     default_moulin_manifest="missing.yaml",
-                    default_config_path=Path(tmpdir) / "config.json",
-                    save_config=lambda _config: None,
                     project_settings_controller=settings,
+                    field_action_controller=field_actions,
                 )
 
             self.assertEqual(settings.params, ["ENABLE_ANDROID"])
             self.assertEqual(port.build_params["ENABLE_ANDROID"], "yes")
-            self.assertEqual(runtime_saves[0]["parameters"], port.build_params)
+            self.assertEqual(config["projects"][0]["parameters"], port.build_params)
 
 
 if __name__ == "__main__":

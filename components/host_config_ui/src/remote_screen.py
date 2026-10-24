@@ -18,13 +18,13 @@ def run_add_remote_screen(
     port: Any,
     config: dict[str, Any],
     *,
-    save_config: Callable[[dict[str, Any]], Any],
     reset_preflight: Callable[[], Any],
+    create_remote: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> None:
     workflow = config_remote_draft_workflow_api.RemoteDraftWorkflowService(
         config,
-        save_config=save_config,
         reset_preflight=reset_preflight,
+        create_remote=create_remote,
     )
     port.screen.timeout(-1)
     while True:
@@ -101,7 +101,6 @@ def run_edit_remote_screen(
     config: dict[str, Any],
     remote: dict[str, Any],
     *,
-    save_config: Callable[[dict[str, Any]], Any],
     profile_action_controller: Any,
     field_action_controller: Any,
     browse_project_directory: Callable[[str], str | None],
@@ -109,7 +108,6 @@ def run_edit_remote_screen(
     workflow = config_remote_edit_workflow_api.RemoteEditWorkflowService(
         config,
         remote,
-        save_config=save_config,
         profile_action_controller=profile_action_controller,
         field_action_controller=field_action_controller,
         browse_project_directory=browse_project_directory,
@@ -172,7 +170,6 @@ def run_edit_remote_screen(
                 port.screen.timeout(250)
                 return
         elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
-            workflow.save_and_close()
             port.screen.timeout(250)
             return
 
@@ -181,7 +178,6 @@ def run_remote_configurations_screen(
     port: Any,
     config: dict[str, Any],
     *,
-    save_config: Callable[[dict[str, Any]], Any],
     remote_file_selection_controller: Any | None = None,
     profile_action_controller: Any | None = None,
     field_action_controller: Any | None = None,
@@ -237,11 +233,7 @@ def run_remote_configurations_screen(
                 port,
                 ch,
                 selected_remote,
-                (
-                    lambda target_port, remote_profile, key, value: port.apply_remote_inline_value(remote_profile, key, value)
-                    if field_action_controller is None
-                    else field_action_controller.apply_remote_inline_value(target_port, remote_profile, key, value)
-                ),
+                field_action_controller.apply_remote_inline_value,
             )
             continue
         port.set_cursor(False)
@@ -274,40 +266,20 @@ def run_remote_configurations_screen(
             ):
                 port.status = build_field_service.field_disabled_reason_for_config(key, selected_remote, config)
             elif key == "moulin_manifest":
-                if remote_file_selection_controller is None:
-                    fallback = getattr(port, "select_remote_moulin_manifest", None)
-                    if fallback is not None:
-                        fallback()
-                else:
-                    remote_file_selection_controller.select_moulin_manifest(port)
+                remote_file_selection_controller.select_moulin_manifest(port)
             elif key == "dockerfile":
-                if remote_file_selection_controller is None:
-                    fallback = getattr(port, "select_remote_dockerfile", None)
-                    if fallback is not None:
-                        fallback()
-                else:
-                    remote_file_selection_controller.select_dockerfile(port)
+                remote_file_selection_controller.select_dockerfile(port)
             else:
                 screen_state.begin_inline_edit(key, str(selected_remote.get(key, "")))
                 port.status = f"Editing {label}"
         elif action["action"] == "add":
-            if profile_action_controller is None:
-                port.add_empty_remote()
-            else:
-                profile_action_controller.add_remote(port)
+            profile_action_controller.add_remote(port)
             screen_state.apply_add_state()
         elif action["action"] == "delete":
-            if profile_action_controller is None:
-                port.delete_remote(selected_remote)
-            else:
-                profile_action_controller.delete_remote(port, selected_remote)
+            profile_action_controller.delete_remote(port, selected_remote)
             screen_state.apply_delete_state()
         elif action["action"] == "set-active":
-            if profile_action_controller is None:
-                port.set_active_remote(selected_remote)
-            else:
-                profile_action_controller.set_active_remote(port, selected_remote)
+            profile_action_controller.set_active_remote(port, selected_remote)
         elif action["action"] == "quit":
-            save_config(config)
             port.screen.timeout(250)
             return

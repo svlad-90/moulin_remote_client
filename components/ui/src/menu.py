@@ -45,6 +45,7 @@ class MenuItem:
     job_slot: str | None = None
     tab_id: str = ""
     tab_label: str = ""
+    availability: Callable[[Any], tuple[bool, str]] | None = None
 
 
 @dataclass(frozen=True)

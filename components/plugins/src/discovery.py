@@ -169,6 +169,7 @@ class PluginDiscovery:
                         handler=handler,
                         preview=str(action.get("preview") or ""),
                         view=view,
+                        availability=str(action.get("availability") or ""),
                         confirm=bool(action.get("confirm", False)),
                         job_slot=str(action["job_slot"]) if action.get("job_slot") in {"build", "board"} else None,
                     )

@@ -16,7 +16,6 @@ class RemoteEditWorkflowService:
         config: dict[str, Any],
         remote: dict[str, Any],
         *,
-        save_config: Callable[[dict[str, Any]], Any],
         profile_action_controller: Any,
         field_action_controller: Any,
         browse_project_directory: Callable[[str], str | None],
@@ -24,7 +23,6 @@ class RemoteEditWorkflowService:
     ) -> None:
         self.config = config
         self.remote = remote
-        self.save_config = save_config
         self.profile_action_controller = profile_action_controller
         self.field_action_controller = field_action_controller
         self.browse_project_directory = browse_project_directory
@@ -39,7 +37,7 @@ class RemoteEditWorkflowService:
         return self.fields[self.index]
 
     def is_active(self) -> bool:
-        return str(self.remote.get("name", "")) == str(self.config.get("active_remote", ""))
+        return str(self.remote.get("id", "")) == str(self.config.get("active_remote", ""))
 
     def field_value(self, key: str) -> str:
         if key == "back":
@@ -73,7 +71,6 @@ class RemoteEditWorkflowService:
     def handle_enter(self, port: Any) -> bool:
         label, key = self.selected_field()
         if key == "back":
-            self.save_config(self.config)
             return True
         if not self.field_enabled(key, connected=port.connection_state == "connected"):
             port.status = self.field_disabled_reason(key)
@@ -84,15 +81,10 @@ class RemoteEditWorkflowService:
         self.field_action_controller.edit_remote_value(port, self.remote, key, label)
         return False
 
-    def save_and_close(self) -> None:
-        self.save_config(self.config)
-
-
 def remote_edit_workflow_service(
     config: dict[str, Any],
     remote: dict[str, Any],
     *,
-    save_config: Callable[[dict[str, Any]], Any],
     profile_action_controller: Any,
     field_action_controller: Any,
     browse_project_directory: Callable[[str], str | None],
@@ -101,7 +93,6 @@ def remote_edit_workflow_service(
     return RemoteEditWorkflowService(
         config,
         remote,
-        save_config=save_config,
         profile_action_controller=profile_action_controller,
         field_action_controller=field_action_controller,
         browse_project_directory=browse_project_directory,

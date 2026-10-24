@@ -12,24 +12,31 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
             [
                 ("Profile name", "name"),
                 ("Display label", "label"),
-                ("Board type", "type"),
                 ("SSH user", "user"),
                 ("SSH host", "host"),
                 ("Working dir", "work_dir"),
                 ("Direct copy", "direct_copy"),
-                ("Console device", "console_device"),
-                ("UFS load addr", "ufs_loadaddr"),
-                ("UFS buffer size", "ufs_buffersize"),
                 ("TFTP root", "tftp_root"),
                 ("NFS root", "nfs_root"),
                 ("Deploy subdir", "deploy_subdir"),
                 ("TFTP server IP", "server_ip"),
+            ],
+        )
+        self.assertEqual(
+            fields.board_fields(),
+            [
+                ("Board name", "name"),
+                ("Display label", "label"),
+                ("Board type", "type"),
+                ("Console device", "console_device"),
+                ("UFS load addr", "ufs_loadaddr"),
+                ("UFS buffer size", "ufs_buffersize"),
                 ("Board IP", "board_ip"),
                 ("MAC address", "mac_address"),
             ],
         )
         self.assertEqual(
-            fields.board_host_fields({"type": "gen5_x5h"})[-4:],
+            fields.board_fields({"type": "gen5_x5h"})[-4:],
             [
                 ("Power off command", "command_power_off"),
                 ("Power on command", "command_power_on"),
@@ -297,57 +304,6 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
         self.assertFalse(fields.board_host_connection_reset_needed("console_device", "board", "board"))
         self.assertFalse(fields.board_host_connection_reset_needed("host", "other", "board"))
 
-    def test_board_host_inline_update_plan_mutates_config_and_reports_reset(self) -> None:
-        config = {
-            "board_hosts": [
-                {"name": "board", "host": "old", "direct_copy": "no"},
-                {"name": "other", "host": "other"},
-            ],
-            "active_board_host": "board",
-        }
-        board = config["board_hosts"][0]
-        other = config["board_hosts"][1]
-
-        plan = fields.apply_board_host_inline_field_update_for_config(config, board, "host", " 10.0.0.2 ")
-        self.assertEqual(board["host"], "10.0.0.2")
-        self.assertEqual(plan, {"value": "10.0.0.2", "status": "host updated", "connection_reset": True})
-
-        plan = fields.apply_board_host_inline_field_update_for_config(config, board, "direct_copy", "YES")
-        self.assertEqual(board["direct_copy"], "yes")
-        self.assertEqual(plan, {"value": "yes", "status": "direct_copy updated", "connection_reset": False})
-
-        plan = fields.apply_board_host_inline_field_update_for_config(config, other, "host", "10.0.0.3")
-        self.assertEqual(other["host"], "10.0.0.3")
-        self.assertFalse(plan["connection_reset"])
-
-        plan = fields.apply_board_host_inline_field_update_for_config(config, board, "command_power_off", " lab-off ")
-        self.assertEqual(board["commands"], {"power_off": "lab-off"})
-        self.assertEqual(config["board_host"]["commands"], {"power_off": "lab-off"})
-        self.assertEqual(plan, {"value": "lab-off", "status": "command_power_off updated", "connection_reset": False})
-
-        plan = fields.apply_board_host_inline_field_update_for_config(config, board, "command_power_off", " ")
-        self.assertEqual(board["commands"], {})
-        self.assertEqual(plan, {"value": "", "status": "command_power_off updated", "connection_reset": False})
-
-    def test_board_host_direct_copy_toggle_mutates_config_and_status(self) -> None:
-        config = {
-            "board_hosts": [
-                {"name": "board", "direct_copy": "no"},
-            ],
-            "active_board_host": "board",
-        }
-        board = config["board_hosts"][0]
-
-        plan = fields.apply_board_host_direct_copy_toggle_for_config(config, board)
-        self.assertEqual(board["direct_copy"], "yes")
-        self.assertEqual(config["board_host"]["direct_copy"], "yes")
-        self.assertEqual(plan, {"value": "yes", "status": "Direct copy: yes"})
-
-        plan = fields.apply_board_host_direct_copy_toggle_for_config(config, board)
-        self.assertEqual(board["direct_copy"], "no")
-        self.assertEqual(config["board_host"]["direct_copy"], "no")
-        self.assertEqual(plan, {"value": "no", "status": "Direct copy: no"})
-
     def test_remote_field_enabled_matches_current_behavior(self) -> None:
         remote = {"name": "build", "user": ""}
 
@@ -424,65 +380,6 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
         self.assertFalse(fields.remote_connection_reset_needed("label", "build", "build"))
         self.assertFalse(fields.remote_connection_reset_needed("host", "other", "build"))
 
-    def test_remote_inline_update_plan_mutates_config_and_reports_reset(self) -> None:
-        config = {
-            "remotes": [
-                {"name": "build", "host": "old"},
-                {"name": "other", "host": "other"},
-            ],
-            "active_remote": "build",
-        }
-        build = config["remotes"][0]
-        other = config["remotes"][1]
-
-        plan = fields.apply_remote_inline_field_update_for_config(config, build, "projects_dir", " /mnt/projects ")
-        self.assertEqual(build["projects_dir"], "/mnt/projects")
-        self.assertEqual(plan, {"value": "/mnt/projects", "status": "projects_dir updated", "connection_reset": True})
-
-        plan = fields.apply_remote_inline_field_update_for_config(config, build, "label", " Build host ")
-        self.assertEqual(build["label"], "Build host")
-        self.assertEqual(plan, {"value": "Build host", "status": "label updated", "connection_reset": False})
-
-        plan = fields.apply_remote_inline_field_update_for_config(config, other, "host", "10.0.0.3")
-        self.assertEqual(other["host"], "10.0.0.3")
-        self.assertFalse(plan["connection_reset"])
-
-    def test_remote_labeled_field_update_preserves_prompt_status_text(self) -> None:
-        config = {
-            "remotes": [
-                {"name": "build", "host": "old"},
-            ],
-            "active_remote": "build",
-        }
-        remote = config["remotes"][0]
-
-        plan = fields.apply_remote_labeled_field_update_for_config(config, remote, "host", " 10.0.0.2 ", "SSH host")
-
-        self.assertEqual(remote["host"], "10.0.0.2")
-        self.assertEqual(
-            plan,
-            {
-                "value": "10.0.0.2",
-                "status": "SSH host updated",
-                "connection_reset": True,
-            },
-        )
-
-    def test_remote_projects_dir_selection_plan_preserves_browse_status(self) -> None:
-        config = {
-            "remotes": [
-                {"name": "build", "projects_dir": "/old"},
-            ],
-            "active_remote": "build",
-        }
-        remote = config["remotes"][0]
-
-        plan = fields.apply_remote_projects_dir_selection_for_config(config, remote, "/new/projects")
-
-        self.assertEqual(plan, {"status": "Projects dir: /new/projects"})
-        self.assertEqual(remote["projects_dir"], "/new/projects")
-        self.assertEqual(config["remote"], remote)
-
     def test_add_remote_action_policy_matches_current_behavior(self) -> None:
         remotes = [{"name": "build"}]
 
@@ -557,45 +454,6 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
             fields.remote_draft_enter_action_for_config(config, draft, actions[5]),
             {"action": "cancel", "status": "Build host add cancelled"},
         )
-
-    def test_remote_draft_create_plan_matches_current_add_remote_screen_behavior(self) -> None:
-        config = {
-            "remotes": [{"name": "build", "label": "Build"}],
-            "active_remote": "build",
-        }
-
-        plan = fields.apply_remote_draft_create_for_config(
-            config,
-            {
-                "name": " new ",
-                "label": "",
-                "user": " user ",
-                "host": " 10.0.0.2 ",
-                "projects_dir": "/ignored/by/current/screen",
-            },
-        )
-
-        self.assertEqual(
-            plan,
-            {
-                "status": "Remote profile added: new",
-                "connection_reset": True,
-                "preflight_reset": True,
-            },
-        )
-        self.assertEqual(
-            config["remotes"][1],
-            {
-                "name": "new",
-                "label": "new",
-                "user": "user",
-                "host": "10.0.0.2",
-                "projects_dir": "",
-            },
-        )
-        self.assertEqual(config["active_remote"], "new")
-        self.assertEqual(config["remote"], config["remotes"][1])
-
 
 if __name__ == "__main__":
     unittest.main()

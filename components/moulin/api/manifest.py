@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from components.moulin.src.manifest import (
+    AndroidBuildContext,
     MoulinYamlLoader,
+    android_build_context_from_builders,
     artifact_copy_specs_for_config,
     artifact_copy_specs_from_manifest,
     build_runtime_context_for_config,
@@ -36,7 +38,9 @@ from components.moulin.src.manifest import (
 )
 
 __all__ = [
+    "AndroidBuildContext",
     "MoulinYamlLoader",
+    "android_build_context_from_builders",
     "artifact_copy_specs_for_config",
     "artifact_copy_specs_from_manifest",
     "build_runtime_context_for_config",

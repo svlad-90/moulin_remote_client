@@ -15,12 +15,12 @@ class RemoteDraftWorkflowService:
         self,
         config: dict[str, Any],
         *,
-        save_config: Callable[[dict[str, Any]], Any],
         reset_preflight: Callable[[], Any],
+        create_remote: Callable[[dict[str, Any]], dict[str, Any]],
     ) -> None:
         self.config = config
-        self.save_config = save_config
         self.reset_preflight = reset_preflight
+        self.create_remote = create_remote
         self.draft = config_field_api.remote_draft_for_config(config)
         self.actions = config_field_api.remote_draft_actions()
         self.index = 0
@@ -69,19 +69,22 @@ class RemoteDraftWorkflowService:
             self.draft["label"] = value
 
     def _create_remote(self, port: Any) -> None:
-        plan = config_field_api.apply_remote_draft_create_for_config(self.config, self.draft)
+        plan = self.create_remote(dict(self.draft))
         if plan["connection_reset"]:
             port.connection_state = "disconnected"
         if plan["preflight_reset"]:
             self.reset_preflight()
-        self.save_config(self.config)
         port.status = str(plan["status"])
 
 
 def remote_draft_workflow_service(
     config: dict[str, Any],
     *,
-    save_config: Callable[[dict[str, Any]], Any],
     reset_preflight: Callable[[], Any],
+    create_remote: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> RemoteDraftWorkflowService:
-    return RemoteDraftWorkflowService(config, save_config=save_config, reset_preflight=reset_preflight)
+    return RemoteDraftWorkflowService(
+        config,
+        reset_preflight=reset_preflight,
+        create_remote=create_remote,
+    )

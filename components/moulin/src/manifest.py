@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import posixpath
 import re
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -18,6 +20,16 @@ except ImportError:
 
 MOULIN_TAG_RE = re.compile(r"(?m)(?:^|[\s\[{,:-])(!(?![!\s])(?:<[^>\r\n]+>|[A-Za-z0-9_.-]+(?:![A-Za-z0-9_./:-]+)?))")
 YAML_TAG_DIRECTIVE_RE = re.compile(r"(?m)^%TAG\s+(![^ \t]*)\s+([^ \t\r\n]+)")
+
+
+@dataclass(frozen=True)
+class AndroidBuildContext:
+    """Effective Android builder context resolved from a Moulin project."""
+
+    component_name: str
+    build_dir: str
+    environment: Mapping[str, str]
+    setup_commands: tuple[str, ...]
 
 if yaml is not None:
     class MoulinYamlLoader(yaml.SafeLoader):
@@ -632,6 +644,57 @@ def component_builders_from_manifest(
             )
         result.append(item)
     return result
+
+
+def android_build_context_from_builders(
+    builders: list[dict[str, Any]],
+    parameters: Mapping[str, str],
+) -> AndroidBuildContext:
+    """Resolve the standard Android environment without product-type knowledge."""
+
+    android_builders = [builder for builder in builders if builder.get("builder_type") == "android"]
+    if not android_builders:
+        raise ValueError("the effective Moulin manifest has no Android component")
+    if len(android_builders) != 1:
+        names = ", ".join(str(builder.get("name") or "<unnamed>") for builder in android_builders)
+        raise ValueError(f"the effective Moulin manifest has multiple Android components: {names}")
+
+    android = android_builders[0]
+    component_name = str(android.get("name") or "").strip()
+    build_dir = str(android.get("build_dir") or "").strip()
+    if not component_name or not build_dir:
+        raise ValueError("the Android component must define build-dir")
+
+    parameter_name = f"{component_name.upper()}_LUNCH_TARGET"
+    lunch_target = str(parameters.get(parameter_name) or parameters.get("ANDROID_LUNCH_TARGET") or "").strip()
+    if not lunch_target:
+        raise ValueError(f"the Android lunch target is not configured ({parameter_name})")
+
+    environment: dict[str, str] = {}
+    kernel_name = f"{component_name}_kernel"
+    kernel = next((builder for builder in builders if builder.get("name") == kernel_name), None)
+    if kernel is not None:
+        kernel_dir = str(kernel.get("build_dir") or "").strip()
+        if kernel_dir:
+            relative_kernel_dir = posixpath.relpath(kernel_dir, build_dir)
+            deploy_dir = posixpath.join(
+                relative_kernel_dir,
+                "out/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64",
+            )
+            environment = {
+                "TARGET_PREBUILT_KERNEL": posixpath.join(deploy_dir, "Image"),
+                "TARGET_PREBUILT_MODULES_DIR": deploy_dir + "/",
+            }
+
+    return AndroidBuildContext(
+        component_name=component_name,
+        build_dir=build_dir,
+        environment=environment,
+        setup_commands=(
+            ". ./build/envsetup.sh",
+            f"lunch {shlex.quote(lunch_target)}",
+        ),
+    )
 
 
 def component_builders_for_config(

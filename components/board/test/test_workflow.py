@@ -10,6 +10,7 @@ from typing import Any
 
 import moulin_remote_client as client
 from components.board.api import workflow
+from components.board_types.api.base import BoardCapability
 from components.board.api.session import board_session_command_service
 from components.config.api import profiles as config_profiles
 from components.moulin.api import manifest as moulin_manifest_api
@@ -560,6 +561,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         bootloaders = service.flash_bootloaders_commands(config)
         ufs = service.flash_ufs_image_commands(config)
+        reflash = service.board_operation_plan(config, BoardCapability.REFLASH)
+        bootloader_reflash = service.board_operation_plan(config, BoardCapability.REFLASH_BOOTLOADERS)
+        reboot = service.board_operation_plan(config, BoardCapability.REBOOT)
         restart = service.board_action_commands(config, "restart_board")
 
         self.assertEqual(len(bootloaders), 6)
@@ -567,6 +571,31 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("python3 -u ./flash_bootloaders.py", bootloaders[5][-1])
         self.assertIn('PYTHONUNBUFFERED=1 python3 -u ./flash_bootloaders.py --port "$console"', bootloaders[5][-1])
         self.assertEqual(len(ufs), 4)
+        self.assertEqual(
+            service.board_capabilities(config),
+            frozenset({BoardCapability.REBOOT, BoardCapability.REFLASH, BoardCapability.REFLASH_BOOTLOADERS}),
+        )
+        self.assertIsNotNone(reboot)
+        self.assertEqual(reboot.capability, BoardCapability.REBOOT)
+        self.assertEqual(reboot.build_targets, ())
+        self.assertEqual(reboot.provision_commands, ())
+        self.assertEqual(reboot.execute_commands, (tuple(restart[0]),))
+        self.assertIsNotNone(reflash)
+        self.assertEqual(reflash.capability, BoardCapability.REFLASH)
+        self.assertEqual(reflash.build_targets, ("full_ufs.img.gz",))
+        self.assertEqual(reflash.execute_commands, (tuple(ufs[-1]),))
+        self.assertEqual(reflash.provision_commands[-3:], tuple(tuple(command) for command in ufs[:-1]))
+        self.assertIsNotNone(bootloader_reflash)
+        self.assertEqual(bootloader_reflash.capability, BoardCapability.REFLASH_BOOTLOADERS)
+        self.assertEqual(bootloader_reflash.build_targets, ("boot_artifacts",))
+        self.assertEqual(
+            bootloader_reflash.execute_commands,
+            (tuple(bootloaders[2]), tuple(bootloaders[5])),
+        )
+        self.assertEqual(
+            bootloader_reflash.provision_commands[-4:],
+            tuple(tuple(command) for command in (bootloaders[0], bootloaders[1], bootloaders[3], bootloaders[4])),
+        )
         self.assertIn("gen5_x5h_flash_ufs.py", ufs[2][-1])
         self.assertIn("x5h_boot", ufs[3][-1])
         self.assertIn("python3 /srv/tftp/demo/gen5_x5h_flash_ufs.py", ufs[3][-1])

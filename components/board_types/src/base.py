@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ class BoardAction:
     interactive: bool = False
     domains: tuple[str, ...] = ()
     target_patterns: tuple[str, ...] = ()
+    required_commands: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,39 @@ class BoardActionContext:
     flash_service: Any = None
 
 
+class BoardCapability(str, Enum):
+    """Stable board operations available to application workflows and plugins."""
+
+    REBOOT = "board.reboot"
+    REFLASH = "board.reflash"
+    REFLASH_BOOTLOADERS = "board.reflash-bootloaders"
+
+
+@dataclass(frozen=True)
+class BoardOperationPlan:
+    """Materialized board operation with explicit provisioning and execution phases."""
+
+    capability: BoardCapability
+    operation_id: str
+    build_targets: tuple[str, ...]
+    provision_commands: tuple[tuple[str, ...], ...]
+    execute_commands: tuple[tuple[str, ...], ...]
+    execute_timeout_seconds: int
+    post_execute_delay_seconds: int = 10
+
+    def __post_init__(self) -> None:
+        if not self.operation_id:
+            raise ValueError("board operation id is required")
+        if not self.execute_commands or any(not command for command in self.execute_commands):
+            raise ValueError("board operation requires non-empty execute commands")
+        if any(not command for command in self.provision_commands):
+            raise ValueError("board operation provision commands must not be empty")
+        if self.execute_timeout_seconds <= 0:
+            raise ValueError("board operation execute timeout must be positive")
+        if self.post_execute_delay_seconds < 0:
+            raise ValueError("board operation post-execute delay must not be negative")
+
+
 class BoardTypeAdapter:
     """Base class for board-specific command behavior."""
 
@@ -81,3 +116,35 @@ class BoardTypeAdapter:
 
     def action_commands(self, ctx: BoardActionContext, action_id: str) -> list[list[str]]:
         raise ValueError(f"unsupported board action for {self.type_id}: {action_id}")
+
+    def capabilities(self, board_host: dict[str, Any] | None = None) -> frozenset[BoardCapability]:
+        host = board_host or {}
+        restart = next((action for action in self.actions(host) if action.action_id == "restart_board"), None)
+        if restart is None or not restart.required_commands:
+            return frozenset()
+        command_ids = self.command_default_map()
+        if not set(restart.required_commands) <= command_ids.keys():
+            return frozenset()
+        if not all(self.command_value_for_host(host, command_id).strip() for command_id in restart.required_commands):
+            return frozenset()
+        return frozenset({BoardCapability.REBOOT})
+
+    def operation_plan(
+        self,
+        ctx: BoardActionContext,
+        capability: BoardCapability,
+    ) -> BoardOperationPlan | None:
+        if capability == BoardCapability.REBOOT:
+            commands = self.action_commands(ctx, "restart_board")
+            if not commands:
+                raise ValueError(f"board reboot produced no execute command for {self.type_id}")
+            return BoardOperationPlan(
+                capability=capability,
+                operation_id=f"{self.type_id}-reboot",
+                build_targets=(),
+                provision_commands=(),
+                execute_commands=tuple(tuple(command) for command in commands),
+                execute_timeout_seconds=300,
+                post_execute_delay_seconds=10,
+            )
+        return None

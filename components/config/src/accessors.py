@@ -247,11 +247,11 @@ def remote_spec_for_config(config: dict[str, Any]) -> str:
 
 
 def board_host_label_for_config(config: dict[str, Any]) -> str:
-    return profile_label(config_profiles.active_board_host(config), "board")
+    return profile_label(config_profiles.active_board(config), "board")
 
 
 def board_host_spec_for_config(config: dict[str, Any]) -> str:
-    return host_spec(config_profiles.active_board_host(config))
+    return host_spec(config_profiles.active_board_access_host(config))
 
 
 def build_host_projects_dir_for_config(config: dict[str, Any]) -> str:
@@ -267,11 +267,11 @@ def remote_project_dir_for_config(config: dict[str, Any]) -> str:
 
 
 def board_work_dir_for_config(config: dict[str, Any]) -> str:
-    return board_work_dir(config_profiles.active_board_host(config))
+    return board_work_dir(config_profiles.active_board_access_host(config))
 
 
 def board_type_for_config(config: dict[str, Any]) -> str:
-    return board_type(config_profiles.active_board_host(config))
+    return board_type(config_profiles.active_board(config))
 
 
 def board_artifacts_dir_for_config(config: dict[str, Any]) -> str:
@@ -279,43 +279,43 @@ def board_artifacts_dir_for_config(config: dict[str, Any]) -> str:
 
 
 def board_direct_copy_enabled_for_config(config: dict[str, Any]) -> bool:
-    return board_direct_copy_enabled(config_profiles.active_board_host(config))
+    return board_direct_copy_enabled(config_profiles.active_board_access_host(config))
 
 
 def board_ufs_loadaddr_for_config(config: dict[str, Any]) -> str:
-    return board_ufs_loadaddr(config_profiles.active_board_host(config))
+    return board_ufs_loadaddr(config_profiles.active_board(config))
 
 
 def board_ufs_buffersize_for_config(config: dict[str, Any]) -> str:
-    return board_ufs_buffersize(config_profiles.active_board_host(config))
+    return board_ufs_buffersize(config_profiles.active_board(config))
 
 
 def board_console_device_for_config(config: dict[str, Any]) -> str:
-    return board_console_device(config_profiles.active_board_host(config))
+    return board_console_device(config_profiles.active_board(config))
 
 
 def board_tftp_root_for_config(config: dict[str, Any]) -> str:
-    return board_tftp_root(config_profiles.active_board_host(config))
+    return board_tftp_root(config_profiles.active_board_access_host(config))
 
 
 def board_nfs_root_for_config(config: dict[str, Any]) -> str:
-    return board_nfs_root(config_profiles.active_board_host(config))
+    return board_nfs_root(config_profiles.active_board_access_host(config))
 
 
 def board_deploy_subdir_for_config(config: dict[str, Any]) -> str:
-    return board_deploy_subdir(config_profiles.active_board_host(config))
+    return board_deploy_subdir(config_profiles.active_board_access_host(config))
 
 
 def board_server_ip_for_config(config: dict[str, Any]) -> str:
-    return board_server_ip(config_profiles.active_board_host(config))
+    return board_server_ip(config_profiles.active_board_access_host(config))
 
 
 def board_ipaddr_for_config(config: dict[str, Any]) -> str:
-    return board_ipaddr(config_profiles.active_board_host(config))
+    return board_ipaddr(config_profiles.active_board(config))
 
 
 def board_mac_address_for_config(config: dict[str, Any]) -> str:
-    return board_mac_address(config_profiles.active_board_host(config))
+    return board_mac_address(config_profiles.active_board(config))
 
 
 def network_deploy_project_name_for_config(config: dict[str, Any]) -> str:
@@ -375,15 +375,15 @@ def remote_has_ssh_for_config(config: dict[str, Any]) -> bool:
 
 
 def board_host_user_for_config(config: dict[str, Any]) -> str:
-    return host_user(config_profiles.active_board_host(config))
+    return host_user(config_profiles.active_board_access_host(config))
 
 
 def board_host_host_for_config(config: dict[str, Any]) -> str:
-    return host_host(config_profiles.active_board_host(config))
+    return host_host(config_profiles.active_board_access_host(config))
 
 
 def board_host_has_ssh_for_config(config: dict[str, Any]) -> bool:
-    return host_has_ssh(config_profiles.active_board_host(config))
+    return host_has_ssh(config_profiles.active_board_access_host(config))
 
 
 def remote_has_project_dir_for_config(config: dict[str, Any]) -> bool:

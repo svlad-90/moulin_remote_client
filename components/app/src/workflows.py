@@ -28,7 +28,6 @@ class AppWorkflowController:
         self,
         *,
         app_dir: Path,
-        default_config_path: Path,
         default_dockerfile: str,
         default_moulin_manifest: str,
         default_build_targets: str,
@@ -43,7 +42,6 @@ class AppWorkflowController:
         subprocess_call: Callable[..., int] = subprocess.call,
     ) -> None:
         self.app_dir = app_dir
-        self.default_config_path = default_config_path
         self.default_dockerfile = default_dockerfile
         self.default_moulin_manifest = default_moulin_manifest
         self.default_build_targets = default_build_targets
@@ -69,11 +67,10 @@ class AppWorkflowController:
         return config_workflow.config_workflow_controller(
             port.config,
             app_dir=self.app_dir,
-            default_config_path=self.default_config_path,
             default_build_targets=config_env.build_targets_from_env(self.env, self.default_build_targets),
             default_moulin_manifest=self.default_moulin_manifest,
             default_dockerfile=self.default_dockerfile,
-            save_config=self.save_config,
+            config_store=port.config_store,
             capture_command=self.capture_command,
             remote_read_project_file=self.remote_read_project_file,
             manifest_cache=self.manifest_cache,
@@ -210,7 +207,6 @@ class AppWorkflowController:
 def app_workflow_controller(
     *,
     app_dir: Path,
-    default_config_path: Path,
     default_dockerfile: str,
     default_moulin_manifest: str,
     default_build_targets: str,
@@ -226,7 +222,6 @@ def app_workflow_controller(
 ) -> AppWorkflowController:
     return AppWorkflowController(
         app_dir=app_dir,
-        default_config_path=default_config_path,
         default_dockerfile=default_dockerfile,
         default_moulin_manifest=default_moulin_manifest,
         default_build_targets=default_build_targets,

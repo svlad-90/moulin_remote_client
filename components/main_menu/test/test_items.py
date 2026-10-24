@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from components.build_runtime.api import runtime as runtime_api
+from components.config.api.store import config_store
 from components.main_menu.api import items
 from components.main_menu.api import state
 from components.ui.api import menu as menu_api
@@ -113,6 +114,7 @@ class FakeApp:
         self.reload_config_calls = 0
         self.saved_configs: list[dict[str, Any]] = []
         self.dependencies = SimpleNamespace(save_config=lambda config: self.saved_configs.append(config))
+        self.config_store = config_store(self.config, save=self.dependencies.save_config)
         self.status = ""
         self.menu_dirty = False
         self.main_full_redraw = False
@@ -218,12 +220,14 @@ def _config(app_dir: Path) -> dict[str, Any]:
             }
         ],
         "active_board_host": "board",
+        "active_board": "board-1",
         "board_hosts": [
             {
                 "name": "board",
                 "user": "tester",
                 "host": "10.0.0.2",
                 "work_dir": "/srv/tftp/demo",
+                "boards": [{"name": "board-1", "type": "gen5_x5h"}],
             }
         ],
         "active_project": "prod",
@@ -268,7 +272,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertIn("Run product build", labels)
             self.assertIn("Incremental rebuild", labels)
             self.assertIn("Clean incremental build", labels)
-            self.assertIn("Select board host", labels)
+            self.assertIn("Select board", labels)
             self.assertIn("Copy build artifacts", labels)
             self.assertIn("Sync mapped files", labels)
             self.assertNotIn("Analyze changed Yocto recipes", labels)
@@ -330,7 +334,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             mapping_labels = [item.label for item in menu_items if item.group == "build / files mapping"]
             self.assertEqual(mapping_labels, ["Sync mapped files", "Open mapped workspace"])
             self.assertIn("Select build host", [item.label for item in menu_items if item.group == "sessions / build host"])
-            self.assertIn("Select board host", [item.label for item in menu_items if item.group == "sessions / board host"])
+            self.assertIn("Select board", [item.label for item in menu_items if item.group == "sessions / board host"])
             flashing_labels = [item.label for item in menu_items if item.group == "flashing / commands"]
             flashing_configuration_labels = [item.label for item in menu_items if item.group == "flashing / configuration"]
             flashing_host_labels = [item.label for item in menu_items if item.group == "flashing / hosts"]
@@ -447,7 +451,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             menu_items = builder.setup_items.build_items(app)
 
             build_item = next(item for item in menu_items if item.label == "Add build host")
-            board_item = next(item for item in menu_items if item.label == "Add board host")
+            board_item = next(item for item in menu_items if item.label == "Configure board hosts")
 
             build_item.handler(app)
             board_item.handler(app)

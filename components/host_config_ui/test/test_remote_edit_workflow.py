@@ -59,7 +59,6 @@ class RemoteEditWorkflowServiceTests(unittest.TestCase):
         service = remote_edit_workflow.RemoteEditWorkflowService(
             cfg,
             cfg["remotes"][0],
-            save_config=lambda _config: None,
             profile_action_controller=profile_actions,
             field_action_controller=field_actions,
             browse_project_directory=lambda _start: None,
@@ -76,7 +75,6 @@ class RemoteEditWorkflowServiceTests(unittest.TestCase):
         service = remote_edit_workflow.RemoteEditWorkflowService(
             cfg,
             cfg["remotes"][0],
-            save_config=lambda _config: None,
             profile_action_controller=FakeProfileActionController(),
             field_action_controller=field_actions,
             browse_project_directory=lambda _start: "/mnt/new",
@@ -95,7 +93,6 @@ class RemoteEditWorkflowServiceTests(unittest.TestCase):
         service = remote_edit_workflow.RemoteEditWorkflowService(
             cfg,
             cfg["remotes"][0],
-            save_config=lambda _config: None,
             profile_action_controller=FakeProfileActionController(),
             field_action_controller=FakeFieldActionController(),
             browse_project_directory=lambda _start: None,
@@ -108,13 +105,11 @@ class RemoteEditWorkflowServiceTests(unittest.TestCase):
         self.assertFalse(closed)
         self.assertEqual(port.status, "set SSH user first")
 
-    def test_back_and_quit_save_config(self) -> None:
+    def test_back_closes_without_saving_config(self) -> None:
         cfg = config()
-        saves: list[dict[str, Any]] = []
         service = remote_edit_workflow.RemoteEditWorkflowService(
             cfg,
             cfg["remotes"][0],
-            save_config=saves.append,
             profile_action_controller=FakeProfileActionController(),
             field_action_controller=FakeFieldActionController(),
             browse_project_directory=lambda _start: None,
@@ -122,8 +117,6 @@ class RemoteEditWorkflowServiceTests(unittest.TestCase):
         service.index = 5
 
         self.assertTrue(service.handle_enter(FakePort()))
-        service.save_and_close()
-        self.assertEqual(saves, [cfg, cfg])
 
     def test_set_active_delegates_to_profile_action_controller(self) -> None:
         cfg = config()
@@ -131,7 +124,6 @@ class RemoteEditWorkflowServiceTests(unittest.TestCase):
         service = remote_edit_workflow.RemoteEditWorkflowService(
             cfg,
             cfg["remotes"][0],
-            save_config=lambda _config: None,
             profile_action_controller=profile_actions,
             field_action_controller=FakeFieldActionController(),
             browse_project_directory=lambda _start: None,

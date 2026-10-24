@@ -9,6 +9,8 @@ from typing import Any, Callable
 from components.app.api import services as app_services_api
 from components.app.api import state as app_state_api
 from components.app.api import terminal as app_terminal_api
+from components.config.api import entities as config_entities_api
+from components.config.api import store as config_store_api
 from components.config_workflow.api import workflow as config_workflow_api
 from components.jobs.api import connection_workflow as job_connection_workflow_api
 from components.jobs.api import session as job_session_api
@@ -57,11 +59,35 @@ class ClientApp:
         self.terminal_port = self.terminal_port_controller()
         self.terminal = self.terminal_port_adapter()
         self.services = self.app_services_controller()
+        self.migrate_loaded_config()
+        self.rebuild_config_store()
         self.app_state.initialize_session(
             self,
             build_items=self.services.build_items,
             reset_preflight=ui_session_api.reset_preflight,
         )
+
+    def migrate_loaded_config(self) -> None:
+        runtime_factory = getattr(self.services, "plugin_runtime", None)
+        plugin_runtime = runtime_factory() if callable(runtime_factory) else None
+        migrate = getattr(plugin_runtime, "migrate_loaded_config", None)
+        if callable(migrate) and migrate(self.config):
+            self.dependencies.save_config(self.config)
+
+    def rebuild_config_store(self) -> None:
+        contributors = [config_entities_api.core_profile_contributor()]
+        runtime_factory = getattr(self.services, "plugin_runtime", None)
+        plugin_runtime = runtime_factory() if callable(runtime_factory) else None
+        contributor_factory = getattr(plugin_runtime, "config_contributors", None)
+        if callable(contributor_factory):
+            plugin_contributors = contributor_factory(self)
+            if isinstance(plugin_contributors, (list, tuple)):
+                contributors.extend(plugin_contributors)
+        self.config_store = config_store_api.config_store(
+            self.config,
+            save=self.dependencies.save_config,
+        )
+        self.config_reference_issues = self.config_store.initialize(contributors)
 
     def app_state_controller(self) -> app_state_api.AppStateController:
         deps = self.dependencies
@@ -110,6 +136,8 @@ class ClientApp:
     def reload_config_from_disk(self) -> None:
         self.dependencies.manifest_cache.clear()
         self.config = self.dependencies.load_config(self.dependencies.default_config_path)
+        self.migrate_loaded_config()
+        self.rebuild_config_store()
         self.load_active_project_runtime()
         self.refresh_mapping_selection_cache()
         self.items = self.build_items()

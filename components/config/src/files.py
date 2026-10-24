@@ -24,6 +24,7 @@ CONFIG_SAVE_KEYS = (
     "board_host",
     "board_hosts",
     "active_board_host",
+    "active_board",
     "project",
     "projects",
     "active_project",

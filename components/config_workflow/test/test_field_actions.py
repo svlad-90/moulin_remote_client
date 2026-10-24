@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
+from components.config.api.entities import core_profile_contributor
+from components.config.api.store import EntityRef, config_store
 from components.config_workflow.api import field_actions
 
 
@@ -28,9 +30,11 @@ class Harness:
         self.save_count = 0
         self.reload_count = 0
         self.project_source_reload_count = 0
+        self.store = config_store(config, save=self.save_config)
+        self.store.initialize([core_profile_contributor()])
         self.controller = field_actions.FieldActionController(
             config,
-            save_config=self.save_config,
+            config_store=self.store,
             reload_runtime=self.reload_runtime,
             reload_project_source_runtime=self.reload_project_source_runtime,
         )
@@ -66,6 +70,20 @@ def config() -> dict[str, Any]:
 
 
 class FieldActionControllerTests(unittest.TestCase):
+    def test_inline_update_uses_application_store_transaction(self) -> None:
+        cfg = config()
+        cfg["remotes"][0]["id"] = "host-a"
+        cfg["active_remote"] = "host-a"
+        port = FakeFieldPort()
+        harness = Harness(cfg)
+        events = []
+        harness.store.subscribe(events.append)
+
+        harness.controller.apply_remote_inline_value(port, cfg["remotes"][0], "host", "10.0.0.3")
+
+        self.assertEqual(events[0].updated, (EntityRef("build_host", "host-a"),))
+        self.assertEqual(harness.save_count, 1)
+
     def test_board_host_inline_update_resets_active_board_connection(self) -> None:
         cfg = config()
         port = FakeFieldPort()

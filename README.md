@@ -21,6 +21,7 @@
 - [Keyboard Reference](#keyboard-reference)
 - [Safety Notes](#safety-notes)
 - [Development Notes](#development-notes)
+- [Validation](#validation)
 
 ## Start With Moulin
 
@@ -849,3 +850,34 @@ The component boundary is service-oriented:
 
 Keep new product- or board-specific behavior behind project profiles or board
 type adapters instead of hardcoding it in the main menu.
+
+## Validation
+
+Pull requests and pushes to `main` run flake8, mypy, Python compilation, and
+the unit test suite in GitHub Actions. Install both dependency sets to run the
+same Python checks directly:
+
+```sh
+python3 -m pip install -r requirements.txt -r requirements-dev.txt
+python3 -m flake8 .
+python3 -m mypy
+python3 -m unittest discover -s . -p 'test_*.py'
+```
+
+The mypy file list in `mypy.ini` is the enforced typed baseline. Imported
+legacy modules are not followed implicitly; add a module to that list when its
+typing errors have been resolved. Flake8 currently blocks syntax errors and
+undefined names (`E9,F63,F7,F82`) without forcing a repository-wide formatting
+rewrite.
+
+From the Agent Workspace root, the repository validation policy reproduces the
+complete Actions job through `act` and its `moulin-act:22.04` runner image:
+
+```sh
+python3 -m agent_tools.tools.repo_guard validate \
+  --repo tasks/gen5_virtio_backends/dev/moulin_remote_client \
+  --include-heavy
+```
+
+The pre-push guard accepts the commit only while that Docker-backed validation
+receipt is current for the exact commit being pushed.
