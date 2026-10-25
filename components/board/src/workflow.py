@@ -73,6 +73,21 @@ class BoardCommandWorkflowService:
             build_params=build_params,
         )
 
+    def copy_local_artifact_commands(
+        self,
+        config: dict[str, Any],
+        *,
+        source: Path,
+        destination_name: str,
+        remove_patterns: tuple[str, ...] = (),
+    ) -> list[list[str]]:
+        return self.transfer_service.copy_local_artifact_commands(
+            config,
+            source=source,
+            destination_name=destination_name,
+            remove_patterns=remove_patterns,
+        )
+
     def run_copy_build_artifacts(
         self,
         config: dict[str, Any],
@@ -122,6 +137,36 @@ class BoardCommandWorkflowService:
             ),
             action_id,
         )
+
+    def local_artifact_parts(
+        self,
+        config: dict[str, Any],
+        action_id: str,
+        source: Path,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> list[board_type_base_api.BoardArtifactPart]:
+        return self._adapter_for_config(config).local_artifact_parts(
+            action_id, source, progress
+        )
+
+    def local_artifact_destination(
+        self,
+        config: dict[str, Any],
+        action_id: str,
+        source: Path,
+    ) -> tuple[str, tuple[str, ...]]:
+        return self._adapter_for_config(config).local_artifact_destination(action_id, source)
+
+    def local_artifact_build_params(
+        self,
+        config: dict[str, Any],
+        action_id: str,
+        selected_parts: tuple[board_type_base_api.BoardArtifactPart, ...],
+    ) -> dict[str, str]:
+        return self._adapter_for_config(config).local_artifact_build_params(action_id, selected_parts)
+
+    def local_artifact_warning(self, config: dict[str, Any], action_id: str) -> str:
+        return self._adapter_for_config(config).local_artifact_warning(action_id)
 
     def run_board_action(
         self,

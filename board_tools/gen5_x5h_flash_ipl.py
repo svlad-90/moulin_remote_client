@@ -120,6 +120,7 @@ def main():
     parser.add_argument('--prepare', action='store_true')
     parser.add_argument('--ipls-dir', type=Path)
     parser.add_argument('--check', action='store_true')
+    parser.add_argument('--all', action='store_true', help='flash every UFS image from the prepared YAML')
     parser.add_argument('--name', action='append', help='repeat for a subset; execution follows YAML order')
     parser.add_argument('--port')
     parser.add_argument('--tftp-root', type=Path, default=Path('/srv/tftp'))
@@ -134,10 +135,15 @@ def main():
     if args.artifacts is None and args.ipls_dir is None:
         parser.error('--artifacts or --ipls-dir is required')
     listing = prepared_listing(args.artifacts, args.ipls_dir)
-    if not args.name:
+    if args.all and args.name:
+        parser.error('--all and --name cannot be used together')
+    names = [entry['name'] for entry in listing['images']] if args.all else args.name
+    if args.all and not names:
+        raise ValueError('Prepared YAML does not contain UFS images')
+    if not names:
         print(json.dumps(listing))
         return
-    if not set(args.name).issubset({entry['name'] for entry in listing['images']}):
+    if not set(names).issubset({entry['name'] for entry in listing['images']}):
         raise ValueError('Selected UFS image is not available in this IPL snapshot')
     if not args.port or args.tftp_dir is None:
         parser.error('--port and --tftp-dir are required for flashing')
@@ -146,7 +152,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ipl-flash-', dir=args.tftp_dir) as directory:
         staging = Path(directory)
         staging.chmod(0o755)
-        names = [entry['name'] for entry in listing['images'] if entry['name'] in args.name]
+        names = [entry['name'] for entry in listing['images'] if entry['name'] in names]
         for name in ['x5h_bootloaders.yaml', *names]:
             shutil.copyfile(Path(listing['ipls_dir']) / name, staging / name)
             (staging / name).chmod(0o644)
