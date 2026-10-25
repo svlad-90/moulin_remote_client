@@ -10,6 +10,7 @@ import shlex
 from typing import Any, Callable
 
 from components.board.api import workflow as board_workflow_api
+from components.board_types.api import base as board_type_base_api
 from components.build_runtime.api import runtime as config_runtime_api
 from components.config.api import accessors as config_accessors
 from components.moulin.api import manifest as moulin_manifest_api
@@ -18,14 +19,17 @@ from components.remote.api import transport
 from components.remote.api import workflow as remote_workflow_api
 from components.sync.api import workflow as sync_workflow_api
 from components.ui.api import dialogs as ui_dialog_api
+from components.ui.api import file_picker as ui_file_picker_api
 from components.ui.api import input as ui_input_api
 from components.ui.api import menu as ui_menu_api
+from components.ui.api import progress as ui_progress_api
 from components.ui.api import session as ui_session_api
 from components.ui.api import text as ui_text_api
 from components.ui.api.menu import MenuItem
 
 
 CLEAN_COMPONENT_BACK = object()
+LOCAL_ARTIFACT_BACK = object()
 
 
 class MainMenuCommandItemsService:
@@ -52,6 +56,7 @@ class MainMenuCommandItemsService:
         self.mapping_selection_service = project_selection_api.project_mapping_selection_service()
         self.component_clean_action_index = 0
         self.component_clean_dry_run = True
+        self.artifact_source_index = 0
 
     def build_items(self, app: Any) -> list[MenuItem]:
         items = [
@@ -1632,8 +1637,17 @@ done
         )
 
     def board_action_items(self, app: Any) -> list[MenuItem]:
-        return [
-            MenuItem(
+        actions = self.board_command_workflow.board_actions(
+            app.config,
+            build_params=getattr(app, "build_params", {}),
+            allow_remote_manifest=False,
+        )
+        items: list[MenuItem] = []
+        for action in actions:
+            if action.local_artifact is not None:
+                items.append(self.artifact_source_flash_item(action))
+                continue
+            items.append(MenuItem(
                 action.label,
                 self.board_action_group(action.action_id),
                 action.description,
@@ -1649,13 +1663,253 @@ done
                 requires_remote=action.requires_remote,
                 requires_project=action.requires_project,
                 allow_during_job=action.allow_during_job,
+            ))
+        return items
+
+    def artifact_source_flash_item(self, action: Any) -> MenuItem:
+        label = action.label.removesuffix(" from build host")
+        return MenuItem(
+            label,
+            self.board_action_group(action.action_id),
+            f"Select whether the target artifact comes from the build host or a local file. {action.description}",
+            lambda _app, label=label: f"{label}: select Build host or Local file as the artifact source.",
+            lambda app, action_id=action.action_id, label=label: self.run_artifact_source_flash(
+                app, action_id, label
+            ),
+            confirm=False,
+            requires_remote=action.requires_remote,
+            requires_project=action.requires_project,
+            allow_during_job=action.allow_during_job,
+        )
+
+    def run_artifact_source_flash(self, app: Any, action_id: str, label: str) -> Any:
+        while True:
+            source = self.select_artifact_source(app, title=label)
+            if source is None:
+                app.status = f"{label}: source selection cancelled"
+                return None
+            if source == "local_file":
+                result = self.run_local_artifact_flash(app, action_id)
+                if result is LOCAL_ARTIFACT_BACK:
+                    continue
+                return result
+            action = next(
+                action for action in self.board_command_workflow.board_actions(
+                    app.config,
+                    build_params=getattr(app, "build_params", {}),
+                    allow_remote_manifest=False,
+                )
+                if action.action_id == action_id
             )
-            for action in self.board_command_workflow.board_actions(
+            if action.confirm and not app.dialog_workflow_controller().run_confirm_dialog(
+                app,
+                ui_dialog_api.action_confirm_content(action.label, action.description),
+                redraw_background=False,
+            ):
+                app.status = f"Cancelled: {label}"
+                return None
+            result = self.run_board_action(app, action_id)
+            if result is LOCAL_ARTIFACT_BACK:
+                continue
+            return result
+
+    def select_artifact_source(self, app: Any, *, title: str) -> str | None:
+        choices = [
+            ("build_host", "Build host", "Use artifacts previously copied from the configured build host."),
+            ("local_file", "Local file", "Browse the local filesystem and upload the selected artifact."),
+        ]
+        index = self.artifact_source_index
+        app.screen.timeout(-1)
+        try:
+            while True:
+                app.screen.erase()
+                height, width = app.screen.getmaxyx()
+                if height >= 14 and width >= 80:
+                    board_label = config_accessors.board_host_label_for_config(app.config)
+                    panel_top = 4
+                    panel_height = height - panel_top - 2
+                    left_width = max(32, min(width // 2, 48))
+                    right_left = left_width
+                    right_width = width - right_left
+                    app.add(0, 0, f"Board | {title}"[:width], curses.A_BOLD)
+                    app.add(1, 0, f"Active board: {board_label}"[:width])
+                    app.add(2, 0, "Focus: artifact source"[:width], app.accent_attr())
+                    app.draw_box(panel_top, 0, panel_height, left_width, "Artifact sources")
+                    app.draw_box(panel_top, right_left, panel_height, right_width, "Details")
+                    app.add(panel_top + 2, 2, "  Source", app.accent_attr())
+                    for offset, (_source, choice_label, _description) in enumerate(choices):
+                        attr = app.selected_attr() if offset == index else 0
+                        marker = ">" if offset == index else " "
+                        item_row = f"{marker} {offset + 1}. {choice_label}"
+                        text = ui_text_api.fit_text(item_row, left_width - 4).ljust(left_width - 4)
+                        app.add(panel_top + 3 + offset, 2, text, attr)
+
+                    source_id, choice_label, description = choices[index]
+                    detail_x = right_left + 2
+                    detail_width = right_width - 4
+                    row = panel_top + 2
+                    app.add(row, detail_x, choice_label[:detail_width], curses.A_BOLD)
+                    row += 2
+                    for line in ui_text_api.wrap_text_lines(description, detail_width, 3):
+                        app.add(row, detail_x, line)
+                        row += 1
+                    row += 1
+                    if source_id == "build_host":
+                        detail_lines = [
+                            ("Build host", config_accessors.remote_label_for_config(app.config)),
+                            ("SSH", config_accessors.remote_spec_for_config(app.config)),
+                            ("Board staging", config_accessors.board_artifacts_dir_for_config(app.config)),
+                        ]
+                    else:
+                        ui_config = app.config.get("ui", {})
+                        remembered = (
+                            Path(str(ui_config.get("local_artifact_directory"))).expanduser()
+                            if isinstance(ui_config, dict) and ui_config.get("local_artifact_directory")
+                            else None
+                        )
+                        default_dir = Path.home() / "Downloads"
+                        start_dir = remembered or (default_dir if default_dir.is_dir() else Path.home())
+                        detail_lines = [
+                            ("Start directory", str(start_dir)),
+                            ("Destination", config_accessors.board_artifacts_dir_for_config(app.config)),
+                        ]
+                    for field, value in detail_lines:
+                        app.add(row, detail_x, ui_text_api.fit_text(f"{field}:", detail_width), app.accent_attr())
+                        row += 1
+                        app.add(row, detail_x + 2, ui_text_api.fit_text(value, max(1, detail_width - 2)))
+                        row += 2
+                    footer = "Up/Down: select | Enter: continue | q/Esc: back"
+                    app.add(height - 2, 0, footer[:width].ljust(width), app.accent_attr())
+                    status = str(getattr(app, "status", ""))
+                    app.add(height - 1, 0, status[:width].ljust(width), curses.A_REVERSE)
+                else:
+                    app.add(0, 0, "Terminal is too small. Need at least 80x14.", app.warn_attr())
+                app.screen.refresh()
+                ch = app.read_key()
+                if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                    return None
+                if height < 14 or width < 80:
+                    continue
+                if ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+                    index = ui_menu_api.move_index(index, len(choices), -1)
+                    self.artifact_source_index = index
+                elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j"):
+                    index = ui_menu_api.move_index(index, len(choices), 1)
+                    self.artifact_source_index = index
+                elif ch in (curses.KEY_ENTER, 10, 13):
+                    self.artifact_source_index = index
+                    return choices[index][0]
+        finally:
+            app.screen.timeout(1000)
+
+    def run_local_artifact_flash(self, app: Any, action_id: str) -> Any:
+        action = next(
+            action for action in self.board_command_workflow.board_actions(
                 app.config,
                 build_params=getattr(app, "build_params", {}),
                 allow_remote_manifest=False,
             )
-        ]
+            if action.action_id == action_id
+        )
+        spec = action.local_artifact
+        if spec is None:
+            raise ValueError(f"board action does not accept local artifacts: {action_id}")
+        downloads = Path.home() / "Downloads"
+        default_directory = downloads if downloads.is_dir() else Path.home()
+        ui_config = app.config.get("ui", {})
+        configured_directory = (
+            Path(str(ui_config.get("local_artifact_directory", ""))).expanduser()
+            if isinstance(ui_config, dict) and ui_config.get("local_artifact_directory")
+            else None
+        )
+        initial_directory = configured_directory or default_directory
+        if not initial_directory.is_dir():
+            initial_directory = default_directory
+        selected_parts: tuple[board_type_base_api.BoardArtifactPart, ...] = ()
+        while True:
+            source = ui_file_picker_api.select_local_file(
+                app,
+                title=spec.picker_title,
+                accept_file=lambda path: path.name.endswith(spec.accepted_suffixes),
+                initial_directory=initial_directory,
+                file_hint=spec.picker_hint,
+            )
+            if source is None:
+                app.status = "Back to artifact source selection"
+                return LOCAL_ARTIFACT_BACK
+            selected_directory = str(source.parent)
+            app.config_store.update_config(
+                lambda staged: staged.setdefault("ui", {}).__setitem__(
+                    "local_artifact_directory", selected_directory
+                )
+            )
+            initial_directory = source.parent
+            if not spec.selection_title:
+                break
+            try:
+                parts = ui_progress_api.run_modal_task(
+                    app,
+                    title="Inspect local artifact",
+                    detail=source.name,
+                    task=lambda report: self.board_command_workflow.local_artifact_parts(
+                        app.config, action_id, source, report
+                    ),
+                )
+            except ui_progress_api.ModalTaskCancelled:
+                app.status = "Artifact inspection cancelled"
+                continue
+            except (OSError, ValueError) as exc:
+                self.show_ipl_discovery_error(app, str(exc), title="Cannot read local artifact")
+                continue
+            selection = self.select_artifact_parts(app, spec, parts)
+            if selection is None:
+                app.status = "Back to local artifact selection"
+                continue
+            if not selection:
+                app.status = "No artifact parts selected"
+                continue
+            selected_parts = tuple(selection)
+            break
+        destination_name, remove_patterns = self.board_command_workflow.local_artifact_destination(
+            app.config, action_id, source
+        )
+        warning = self.board_command_workflow.local_artifact_warning(app.config, action_id)
+        if not app.dialog_workflow_controller().run_confirm_dialog(
+            app,
+            ui_dialog_api.ConfirmContent(
+                title="Confirm local artifact flash",
+                warning=warning + " Close the serial console first.",
+                subject=source.name,
+                details=(
+                    f"Local file: {source} | Size: {source.stat().st_size} bytes"
+                    + (
+                        " | Parts: " + ", ".join(part.label for part in selected_parts)
+                        if selected_parts
+                        else ""
+                    )
+                ),
+                footer="Enter/y: copy and flash | n/q/Esc: back",
+            ),
+            redraw_background=False,
+        ):
+            app.status = "Local artifact flash cancelled"
+            return None
+        commands = self.board_command_workflow.copy_local_artifact_commands(
+            app.config,
+            source=source,
+            destination_name=destination_name,
+            remove_patterns=remove_patterns,
+        )
+        local_params = self.board_command_workflow.local_artifact_build_params(
+            app.config, action_id, selected_parts
+        )
+        commands.extend(self.board_command_workflow.board_action_commands(
+            app.config,
+            action_id,
+            build_params={**app.build_params, **local_params},
+        ))
+        label = action.label.removesuffix(" from build host") + " from local file"
+        return app.command_workflow_service().run_commands(app, label, commands)
 
     def board_action_group(self, action_id: str) -> str:
         if action_id in {
@@ -1688,7 +1942,12 @@ done
             return "flashing / commands"
         if action_id == "open_board_host_shell":
             return "flashing / hosts"
-        if action_id in {"restart_board", "open_board_serial_console", "open_uboot_console"}:
+        if action_id in {
+            "restart_board",
+            "turn_off_board",
+            "open_board_serial_console",
+            "open_uboot_console",
+        }:
             return "flashing / board host"
         return "build"
 
@@ -1711,7 +1970,7 @@ done
             runner=lambda title, commands: app.command_workflow_service().run_commands(app, title, commands),
         )
 
-    def run_single_ipl_menu(self, app: Any) -> None:
+    def run_single_ipl_menu(self, app: Any) -> Any:
         capture = self.remote_capture_command(app)
         if capture is None:
             self.show_ipl_discovery_error(app, "IPL discovery unavailable: no capture command")
@@ -1731,9 +1990,12 @@ done
             self.show_ipl_discovery_error(app, detail)
             return
         selected = self.select_ipl_image(app, images)
+        if selected is None:
+            app.status = "Back to artifact source selection"
+            return LOCAL_ARTIFACT_BACK
         if not selected:
             app.status = "IPL flash cancelled: no images selected"
-            return
+            return LOCAL_ARTIFACT_BACK
         try:
             commands = self.board_command_workflow.board_action_commands(
                 app.config, "flash_single_ipl",
@@ -1805,6 +2067,62 @@ done
                     selected.clear()
                 elif ch in (curses.KEY_ENTER, 10, 13):
                     return [image for image in images if image['name'] in selected]
+        finally:
+            app.screen.timeout(1000)
+
+    def select_artifact_parts(
+        self,
+        app: Any,
+        spec: board_type_base_api.BoardLocalArtifactSpec,
+        parts: list[board_type_base_api.BoardArtifactPart],
+    ) -> list[board_type_base_api.BoardArtifactPart] | None:
+        """Render a board-type-defined local artifact part selection."""
+        index = 0
+        selected = {part.part_id for part in parts}
+        app.screen.timeout(-1)
+        try:
+            while True:
+                app.screen.erase()
+                height, width = app.screen.getmaxyx()
+                if height >= 10 and width >= 72:
+                    app.draw_box(0, 0, height - 2, width, spec.selection_title)
+                    rows = max(1, height - 6)
+                    start = max(0, min(index - rows + 1, len(parts) - rows))
+                    for offset, part in enumerate(parts[start:start + rows]):
+                        mark = "[x]" if part.part_id in selected else "[ ]"
+                        suffix = f"  ({part.detail})" if part.detail else ""
+                        label = f"{mark} {part.label}{suffix}"
+                        app.add(
+                            2 + offset,
+                            2,
+                            ui_text_api.fit_text(label, width - 4),
+                            app.selected_attr() if start + offset == index else 0,
+                        )
+                    app.add(height - 2, 0, spec.selection_footer[:width], app.accent_attr())
+                else:
+                    app.add(0, 0, "Terminal is too small. Need at least 72x10.", app.warn_attr())
+                app.screen.refresh()
+                ch = app.read_key()
+                if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                    return None
+                if height < 10 or width < 72:
+                    continue
+                if ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+                    index = ui_menu_api.move_index(index, len(parts), -1)
+                elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j"):
+                    index = ui_menu_api.move_index(index, len(parts), 1)
+                elif ch == ord(" ") and parts:
+                    part_id = parts[index].part_id
+                    if part_id in selected:
+                        selected.remove(part_id)
+                    else:
+                        selected.add(part_id)
+                elif ui_input_api.key_code_matches(ch, "a"):
+                    selected = {part.part_id for part in parts}
+                elif ui_input_api.key_code_matches(ch, "n"):
+                    selected.clear()
+                elif ch in (curses.KEY_ENTER, 10, 13):
+                    return [part for part in parts if part.part_id in selected]
         finally:
             app.screen.timeout(1000)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import curses
 import json
 import subprocess
 import tempfile
@@ -7,11 +8,13 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from components.build_runtime.api import runtime as runtime_api
 from components.config.api.store import config_store
 from components.main_menu.api import items
 from components.main_menu.api import state
+from components.main_menu.src import commands as main_menu_commands
 from components.ui.api import menu as menu_api
 
 
@@ -341,7 +344,11 @@ class MainMenuBuilderTests(unittest.TestCase):
             board_host_labels = [item.label for item in menu_items if item.group == "flashing / board host"]
             self.assertEqual(flashing_configuration_labels, ["Configure copied artifacts"])
             self.assertIn("Copy build artifacts", flashing_labels)
+            self.assertIn("Flash bootloaders (flash mode)", flashing_labels)
+            self.assertIn("Flash bootloaders", flashing_labels)
             self.assertIn("Flash UFS image", flashing_labels)
+            self.assertNotIn("Flash bootloaders from local file", flashing_labels)
+            self.assertNotIn("Flash UFS image from local file", flashing_labels)
             self.assertEqual(flashing_host_labels, ["Open build host shell", "Open board host shell"])
             flashing_order = [
                 (item.group, item.label)
@@ -362,12 +369,15 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Restart board",
                     "Open board serial console",
                     "Open U-Boot console",
+                    "Turn off board",
                 ],
             )
 
             self.assertIn("Open board serial console", board_host_labels)
             self.assertIn("Open U-Boot console", board_host_labels)
             self.assertIn("Restart board", board_host_labels)
+            self.assertIn("Turn off board", board_host_labels)
+            self.assertNotIn("Turn on board", board_host_labels)
             self.assertIn("Stop current board command", flashing_labels)
             tftp_deploy_labels = [item.label for item in menu_items if item.group == "tftp/nfs / deploy artifacts"]
             tftp_control_labels = [item.label for item in menu_items if item.group == "tftp/nfs / board control"]
@@ -430,6 +440,155 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Open remote NFS root",
                 ],
             )
+
+    def test_local_artifact_actions_persist_the_last_selected_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            selected_dir = app_dir / "downloads" / "release"
+            selected_dir.mkdir(parents=True)
+            image = selected_dir / "full_ufs.img.gz"
+            image.write_bytes(b"image")
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            with patch(
+                "components.main_menu.src.commands.ui_file_picker_api.select_local_file",
+                side_effect=[image, None],
+            ) as picker:
+                builder.command_items.run_local_artifact_flash(app, "flash_ufs_image")
+                restarted_config = json.loads(json.dumps(app.config))
+                restarted_app = FakeApp(restarted_config)
+                rebuilt = items.main_menu_builder(
+                    app_dir=app_dir,
+                    default_config_path=app_dir / "config.json",
+                    default_dockerfile="doc/Dockerfile",
+                    default_moulin_manifest="product.yaml",
+                    flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                    xt_imager_tool=app_dir / "xt-imager.py",
+                    remote_read_project_file=lambda *_args, **_kwargs: "",
+                    manifest_cache={},
+                )
+                rebuilt.command_items.run_local_artifact_flash(restarted_app, "flash_single_ipl")
+
+            self.assertEqual(picker.call_args_list[1].kwargs["initial_directory"], selected_dir)
+            self.assertEqual(app.config["ui"]["local_artifact_directory"], str(selected_dir))
+            self.assertTrue(app.saved_configs)
+
+    def test_flash_source_menu_selects_local_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [curses.KEY_DOWN, 10])
+
+            source = builder.command_items.select_artifact_source(app, title="Flash UFS image")
+
+            self.assertEqual(source, "local_file")
+            self.assertEqual(app.screen.timeouts, [-1, 1000])
+
+    def test_cancelling_file_picker_returns_to_source_menu(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [curses.KEY_DOWN, 10, ord("q")])
+
+            with patch(
+                "components.main_menu.src.commands.ui_file_picker_api.select_local_file",
+                return_value=None,
+            ) as picker:
+                builder.command_items.run_artifact_source_flash(app, "flash_ufs_image", "Flash UFS image")
+
+            picker.assert_called_once()
+            self.assertEqual(app.status, "Flash UFS image: source selection cancelled")
+            self.assertEqual(app.screen.timeouts, [-1, 1000, -1, 1000])
+
+    def test_build_host_part_selection_escape_returns_to_source_menu(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+
+            with patch.object(
+                builder.command_items,
+                "select_artifact_source",
+                side_effect=["build_host", None],
+            ) as source_menu, patch.object(
+                builder.command_items,
+                "run_board_action",
+                return_value=main_menu_commands.LOCAL_ARTIFACT_BACK,
+            ):
+                builder.command_items.run_artifact_source_flash(
+                    app, "flash_single_ipl", "Flash bootloaders"
+                )
+
+            self.assertEqual(source_menu.call_count, 2)
+
+    def test_local_part_selection_escape_returns_to_file_picker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            archive = app_dir / "boot-artifacts.tar.gz"
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [])
+
+            with patch(
+                "components.main_menu.src.commands.ui_file_picker_api.select_local_file",
+                side_effect=[archive, None],
+            ) as picker, patch.object(
+                builder.command_items.board_command_workflow,
+                "local_artifact_parts",
+                return_value=[SimpleNamespace(part_id="ipl.srec", label="ipl.srec", detail="UFS 0x0")],
+            ), patch.object(
+                builder.command_items,
+                "select_artifact_parts",
+                return_value=None,
+            ):
+                result = builder.command_items.run_local_artifact_flash(app, "flash_single_ipl")
+
+            self.assertIs(result, main_menu_commands.LOCAL_ARTIFACT_BACK)
+            self.assertEqual(picker.call_count, 2)
 
     def test_session_select_items_become_add_items_when_no_hosts_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

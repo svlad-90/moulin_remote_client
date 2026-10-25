@@ -6,15 +6,21 @@ import shlex
 import re
 import ipaddress
 import json
+import tarfile
+import threading
 from dataclasses import replace
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, BinaryIO, Callable
+
+import yaml
 
 from components.board_types.src.base import (
     BoardAction,
     BoardActionContext,
+    BoardArtifactPart,
     BoardCapability,
     BoardCommandDefault,
+    BoardLocalArtifactSpec,
     BoardOperationPlan,
     BoardTypeAdapter,
 )
@@ -22,6 +28,122 @@ from components.config.api import accessors as config_accessors
 from components.config.api import profiles as config_profiles
 from components.moulin.api import manifest as moulin_manifest_api
 from components.remote.api import transport
+
+
+class _ProgressReader:
+    """File wrapper reporting compressed bytes consumed by tarfile."""
+
+    def __init__(
+        self,
+        stream: BinaryIO,
+        total: int,
+        progress: Callable[[int, int], None] | None,
+    ) -> None:
+        self.stream = stream
+        self.total = total
+        self.progress = progress
+
+    def read(self, size: int = -1) -> bytes:
+        data = self.stream.read(size)
+        self._report()
+        return data
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        position = self.stream.seek(offset, whence)
+        self._report()
+        return position
+
+    def tell(self) -> int:
+        return self.stream.tell()
+
+    def readable(self) -> bool:
+        return self.stream.readable()
+
+    def seekable(self) -> bool:
+        return self.stream.seekable()
+
+    def writable(self) -> bool:
+        return self.stream.writable()
+
+    @property
+    def closed(self) -> bool:
+        return self.stream.closed
+
+    def flush(self) -> None:
+        self.stream.flush()
+
+    def fileno(self) -> int:
+        return self.stream.fileno()
+
+    def _report(self) -> None:
+        if self.progress is not None:
+            self.progress(self.stream.tell(), self.total)
+
+
+_BOOTLOADER_PARTS_CACHE: dict[tuple[str, int, int], tuple[BoardArtifactPart, ...]] = {}
+_BOOTLOADER_PARTS_CACHE_LOCK = threading.Lock()
+
+
+def _bootloader_parts_from_archive(
+    path: str,
+    size: int,
+    mtime_ns: int,
+    progress: Callable[[int, int], None] | None,
+) -> tuple[BoardArtifactPart, ...]:
+    """Read and cache selectable IPL metadata from one immutable archive version."""
+    key = (path, size, mtime_ns)
+    with _BOOTLOADER_PARTS_CACHE_LOCK:
+        cached = _BOOTLOADER_PARTS_CACHE.get(key)
+    if cached is not None:
+        if progress is not None:
+            progress(size, size)
+        return cached
+    with open(path, "rb") as stream, tarfile.open(
+        fileobj=_ProgressReader(stream, size, progress), mode="r|*"
+    ) as archive:
+        config_name = ""
+        document: Any = None
+        file_names: set[str] = set()
+        config_count = 0
+        for member in archive:
+            if not member.isfile():
+                continue
+            file_names.add(member.name)
+            if not member.name.endswith("/build-domd/ipls/x5h_bootloaders.yaml"):
+                continue
+            config_count += 1
+            config_name = member.name
+            config_stream = archive.extractfile(member)
+            if config_stream is None:
+                raise ValueError("Cannot read x5h_bootloaders.yaml from boot artifacts")
+            document = yaml.safe_load(config_stream)
+        if config_count != 1:
+            raise ValueError("Expected one build-domd/ipls/x5h_bootloaders.yaml in boot artifacts")
+        entries = document.get("images", []) if isinstance(document, dict) else []
+        if not isinstance(entries, list):
+            raise ValueError("x5h_bootloaders.yaml images must be a list")
+        prefix = str(PurePosixPath(config_name).parent) + "/"
+        parts: list[BoardArtifactPart] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or str(entry.get("target", "")).upper() != "UFS":
+                continue
+            name = str(entry.get("name", ""))
+            if PurePosixPath(name).name != name or name in {"", ".", ".."}:
+                raise ValueError(f"Invalid IPL filename: {name}")
+            if prefix + name not in file_names:
+                continue
+            address = hex(int(str(entry["flash_addr"]), 16))
+            parts.append(BoardArtifactPart(name, name, f"UFS {address}"))
+        if not parts:
+            raise ValueError("Boot artifacts do not contain flashable UFS IPL images")
+        result = tuple(parts)
+    if progress is not None:
+        progress(size, size)
+    with _BOOTLOADER_PARTS_CACHE_LOCK:
+        if len(_BOOTLOADER_PARTS_CACHE) >= 8:
+            _BOOTLOADER_PARTS_CACHE.pop(next(iter(_BOOTLOADER_PARTS_CACHE)))
+        _BOOTLOADER_PARTS_CACHE[key] = result
+    return result
 
 
 class Gen5X5hBoardAdapter(BoardTypeAdapter):
@@ -142,20 +264,36 @@ sys.stdout.buffer.flush()
             ),
             BoardAction(
                 "flash_bootloaders",
-                "Flash bootloaders (flash mode)",
-                "Deploy the bootloader flashing helper to the board host, enter flash mode, flash x5h_bootloaders.yaml, then switch the board to boot mode.",
+                "Flash bootloaders (flash mode) from build host",
+                "Use boot artifacts copied from the build host, enter flash mode, flash x5h_bootloaders.yaml, then switch the board to boot mode.",
+                local_artifact=BoardLocalArtifactSpec(
+                    "Select boot-artifacts archive",
+                    "Expected: .tar, .tar.gz, or .tar.bz2",
+                    (".tar.bz2", ".tar.gz", ".tar"),
+                ),
             ),
             BoardAction(
                 "flash_single_ipl",
-                "Flash bootloaders",
-                "Select all or a subset of YAML UFS images. Enter U-Boot once and flash in YAML order; stop on the first error.",
+                "Flash bootloaders from build host",
+                "Select all or a subset of YAML UFS images copied from the build host. Enter U-Boot once and flash in YAML order; stop on the first error.",
                 confirm=False,
+                local_artifact=BoardLocalArtifactSpec(
+                    "Select boot-artifacts archive",
+                    "Expected: .tar, .tar.gz, or .tar.bz2",
+                    (".tar.bz2", ".tar.gz", ".tar"),
+                    selection_title="Flash Bootloaders",
+                ),
             ),
             BoardAction(
                 "flash_ufs_image",
-                "Flash UFS image",
-                "Deploy the UFS imager to the board host and flash artifacts/full_ufs.img.gz to UFS over /dev/GEN5_CONSOLE.",
+                "Flash UFS image from build host",
+                "Flash artifacts/full_ufs.img.gz copied from the build host to UFS over /dev/GEN5_CONSOLE.",
                 target_patterns=("full_ufs.img.gz",),
+                local_artifact=BoardLocalArtifactSpec(
+                    "Select full UFS image",
+                    "Expected: compressed .img.gz image",
+                    (".img.gz",),
+                ),
             ),
             BoardAction(
                 "restart_board",
@@ -177,6 +315,13 @@ sys.stdout.buffer.flush()
                 "Power-cycle the board, enter boot mode, then open picocom so U-Boot autoboot can be stopped interactively.",
                 interactive=True,
                 allow_during_job=True,
+            ),
+            BoardAction(
+                "turn_off_board",
+                "Turn off board",
+                "Run the configured board power-off command on the board host.",
+                confirm=True,
+                required_commands=("power_off",),
             ),
             BoardAction(
                 "deploy_network_boot",
@@ -281,6 +426,63 @@ sys.stdout.buffer.flush()
             ),
         ]
 
+    def local_artifact_parts(
+        self,
+        action_id: str,
+        source: Path,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> list[BoardArtifactPart]:
+        if action_id != "flash_single_ipl":
+            return []
+        stat = source.stat()
+        return list(
+            _bootloader_parts_from_archive(
+                str(source), stat.st_size, stat.st_mtime_ns, progress
+            )
+        )
+
+    def local_artifact_destination(self, action_id: str, source: Path) -> tuple[str, tuple[str, ...]]:
+        if action_id in {"flash_bootloaders", "flash_single_ipl"}:
+            suffix = next(
+                (candidate for candidate in (".tar.bz2", ".tar.gz", ".tar") if source.name.endswith(candidate)),
+                None,
+            )
+            if suffix is None:
+                raise ValueError("boot artifacts must be a .tar, .tar.gz, or .tar.bz2 archive")
+            return "manual-boot-artifacts" + suffix, (
+                "*boot-artifacts*.tar.bz2",
+                "*boot_artifacts*.tar.bz2",
+                "*boot-artifacts*.tar.gz",
+                "*boot_artifacts*.tar.gz",
+                "*boot-artifacts*.tar",
+                "*boot_artifacts*.tar",
+            )
+        if action_id == "flash_ufs_image":
+            return "full_ufs.img.gz", ("full_ufs.img.gz",)
+        return super().local_artifact_destination(action_id, source)
+
+    def local_artifact_build_params(
+        self,
+        action_id: str,
+        selected_parts: tuple[BoardArtifactPart, ...],
+    ) -> dict[str, str]:
+        if action_id == "flash_single_ipl":
+            return {
+                "_ipl_names": json.dumps([part.part_id for part in selected_parts]),
+                "_ipl_prepare": "true",
+            }
+        return {}
+
+    def local_artifact_warning(self, action_id: str) -> str:
+        warnings = {
+            "flash_bootloaders": "This enters flash mode and overwrites all bootloaders described by the selected archive.",
+            "flash_single_ipl": "This overwrites the selected UFS IPLs through U-Boot.",
+            "flash_ufs_image": "This overwrites the board UFS image.",
+        }
+        if action_id not in warnings:
+            return super().local_artifact_warning(action_id)
+        return warnings[action_id]
+
     def action_commands(self, ctx: BoardActionContext, action_id: str) -> list[list[str]]:
         if action_id == "flash_single_ipl":
             return self.flash_single_ipl_command_plan(ctx)
@@ -324,6 +526,8 @@ sys.stdout.buffer.flush()
             )
         if action_id == "restart_board":
             return self.restart_board_command_plan(ctx)
+        if action_id == "turn_off_board":
+            return self.board_power_command_plan(ctx, command_id="power_off", title="Turn off board")
         if action_id == "open_board_serial_console":
             return self.open_board_serial_console_command_plan(ctx)
         if action_id == "open_uboot_console":
@@ -1196,6 +1400,25 @@ echo "rootfs deploy: done" >&2
             config_accessors.board_host_spec_for_config(ctx.config), script, tty=True,
         )]
 
+    def board_power_command_plan(
+        self,
+        ctx: BoardActionContext,
+        *,
+        command_id: str,
+        title: str,
+    ) -> list[list[str]]:
+        command = self.board_command(ctx, command_id)
+        script = (
+            "set -euo pipefail\n"
+            f"echo {shlex.quote(title)}\n"
+            f"echo {shlex.quote('run: ' + command)}\n"
+            f"{command}\n"
+            f"echo {shlex.quote('done: ' + command)}\n"
+        )
+        return [ctx.command_builder.board_ssh_command(
+            config_accessors.board_host_spec_for_config(ctx.config), script,
+        )]
+
     def board_picocom_command_plan(
         self,
         ctx: BoardActionContext,
@@ -1252,22 +1475,38 @@ echo "rootfs deploy: done" >&2
         builder = ctx.command_builder
         host = config_accessors.board_host_spec_for_config(ctx.config)
         params = ctx.build_params or {}
-        if not params.get("_ipl_names") and not params.get("_ipl_name"):
+        flash_all = params.get("_ipl_all") == "true"
+        prepare_ipls = params.get("_ipl_prepare") == "true"
+        if not flash_all and not params.get("_ipl_names") and not params.get("_ipl_name"):
             return [builder.board_ssh_command(host, self.ipl_helper_script(ctx))]
-        names = json.loads(params["_ipl_names"]) if params.get("_ipl_names") else [params["_ipl_name"]]
-        if not isinstance(names, list) or not names or any(not isinstance(name, str) or not name for name in names):
+        names = [] if flash_all else (
+            json.loads(params["_ipl_names"]) if params.get("_ipl_names") else [params["_ipl_name"]]
+        )
+        if not flash_all and (
+            not isinstance(names, list)
+            or not names
+            or any(not isinstance(name, str) or not name for name in names)
+        ):
             raise ValueError("selected IPL names must be a nonempty list")
         work_dir = config_accessors.board_work_dir_for_config(ctx.config)
         tools = [ctx.flash_bootloaders_tool.parent / name for name in
                  ("ipl_ufs_flash.py", "gen5_x5h_flash_ipl.py")]
         remote_tool = builder.board_tool_remote_path(work_dir, tools[-1])
         args = ["python3", "-u", str(remote_tool)]
-        if names:
-            snapshot = params.get("_ipl_snapshot", "")
-            if not snapshot:
-                raise ValueError("selected IPL snapshot is required")
-            args += ["--ipls-dir", snapshot,
+        if flash_all:
+            args += ["--artifacts", config_accessors.board_artifacts_dir_for_config(ctx.config), "--all",
                      "--port", config_accessors.board_console_device_for_config(ctx.config),
+                     "--tftp-root", config_accessors.board_tftp_root_for_config(ctx.config),
+                     "--tftp-dir", work_dir]
+        elif names:
+            snapshot = params.get("_ipl_snapshot", "")
+            if snapshot:
+                args += ["--ipls-dir", snapshot]
+            elif prepare_ipls:
+                args += ["--artifacts", config_accessors.board_artifacts_dir_for_config(ctx.config)]
+            else:
+                raise ValueError("selected IPL snapshot is required")
+            args += ["--port", config_accessors.board_console_device_for_config(ctx.config),
                      "--tftp-root", config_accessors.board_tftp_root_for_config(ctx.config),
                      "--tftp-dir", work_dir]
             for name in names:
@@ -1276,12 +1515,17 @@ echo "rootfs deploy: done" >&2
             "set -euo pipefail\n" + shlex.join(args + ["--check"]) + "\n"
             + self.uboot_action_script(ctx, title="Prepare board for IPL reflash", network=True)
         )
-        return [
+        commands = [
             builder.board_prepare_work_dir_command(host, work_dir),
             *(builder.board_deploy_tool_command(host, work_dir, tool) for tool in tools),
+        ]
+        if flash_all or prepare_ipls:
+            commands.append(builder.board_ssh_command(host, self.ipl_helper_script(ctx, prepare=True)))
+        commands.extend([
             builder.board_ssh_command(host, prepare_script, tty=True),
             builder.board_ssh_command(host, "set -euo pipefail\n" + shlex.join(args)),
-        ]
+        ])
+        return commands
 
     def flash_bootloaders_command_plan(
         self,

@@ -80,6 +80,21 @@ class SingleIplTests(unittest.TestCase):
             self.assertNotIn('--check', run.call_args_list[1].args[0])
             self.assertEqual(list(root.glob('ipl-flash-*')), [])
 
+    def test_wrapper_all_flashes_every_prepared_ufs_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            listing = self.helper.prepare_ipls(root, self.make_archive(root))
+            argv = [
+                'helper', '--ipls-dir', listing['ipls_dir'], '--all',
+                '--port', '/dev/test', '--tftp-root', str(root), '--tftp-dir', str(root),
+            ]
+            with patch.object(sys, 'argv', argv), patch.object(self.helper.subprocess, 'run') as run:
+                self.helper.main()
+
+            self.assertEqual(run.call_count, 2)
+            self.assertIn('--name', run.call_args_list[0].args[0])
+            self.assertIn('test.srec', run.call_args_list[0].args[0])
+
     def test_flasher_pads_blocks_uses_prefix_and_closes_serial(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -193,6 +208,20 @@ class SingleIplTests(unittest.TestCase):
         self.assertIn('--name test.srec --name second.srec', subset[-1][-1])
         self.assertEqual(sum('--power-off-command' in command[-1] for command in subset), 1)
         self.assertLess(subset[-2][-1].index('--check'), subset[-2][-1].index('--power-off-command'))
+        all_images = service.board_action_commands(config, 'flash_single_ipl', build_params={
+            '_ipl_all': 'true',
+        })
+        self.assertEqual(len(all_images), 6)
+        self.assertIn('--prepare', all_images[-3][-1])
+        self.assertIn('--artifacts /srv/tftp/demo/artifacts --all', all_images[-1][-1])
+        self.assertIn('--check', all_images[-2][-1])
+        prepared_subset = service.board_action_commands(config, 'flash_single_ipl', build_params={
+            '_ipl_names': json.dumps(['test.srec']), '_ipl_prepare': 'true',
+        })
+        self.assertEqual(len(prepared_subset), 6)
+        self.assertIn('--prepare', prepared_subset[-3][-1])
+        self.assertIn('--artifacts /srv/tftp/demo/artifacts', prepared_subset[-1][-1])
+        self.assertIn('--name test.srec', prepared_subset[-1][-1])
         profiles.active_board(config)["board_ip"] = ""
         commands = service.board_action_commands(config, 'flash_single_ipl', build_params={
             '_ipl_name': 'test.srec', '_ipl_snapshot': '/tmp/ipls',

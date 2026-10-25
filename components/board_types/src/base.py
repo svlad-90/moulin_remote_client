@@ -5,7 +5,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+
+@dataclass(frozen=True)
+class BoardArtifactPart:
+    """Selectable part discovered inside a board-specific local artifact."""
+
+    part_id: str
+    label: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class BoardLocalArtifactSpec:
+    """Declarative UI contract for a board action accepting a local artifact."""
+
+    picker_title: str
+    picker_hint: str
+    accepted_suffixes: tuple[str, ...]
+    selection_title: str = ""
+    selection_footer: str = "Space: toggle | a: all | n: none | Enter: continue | q/Esc: back"
 
 
 @dataclass(frozen=True)
@@ -23,6 +43,7 @@ class BoardAction:
     domains: tuple[str, ...] = ()
     target_patterns: tuple[str, ...] = ()
     required_commands: tuple[str, ...] = ()
+    local_artifact: BoardLocalArtifactSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +137,31 @@ class BoardTypeAdapter:
 
     def action_commands(self, ctx: BoardActionContext, action_id: str) -> list[list[str]]:
         raise ValueError(f"unsupported board action for {self.type_id}: {action_id}")
+
+    def local_artifact_parts(
+        self,
+        action_id: str,
+        source: Path,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> list[BoardArtifactPart]:
+        """Inspect a local artifact and return optional board-specific parts."""
+        return []
+
+    def local_artifact_destination(self, action_id: str, source: Path) -> tuple[str, tuple[str, ...]]:
+        """Return the remote filename and stale-artifact patterns to replace."""
+        raise ValueError(f"local artifacts are unsupported for board action {action_id}")
+
+    def local_artifact_build_params(
+        self,
+        action_id: str,
+        selected_parts: tuple[BoardArtifactPart, ...],
+    ) -> dict[str, str]:
+        """Translate a generic part selection into board-action parameters."""
+        return {}
+
+    def local_artifact_warning(self, action_id: str) -> str:
+        """Describe the destructive effect of a local-artifact action."""
+        raise ValueError(f"local artifacts are unsupported for board action {action_id}")
 
     def capabilities(self, board_host: dict[str, Any] | None = None) -> frozenset[BoardCapability]:
         host = board_host or {}

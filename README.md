@@ -646,7 +646,8 @@ The built-in `gen5_x5h` workflow is:
 
    - Switch the board to boot mode.
 
-**Flash bootloaders** opens a TUI multi-selection menu containing the UFS images from
+After selecting **Build host**, **Flash bootloaders** opens a TUI
+multi-selection menu containing the UFS images from
 `x5h_bootloaders.yaml` from prepared IPL files. **Copy build artifacts**, with
 `boot_artifacts` selected, extracts IPLs once on the board host. Opening the
 submenu reads the extracted YAML; all its UFS entries are checked by default.
@@ -694,8 +695,26 @@ for a complete release update.
    - Auto-detect `/dev/GEN5_CONSOLE*` when no console device is configured.
    - Flash `full_ufs.img.gz` through the vendored imager helper.
 
+Each of the three flash actions opens a source submenu. **Build host** uses the
+artifact previously copied from the configured build host. **Local file** opens
+a local filesystem browser, starting in `~/Downloads` when that directory
+exists. The browser remembers its last selected directory and reuses it for all
+three actions.
+Directories can be traversed with Enter and Left/Backspace. The selected file
+is streamed directly to the active board host, without using a build host or
+project checkout. Normal bootloader flashing prepares the archive and writes
+every UFS IPL from `x5h_bootloaders.yaml` through U-Boot. The explicit flash
+mode action uses the board flash-mode helper instead. Bootloader input must be
+a `.tar`, `.tar.gz`, or `.tar.bz2` boot-artifacts archive; UFS input must be a
+compressed `.img.gz` image. The corresponding previously staged artifact is
+replaced only after the upload finishes successfully.
+
 Board commands run in the separate board command slot. A build command does not
 lock board commands, and a board command does not lock build commands.
+
+**Turn off board** executes the active board's configured `power_off` command.
+**Restart board** uses the configured `power_off`, `boot_mode`, and `power_on`
+commands to start the board in normal boot mode.
 
 ## Adding a Board Type
 

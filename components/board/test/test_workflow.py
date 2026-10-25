@@ -106,6 +106,29 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "Copy build artifacts")
         self.assertIn("full_ufs.img.gz: full_ufs.img.gz", calls[0][1][1][2])
 
+    def test_copy_local_artifact_streams_to_board_artifacts_directory(self) -> None:
+        config = sample_config()
+        config_profiles.normalize_board_host_profiles(config)
+        service = self._service()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "downloaded.img.gz"
+            source.write_bytes(b"image")
+
+            commands = service.copy_local_artifact_commands(
+                config,
+                source=source,
+                destination_name="full_ufs.img.gz",
+                remove_patterns=("full_ufs.img.gz",),
+            )
+
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][:2], ["python3", "-c"])
+        self.assertEqual(commands[0][3], str(source))
+        self.assertEqual(commands[0][4], "board@192.0.2.10")
+        self.assertIn("progress:", commands[0][2])
+        self.assertIn("/srv/tftp/demo/artifacts/full_ufs.img.gz", commands[0][5])
+        self.assertIn("-name full_ufs.img.gz", commands[0][5])
+
     def test_board_type_adapter_exposes_current_builtin_actions(self) -> None:
         config = sample_config()
         config_profiles.normalize_board_host_profiles(config)
@@ -124,6 +147,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
                 "restart_board",
                 "open_board_serial_console",
                 "open_uboot_console",
+                "turn_off_board",
                 "deploy_network_boot",
                 "deploy_network_domd_rootfs",
                 "deploy_network_domu_rootfs",
@@ -142,13 +166,36 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         )
         self.assertEqual(
             [action.label for action in actions[:6]],
-            ["Open board host shell", "Copy build artifacts", "Flash bootloaders (flash mode)", "Flash bootloaders", "Flash UFS image", "Restart board"],
+            [
+                "Open board host shell",
+                "Copy build artifacts",
+                "Flash bootloaders (flash mode) from build host",
+                "Flash bootloaders from build host",
+                "Flash UFS image from build host",
+                "Restart board",
+            ],
         )
         self.assertTrue(next(action for action in actions if action.action_id == "open_board_host_shell").interactive)
         self.assertTrue(next(action for action in actions if action.action_id == "open_board_serial_console").interactive)
         self.assertTrue(next(action for action in actions if action.action_id == "open_board_serial_console").allow_during_job)
         self.assertTrue(next(action for action in actions if action.action_id == "open_uboot_console").interactive)
         self.assertTrue(next(action for action in actions if action.action_id == "open_uboot_console").allow_during_job)
+
+    def test_board_power_off_and_restart_use_configured_commands(self) -> None:
+        config = sample_config()
+        config["board_hosts"][0]["commands"] = {
+            "power_off": "relayctl off slot-2",
+            "power_on": "relayctl on slot-2",
+        }
+        config_profiles.normalize_board_host_profiles(config)
+        service = self._service()
+
+        power_off = service.board_action_commands(config, "turn_off_board")
+        restart = service.board_action_commands(config, "restart_board")
+
+        self.assertEqual(len(power_off), 1)
+        self.assertIn("relayctl off slot-2", power_off[0][-1])
+        self.assertTrue(any("relayctl on slot-2" in command[-1] for command in restart))
 
     def test_network_deploy_commands_use_project_tftp_nfs_paths(self) -> None:
         config = sample_copy_config()
@@ -660,7 +707,10 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         service.run_flash_bootloaders(config, runner=lambda title, commands: calls.append((title, commands)))
         service.run_flash_ufs_image(config, runner=lambda title, commands: calls.append((title, commands)))
 
-        self.assertEqual([title for title, _commands in calls], ["Flash bootloaders (flash mode)", "Flash UFS image"])
+        self.assertEqual(
+            [title for title, _commands in calls],
+            ["Flash bootloaders (flash mode) from build host", "Flash UFS image from build host"],
+        )
         self.assertEqual(calls[0][1], service.flash_bootloaders_commands(config))
         self.assertEqual(calls[1][1], service.flash_ufs_image_commands(config))
 

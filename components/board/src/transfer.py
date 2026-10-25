@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Callable
 
 from components.config.api import accessors as config_accessors
@@ -230,6 +231,75 @@ sys.exit(ssh_rc)
             destination_dir=config_accessors.board_artifacts_dir_for_config(config),
             direct_copy=config_accessors.board_direct_copy_enabled_for_config(config),
         )
+
+    def copy_local_artifact_commands(
+        self,
+        config: dict[str, Any],
+        *,
+        source: Path,
+        destination_name: str,
+        remove_patterns: tuple[str, ...] = (),
+    ) -> list[list[str]]:
+        source = source.expanduser().resolve()
+        if not source.is_file():
+            raise ValueError(f"local artifact is not a file: {source}")
+        if PurePosixPath(destination_name).name != destination_name or destination_name in {"", ".", ".."}:
+            raise ValueError(f"invalid artifact destination name: {destination_name}")
+        board_host = config_accessors.board_host_spec_for_config(config)
+        artifacts_dir = config_accessors.board_artifacts_dir_for_config(config)
+        destination = str(PurePosixPath(artifacts_dir) / destination_name)
+        find_expression = " -o ".join(f"-name {shlex.quote(pattern)}" for pattern in remove_patterns)
+        cleanup = ""
+        if find_expression:
+            cleanup = (
+                f"find {self.command_builder.quote_remote_shell_path(artifacts_dir)} -type f "
+                f"\\( {find_expression} \\) -delete\n"
+            )
+        remote_script = (
+            "set -euo pipefail\n"
+            f"mkdir -p {self.command_builder.quote_remote_shell_path(artifacts_dir)}\n"
+            f"target={self.command_builder.quote_remote_shell_path(destination)}\n"
+            "partial=\"$target.part.$$\"\n"
+            "trap 'rm -f \"$partial\"' EXIT\n"
+            "cat > \"$partial\"\n"
+            f"{cleanup}"
+            "mv -f \"$partial\" \"$target\"\n"
+            "trap - EXIT\n"
+        )
+        python_script = r"""
+import os
+import subprocess
+import sys
+import time
+
+source, destination, remote_script = sys.argv[1:]
+ssh_options = __SSH_OPTIONS__
+total = max(1, os.path.getsize(source))
+print("Copy local artifact", flush=True)
+print(f"from: {source}", flush=True)
+print(f"to:   {destination}", flush=True)
+ssh = subprocess.Popen(["ssh", *ssh_options, destination, remote_script], stdin=subprocess.PIPE)
+copied = 0
+last_reported = -1
+last_time = 0.0
+assert ssh.stdin is not None
+with open(source, "rb") as stream:
+    while True:
+        chunk = stream.read(1024 * 1024)
+        if not chunk:
+            break
+        ssh.stdin.write(chunk)
+        copied += len(chunk)
+        now = time.monotonic()
+        pct = min(100, int(copied * 100 / total))
+        if pct != last_reported and (pct == 100 or now - last_time >= 1.0):
+            print(f"progress: {pct}% ({copied}/{total} bytes)", flush=True)
+            last_reported = pct
+            last_time = now
+ssh.stdin.close()
+sys.exit(ssh.wait())
+""".replace("__SSH_OPTIONS__", repr(transport.ssh_options(accept_new_host_key=True)))
+        return [["python3", "-c", python_script, str(source), board_host, remote_script]]
 
 
 def board_artifact_transfer_service(
