@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import curses
-from typing import Any, Callable
+from typing import Any
 
 from components.host_config_ui.api import board_screen_renderer as config_board_screen_renderer_api
 from components.host_config_ui.api import board_screen_state as config_board_screen_state_api
@@ -17,7 +17,6 @@ def run_board_host_configurations_screen(
     port: Any,
     config: dict[str, Any],
     *,
-    save_config: Callable[[dict[str, Any]], Any],
     profile_action_controller: Any | None = None,
     field_action_controller: Any | None = None,
 ) -> None:
@@ -51,8 +50,11 @@ def run_board_host_configurations_screen(
             screen_state=screen_state,
         )
         hosts = render_result.hosts
+        boards = render_result.boards
         fields = render_result.fields
         selected_host = render_result.selected_host
+        selected_board = render_result.selected_board
+        selected_target = render_result.selected_target
         editing_cursor_yx = render_result.editing_cursor_yx
         if editing_cursor_yx is not None:
             port.set_cursor(True)
@@ -68,94 +70,114 @@ def run_board_host_configurations_screen(
         if ch == -1:
             continue
         if state.editing_key:
+            def apply_value(target_port: Any, target: dict[str, Any], key: str, value: str) -> None:
+                if state.detail_scope == "host":
+                    field_action_controller.apply_board_host_inline_value(target_port, target, key, value)
+                    return
+                field_action_controller.apply_board_inline_value(target_port, target, key, value)
+
             screen_state.handle_inline_edit_key(
                 port,
                 ch,
-                selected_host,
-                (
-                    lambda target_port, board_host, key, value: port.apply_board_host_inline_value(board_host, key, value)
-                    if field_action_controller is None
-                    else field_action_controller.apply_board_host_inline_value(target_port, board_host, key, value)
-                ),
+                selected_target,
+                apply_value,
             )
             continue
         port.set_cursor(False)
-        action = config_field_api.configuration_screen_key_action(
-            focus=state.focus,
-            list_focus="hosts",
-            selected_exists=selected_host is not None,
-            fields_exist=bool(fields),
-            selected_field_key=screen_state.selected_field_key(fields),
-            left=ch == curses.KEY_LEFT or ui_input_api.key_code_matches(ch, "h"),
-            right=ch == curses.KEY_RIGHT or ui_input_api.key_code_matches(ch, "l"),
-            up=ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"),
-            down=ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j") or ch == ord("\t"),
-            enter=ch in (10, 13),
-            space=ch == ord(" "),
-            add=ui_input_api.key_code_matches(ch, "a"),
-            delete=ui_input_api.key_code_matches(ch, "d"),
-            set_active=ui_input_api.key_code_matches(ch, "s"),
-            escape=ch == 27,
-            quit=ui_input_api.key_code_matches(ch, "q"),
-        )
-        if action["action"] in {"focus-list", "focus-fields", "move-field", "move-list", "status"}:
-            screen_state.apply_navigation_action(port, action, field_count=len(fields), host_count=len(hosts))
-        elif action["action"] == "enter-field":
-            label, key = fields[state.field_index]
-            if not board_field_service.field_enabled(key, selected_host):
-                port.status = board_field_service.field_disabled_reason(key, selected_host)
-            elif key == "direct_copy":
-                if field_action_controller is None:
-                    port.toggle_board_host_direct_copy(selected_host)
+        if ch == curses.KEY_LEFT or ui_input_api.key_code_matches(ch, "h"):
+            if state.focus == "fields":
+                state.focus = "hosts" if state.detail_scope == "host" else "boards"
+            elif state.focus == "boards":
+                state.focus = "hosts"
+                state.detail_scope = "host"
+        elif ch == curses.KEY_RIGHT or ui_input_api.key_code_matches(ch, "l") or ch == ord("\t"):
+            if state.focus == "hosts" and selected_host is not None:
+                if boards:
+                    state.focus = "boards"
+                    state.detail_scope = "board"
                 else:
-                    field_action_controller.toggle_board_host_direct_copy(port, selected_host)
-            elif key == "type":
-                value = select_board_type(port, board_field_service, str(selected_host.get("type", "")))
+                    state.focus = "fields"
+                    state.detail_scope = "host"
+                state.field_index = 0
+            elif state.focus == "boards" and selected_board is not None:
+                state.focus = "fields"
+        elif ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+            if state.focus == "hosts" and hosts:
+                state.host_index = (state.host_index - 1) % len(hosts)
+                state.board_index = 0
+            elif state.focus == "boards" and boards:
+                state.board_index = (state.board_index - 1) % len(boards)
+            elif fields:
+                state.field_index = (state.field_index - 1) % len(fields)
+        elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j"):
+            if state.focus == "hosts" and hosts:
+                state.host_index = (state.host_index + 1) % len(hosts)
+                state.board_index = 0
+            elif state.focus == "boards" and boards:
+                state.board_index = (state.board_index + 1) % len(boards)
+            elif fields:
+                state.field_index = (state.field_index + 1) % len(fields)
+        elif ch in (10, 13) and state.focus == "hosts":
+            if boards:
+                state.focus = "boards"
+                state.detail_scope = "board"
+            else:
+                state.focus = "fields"
+                state.detail_scope = "host"
+            state.field_index = 0
+        elif ch in (10, 13) and state.focus == "boards":
+            state.detail_scope = "board"
+            state.focus = "fields"
+            state.field_index = 0
+        elif ch in (10, 13) and state.focus == "fields" and selected_target is not None:
+            label, key = fields[state.field_index]
+            if not board_field_service.field_enabled(key, selected_target):
+                port.status = board_field_service.field_disabled_reason(key, selected_target)
+            elif state.detail_scope == "host" and key == "direct_copy":
+                field_action_controller.toggle_board_host_direct_copy(port, selected_host)
+            elif state.detail_scope == "board" and key == "type":
+                value = select_board_type(port, board_field_service, str(selected_board.get("type", "")))
                 if value is not None:
-                    if field_action_controller is None:
-                        port.apply_board_host_inline_value(selected_host, key, value)
-                    else:
-                        field_action_controller.apply_board_host_inline_value(port, selected_host, key, value)
+                    field_action_controller.apply_board_inline_value(port, selected_board, key, value)
             else:
                 if key.startswith("command_"):
-                    value = board_field_service.command_override_value(selected_host, key)
+                    value = board_field_service.command_override_value(selected_target, key)
                 else:
-                    value = str(selected_host.get(key, ""))
+                    value = str(selected_target.get(key, ""))
                 screen_state.begin_inline_edit(key, value)
                 port.status = f"Editing {label}"
-        elif action["action"] == "toggle-field-choice":
-            selected_key = screen_state.selected_field_key(fields)
-            if selected_key == "direct_copy":
-                if field_action_controller is None:
-                    port.toggle_board_host_direct_copy(selected_host)
-                else:
-                    field_action_controller.toggle_board_host_direct_copy(port, selected_host)
-            elif selected_key == "type":
-                value = select_board_type(port, board_field_service, str(selected_host.get("type", "")))
-                if value is not None:
-                    if field_action_controller is None:
-                        port.apply_board_host_inline_value(selected_host, selected_key, value)
-                    else:
-                        field_action_controller.apply_board_host_inline_value(port, selected_host, selected_key, value)
-        elif action["action"] == "add":
-            if profile_action_controller is None:
-                port.add_empty_board_host()
+        elif ui_input_api.key_code_matches(ch, "e") and state.focus in {"hosts", "boards"}:
+            if state.focus == "hosts":
+                state.detail_scope = "host"
+            elif selected_board is not None:
+                state.detail_scope = "board"
             else:
+                continue
+            state.focus = "fields"
+            state.field_index = 0
+        elif ui_input_api.key_code_matches(ch, "a"):
+            if state.focus == "hosts":
                 profile_action_controller.add_board_host(port)
-            screen_state.apply_add_state()
-        elif action["action"] == "delete":
-            if profile_action_controller is None:
-                port.delete_board_host(selected_host)
-            else:
+            elif selected_host is not None:
+                board = profile_action_controller.add_board(port, selected_host)
+                if board is not None:
+                    state.board_index = len(screen_state.boards(selected_host)) - 1
+        elif ui_input_api.key_code_matches(ch, "d"):
+            if state.focus == "hosts" and selected_host is not None:
                 profile_action_controller.delete_board_host(port, selected_host)
-            screen_state.apply_delete_state()
-        elif action["action"] == "set-active":
-            if profile_action_controller is None:
-                port.set_active_board_host(selected_host)
-            else:
-                profile_action_controller.set_active_board_host(port, selected_host)
-        elif action["action"] == "quit":
-            save_config(config)
+            elif state.focus == "boards" and selected_board is not None:
+                if profile_action_controller.delete_board(
+                    port, selected_host, selected_board
+                ):
+                    state.board_index = max(0, state.board_index - 1)
+        elif ui_input_api.key_code_matches(ch, "s") and selected_board is not None:
+            profile_action_controller.set_active_board(port, selected_board)
+        elif ch == 27 and state.focus == "fields":
+            state.focus = "hosts" if state.detail_scope == "host" else "boards"
+        elif ch == 27 and state.focus == "boards":
+            state.focus = "hosts"
+            state.detail_scope = "host"
+        elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
             port.screen.timeout(250)
             return
 

@@ -28,18 +28,36 @@ class InlineEditResult:
 KEY_ALIASES = {
     "a": ("a", "ф"),
     "b": ("b", "и"),
+    "c": ("c", "с"),
     "d": ("d", "в"),
+    "e": ("e", "у"),
     "f": ("f", "а"),
+    "g": ("g", "п"),
     "h": ("h", "р"),
+    "i": ("i", "ш"),
     "j": ("j", "о"),
     "k": ("k", "л"),
     "l": ("l", "д"),
+    "m": ("m", "ь"),
     "n": ("n", "т"),
+    "o": ("o", "щ"),
     "p": ("p", "з"),
     "q": ("q", "й"),
     "r": ("r", "к"),
     "s": ("s", "ы", "і"),
+    "t": ("t", "е"),
+    "u": ("u", "г"),
+    "v": ("v", "м"),
+    "w": ("w", "ц"),
+    "x": ("x", "ч"),
     "y": ("y", "н"),
+    "z": ("z", "я"),
+}
+
+_COMMAND_KEY_CODE_BY_TEXT = {
+    alias.casefold(): ord(latin)
+    for latin, aliases in KEY_ALIASES.items()
+    for alias in aliases
 }
 
 
@@ -79,18 +97,22 @@ def key_code_to_text(ch: int) -> str:
 
 
 def key_matches_text(text: str, *keys: str) -> bool:
-    clean = text.casefold()
-    if not clean:
-        return False
-    for key in keys:
-        aliases = KEY_ALIASES.get(key.casefold(), (key,))
-        if clean in {alias.casefold() for alias in aliases}:
-            return True
-    return False
+    return key_code_matches(encode_text_key(text), *keys)
+
+
+def normalize_command_key_code(ch: int) -> int:
+    text = key_code_to_text(ch).casefold()
+    if not text:
+        return ch
+    return _COMMAND_KEY_CODE_BY_TEXT.get(text, ord(text[0]))
 
 
 def key_code_matches(ch: int, *keys: str) -> bool:
-    return key_matches_text(key_code_to_text(ch), *keys)
+    normalized = normalize_command_key_code(ch)
+    return any(
+        key and normalized == normalize_command_key_code(encode_text_key(key))
+        for key in keys
+    )
 
 
 def prompt_render(label: str, current: str, width: int) -> PromptRender:

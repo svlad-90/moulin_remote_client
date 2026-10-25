@@ -5,10 +5,39 @@ from __future__ import annotations
 import copy
 from pathlib import PurePosixPath
 from typing import Any
+from uuid import uuid4
+
+
+def new_profile_id() -> str:
+    return str(uuid4())
+
+
+def ensure_profile_id(profile: dict[str, Any]) -> str:
+    profile_id = str(profile.get("id") or "")
+    if not profile_id:
+        profile_id = new_profile_id()
+        profile["id"] = profile_id
+    return profile_id
+
+
+def profile_by_reference(
+    profiles: list[dict[str, Any]],
+    reference: str,
+) -> dict[str, Any] | None:
+    """Resolve an ID, accepting a name only while migrating old configuration."""
+    value = str(reference or "")
+    for profile in profiles:
+        if str(profile.get("id") or "") == value:
+            return profile
+    for profile in profiles:
+        if str(profile.get("name") or "") == value:
+            return profile
+    return None
 
 
 def empty_host_profile(name: str = "") -> dict[str, Any]:
     return {
+        "id": new_profile_id(),
         "name": name,
         "label": name,
         "type": "gen5_x5h",
@@ -23,6 +52,39 @@ def empty_host_profile(name: str = "") -> dict[str, Any]:
         "nfs_root": "/srv/nfs",
         "deploy_subdir": "",
         "server_ip": "",
+        "board_ip": "",
+        "mac_address": "",
+        "commands": {},
+    }
+
+
+def empty_board_access_host(name: str = "") -> dict[str, Any]:
+    return {
+        "id": new_profile_id(),
+        "name": name,
+        "label": name,
+        "user": "",
+        "host": "",
+        "work_dir": "~/moulin-board-work",
+        "direct_copy": "no",
+        "tftp_root": "/srv/tftp",
+        "nfs_root": "/srv/nfs",
+        "deploy_subdir": "",
+        "server_ip": "",
+        "boards": [],
+    }
+
+
+def empty_board(name: str = "") -> dict[str, Any]:
+    return {
+        "id": new_profile_id(),
+        "board_host_id": "",
+        "name": name,
+        "label": name,
+        "type": "gen5_x5h",
+        "console_device": "",
+        "ufs_loadaddr": "",
+        "ufs_buffersize": "",
         "board_ip": "",
         "mac_address": "",
         "commands": {},
@@ -66,9 +128,12 @@ def split_remote_project_path(path: str) -> tuple[str, str]:
     return parent, name
 
 
-def active_profile_index(profiles: list[dict[str, Any]], active_name: str) -> int:
+def active_profile_index(profiles: list[dict[str, Any]], active_reference: str) -> int:
     for index, profile in enumerate(profiles):
-        if str(profile.get("name", "")) == active_name:
+        if str(profile.get("id") or "") == active_reference:
+            return index
+    for index, profile in enumerate(profiles):
+        if str(profile.get("name") or "") == active_reference:
             return index
     return 0
 
@@ -78,7 +143,10 @@ def project_profiles_for_config(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def project_picker_row_model(project: dict[str, Any], *, active_project: str) -> dict[str, Any]:
-    is_active = str(project.get("name", "")) == str(active_project)
+    is_active = str(active_project) in {
+        str(project.get("id") or ""),
+        str(project.get("name") or ""),
+    }
     mark = "*" if is_active else " "
     return {
         "text": f"{mark} {project.get('label') or project.get('name')}",
@@ -90,6 +158,13 @@ def first_profile_name(profiles: list[dict[str, Any]]) -> str:
     for profile in profiles:
         if isinstance(profile, dict):
             return str(profile.get("name", ""))
+    return ""
+
+
+def first_profile_id(profiles: list[dict[str, Any]]) -> str:
+    for profile in profiles:
+        if isinstance(profile, dict):
+            return ensure_profile_id(profile)
     return ""
 
 
@@ -121,6 +196,10 @@ def next_board_host_name(hosts: list[dict[str, Any]]) -> str:
     return next_profile_name(hosts, "board")
 
 
+def next_board_name(host: dict[str, Any]) -> str:
+    return next_profile_name([item for item in host.get("boards", []) if isinstance(item, dict)], "board")
+
+
 def profile_name_exists(profiles: list[dict[str, Any]], name: str) -> bool:
     return any(isinstance(profile, dict) and str(profile.get("name", "")) == name for profile in profiles)
 
@@ -129,6 +208,9 @@ def add_remote_profile(config: dict[str, Any], name: str) -> dict[str, Any]:
     if not name:
         raise ValueError("Build host profile name is required")
     remotes = config.setdefault("remotes", [])
+    for remote in remotes:
+        if isinstance(remote, dict):
+            ensure_profile_id(remote)
     if profile_name_exists(remotes, name):
         raise ValueError(f"Build host profile already exists: {name}")
     profile = empty_remote_profile(name)
@@ -146,21 +228,24 @@ def apply_add_remote_profile_for_config(config: dict[str, Any], name: str) -> di
 
 
 def delete_remote_profile(config: dict[str, Any], name: str) -> bool:
-    was_active = str(config.get("active_remote", "")) == name
+    profile = profile_by_reference(config.get("remotes", []), name)
+    profile_id = ensure_profile_id(profile) if profile is not None else name
+    active = profile_by_reference(config.get("remotes", []), str(config.get("active_remote", "")))
+    was_active = active is profile
     config["remotes"] = [
-        profile
-        for profile in config.get("remotes", [])
-        if not (isinstance(profile, dict) and str(profile.get("name", "")) == name)
+        item
+        for item in config.get("remotes", [])
+        if not (isinstance(item, dict) and ensure_profile_id(item) == profile_id)
     ]
     if was_active:
-        config["active_remote"] = first_profile_name(config.get("remotes", []))
+        config["active_remote"] = first_profile_id(config.get("remotes", []))
     sync_active_remote(config)
     return was_active
 
 
 def apply_delete_remote_profile_for_config(config: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
     name = str(remote.get("name", ""))
-    active_changed = delete_remote_profile(config, name)
+    active_changed = delete_remote_profile(config, ensure_profile_id(remote))
     return {
         "status": f"Build host profile deleted: {name}",
         "connection_reset": active_changed,
@@ -169,16 +254,23 @@ def apply_delete_remote_profile_for_config(config: dict[str, Any], remote: dict[
 
 
 def set_active_remote_profile(config: dict[str, Any], name: str) -> bool:
-    if str(config.get("active_remote", "")) == name:
+    profile = profile_by_reference(config.get("remotes", []), name)
+    if profile is None:
+        raise ValueError(f"Unknown build host: {name}")
+    profile_id = ensure_profile_id(profile)
+    current = profile_by_reference(config.get("remotes", []), str(config.get("active_remote", "")))
+    current_id = ensure_profile_id(current) if current is not None else ""
+    if current_id == profile_id:
+        config["active_remote"] = profile_id
         return False
-    config["active_remote"] = name
+    config["active_remote"] = profile_id
     sync_active_remote(config)
     return True
 
 
 def apply_active_remote_profile_for_config(config: dict[str, Any], remote: dict[str, Any]) -> dict[str, Any]:
     name = str(remote.get("name", ""))
-    if not set_active_remote_profile(config, name):
+    if not set_active_remote_profile(config, ensure_profile_id(remote)):
         return {
             "changed": False,
             "status": "selected build host is already active",
@@ -199,6 +291,7 @@ def update_remote_profile_field(
     key: str,
     value: str,
 ) -> None:
+    active_remote(config)
     old_name = str(profile.get("name", ""))
     if key == "name":
         if not value:
@@ -208,11 +301,6 @@ def update_remote_profile_field(
     profile[key] = value
     if key == "name":
         profile["label"] = profile_label_after_rename(str(profile.get("label", "")), old_name, value)
-        config["active_remote"] = active_profile_name_after_rename(
-            str(config.get("active_remote", "")),
-            old_name,
-            value,
-        )
     sync_active_remote(config)
 
 
@@ -220,10 +308,19 @@ def add_board_host_profile(config: dict[str, Any], name: str) -> dict[str, Any]:
     if not name:
         raise ValueError("Board host profile name is required")
     hosts = config.setdefault("board_hosts", [])
+    for host in hosts:
+        if not isinstance(host, dict):
+            continue
+        host_id = ensure_profile_id(host)
+        for board in host.get("boards", []):
+            if isinstance(board, dict):
+                ensure_profile_id(board)
+                board["board_host_id"] = host_id
     if profile_name_exists(hosts, name):
         raise ValueError(f"Board host profile already exists: {name}")
-    profile = empty_host_profile(name)
+    profile = empty_board_access_host(name)
     hosts.append(profile)
+    active_board_access_host(config)
     sync_active_board_host(config)
     return profile
 
@@ -236,22 +333,103 @@ def apply_add_board_host_profile_for_config(config: dict[str, Any], name: str) -
     }
 
 
+def add_board(config: dict[str, Any], host: dict[str, Any], name: str) -> dict[str, Any]:
+    if not name:
+        raise ValueError("Board name is required")
+    if any(str(board.get("name", "")) == name for board in host.get("boards", [])):
+        raise ValueError(f"Board already exists on this host: {name}")
+    board = empty_board(name)
+    board["board_host_id"] = ensure_profile_id(host)
+    host.setdefault("boards", []).append(board)
+    if not str(config.get("active_board") or ""):
+        config["active_board_host"] = ensure_profile_id(host)
+        config["active_board"] = ensure_profile_id(board)
+    sync_active_board_host(config)
+    return board
+
+
+def delete_board(config: dict[str, Any], host: dict[str, Any], name: str) -> bool:
+    board = profile_by_reference(board_profiles(config), name)
+    board_id = ensure_profile_id(board) if board is not None else name
+    current = profile_by_reference(board_profiles(config), str(config.get("active_board") or ""))
+    was_active = current is board
+    host["boards"] = [
+        item
+        for item in host.get("boards", [])
+        if not (isinstance(item, dict) and ensure_profile_id(item) == board_id)
+    ]
+    if was_active:
+        remaining = board_profiles(config)
+        selected = remaining[0] if remaining else empty_board("")
+        config["active_board"] = ensure_profile_id(selected) if remaining else ""
+        selected_host = board_host_for_board(config, str(config["active_board"]))
+        config["active_board_host"] = ensure_profile_id(selected_host) if remaining else ""
+    sync_active_board_host(config)
+    return was_active
+
+
+def set_active_board(config: dict[str, Any], name: str) -> bool:
+    board = profile_by_reference(board_profiles(config), name)
+    if board is None:
+        raise ValueError(f"Unknown board: {name}")
+    board_id = ensure_profile_id(board)
+    current = profile_by_reference(board_profiles(config), str(config.get("active_board") or ""))
+    current_id = ensure_profile_id(current) if current is not None else ""
+    if current_id == board_id:
+        config["active_board"] = board_id
+        return False
+    host = board_host_for_board(config, board_id)
+    if profile_by_reference(config.get("board_hosts", []), ensure_profile_id(host)) is None:
+        raise ValueError(f"Unknown board: {name}")
+    config["active_board_host"] = ensure_profile_id(host)
+    config["active_board"] = board_id
+    sync_active_board_host(config)
+    return True
+
+
+def update_board_field(config: dict[str, Any], board: dict[str, Any], key: str, value: str) -> None:
+    current = active_board(config)
+    if str(current.get("name") or ""):
+        config["active_board"] = ensure_profile_id(current)
+    old_name = str(board.get("name") or "")
+    if key == "name":
+        if not value:
+            raise ValueError("Board name is required")
+        owner = board_host_for_board(config, ensure_profile_id(board))
+        siblings = [item for item in owner.get("boards", []) if isinstance(item, dict) and item is not board]
+        if value != old_name and any(str(item.get("name", "")) == value for item in siblings):
+            raise ValueError(f"Board already exists on this host: {value}")
+    board[key] = value
+    if key == "name":
+        board["label"] = profile_label_after_rename(str(board.get("label", "")), old_name, value)
+    sync_active_board_host(config)
+
+
 def delete_board_host_profile(config: dict[str, Any], name: str) -> bool:
-    was_active = str(config.get("active_board_host", "")) == name
+    host = profile_by_reference(config.get("board_hosts", []), name)
+    host_id = ensure_profile_id(host) if host is not None else name
+    current = profile_by_reference(config.get("board_hosts", []), str(config.get("active_board_host", "")))
+    was_active = current is host
     config["board_hosts"] = [
         profile
         for profile in config.get("board_hosts", [])
-        if not (isinstance(profile, dict) and str(profile.get("name", "")) == name)
+        if not (isinstance(profile, dict) and ensure_profile_id(profile) == host_id)
     ]
     if was_active:
-        config["active_board_host"] = first_profile_name(config.get("board_hosts", []))
+        config["active_board_host"] = first_profile_id(config.get("board_hosts", []))
+    remaining_boards = board_profiles(config)
+    if profile_by_reference(remaining_boards, str(config.get("active_board", ""))) is None:
+        config["active_board"] = ensure_profile_id(remaining_boards[0]) if remaining_boards else ""
+        if remaining_boards:
+            selected_host = board_host_for_board(config, str(config["active_board"]))
+            config["active_board_host"] = ensure_profile_id(selected_host)
     sync_active_board_host(config)
     return was_active
 
 
 def apply_delete_board_host_profile_for_config(config: dict[str, Any], host: dict[str, Any]) -> dict[str, Any]:
     name = str(host.get("name", ""))
-    active_changed = delete_board_host_profile(config, name)
+    active_changed = delete_board_host_profile(config, ensure_profile_id(host))
     return {
         "status": f"Board host profile deleted: {name}",
         "connection_reset": active_changed,
@@ -259,16 +437,26 @@ def apply_delete_board_host_profile_for_config(config: dict[str, Any], host: dic
 
 
 def set_active_board_host_profile(config: dict[str, Any], name: str) -> bool:
-    if str(config.get("active_board_host", "")) == name:
+    host = profile_by_reference(config.get("board_hosts", []), name)
+    if host is None:
+        raise ValueError(f"Unknown board host: {name}")
+    host_id = ensure_profile_id(host)
+    current = profile_by_reference(config.get("board_hosts", []), str(config.get("active_board_host", "")))
+    current_id = ensure_profile_id(current) if current is not None else ""
+    if current_id == host_id:
+        config["active_board_host"] = host_id
         return False
-    config["active_board_host"] = name
+    config["active_board_host"] = host_id
+    boards = [item for item in (host or {}).get("boards", []) if isinstance(item, dict)]
+    if profile_by_reference(boards, str(config.get("active_board", ""))) is None:
+        config["active_board"] = ensure_profile_id(boards[0]) if boards else ""
     sync_active_board_host(config)
     return True
 
 
 def apply_active_board_host_profile_for_config(config: dict[str, Any], host: dict[str, Any]) -> dict[str, Any]:
     name = str(host.get("name", ""))
-    if not set_active_board_host_profile(config, name):
+    if not set_active_board_host_profile(config, ensure_profile_id(host)):
         return {
             "changed": False,
             "status": "selected board host is already active",
@@ -287,6 +475,7 @@ def update_board_host_profile_field(
     key: str,
     value: str,
 ) -> None:
+    active_board_access_host(config)
     old_name = str(profile.get("name", ""))
     if key == "name":
         if not value:
@@ -296,11 +485,6 @@ def update_board_host_profile_field(
     profile[key] = value
     if key == "name":
         profile["label"] = profile_label_after_rename(str(profile.get("label", "")), old_name, value)
-        config["active_board_host"] = active_profile_name_after_rename(
-            str(config.get("active_board_host", "")),
-            old_name,
-            value,
-        )
     sync_active_board_host(config)
 
 
@@ -323,6 +507,7 @@ def normalize_remote_profiles(config: dict[str, Any]) -> None:
     remotes = [remote for remote in remotes if isinstance(remote, dict) and not is_blank_default_remote(remote)]
     config["remotes"] = remotes
     for index, remote in enumerate(remotes):
+        ensure_profile_id(remote)
         remote.setdefault("name", str(remote.get("label") or ""))
         remote.setdefault("label", str(remote.get("name") or f"remote-{index + 1}"))
         remote.setdefault("user", "")
@@ -337,19 +522,21 @@ def normalize_remote_profiles(config: dict[str, Any]) -> None:
         config["active_remote"] = ""
         sync_active_remote(config)
         return
-    active = str(config.get("active_remote") or remotes[0].get("name") or "")
-    if not any(str(remote.get("name", "")) == active for remote in remotes if isinstance(remote, dict)):
-        active = str(remotes[0].get("name") or "")
-    config["active_remote"] = active
+    selected = profile_by_reference(remotes, str(config.get("active_remote") or "")) or remotes[0]
+    config["active_remote"] = ensure_profile_id(selected)
     sync_active_remote(config)
 
 
 def active_remote(config: dict[str, Any]) -> dict[str, Any]:
     normalize_remote_profiles(config) if "remotes" not in config else None
     active = str(config.get("active_remote", ""))
-    for remote in config.get("remotes", []):
-        if isinstance(remote, dict) and str(remote.get("name", "")) == active:
-            return remote
+    remote = profile_by_reference(
+        [item for item in config.get("remotes", []) if isinstance(item, dict)],
+        active,
+    )
+    if remote is not None:
+        config["active_remote"] = ensure_profile_id(remote)
+        return remote
     return empty_remote_profile("")
 
 
@@ -381,49 +568,175 @@ def normalize_board_host_profiles(config: dict[str, Any]) -> None:
         hosts = [] if is_blank_host_profile(host) else [host]
         config["board_hosts"] = hosts
     hosts = [host for host in hosts if isinstance(host, dict) and not is_blank_host_profile(host)]
+    if hosts and not any(isinstance(host.get("boards"), list) for host in hosts):
+        legacy_active = str(config.get("active_board_host") or "")
+        grouped: list[dict[str, Any]] = []
+        group_keys: dict[tuple[str, ...], dict[str, Any]] = {}
+        host_fields = ("user", "host", "work_dir", "direct_copy", "tftp_root", "nfs_root", "deploy_subdir", "server_ip")
+        board_fields = ("name", "label", "type", "console_device", "ufs_loadaddr", "ufs_buffersize", "board_ip", "mac_address", "commands")
+        used_names: set[str] = set()
+        active_host = ""
+        for legacy in hosts:
+            key = tuple(str(legacy.get(field, "")) for field in host_fields)
+            host = group_keys.get(key)
+            if host is None:
+                base_name = str(legacy.get("user") or legacy.get("name") or "board-host")
+                host_name = base_name
+                suffix = 2
+                while host_name in used_names:
+                    host_name = f"{base_name}-{suffix}"
+                    suffix += 1
+                used_names.add(host_name)
+                host = empty_board_access_host(host_name)
+                host["label"] = str(legacy.get("user") or legacy.get("label") or host_name)
+                for field in host_fields:
+                    host[field] = legacy.get(field, host[field])
+                grouped.append(host)
+                group_keys[key] = host
+            board = empty_board(str(legacy.get("name") or ""))
+            board["board_host_id"] = ensure_profile_id(host)
+            for field in board_fields:
+                board[field] = copy.deepcopy(legacy.get(field, board[field]))
+            host["boards"].append(board)
+            if board["name"] == legacy_active:
+                active_host = ensure_profile_id(host)
+        hosts = grouped
+        config["active_board"] = legacy_active
+        config["active_board_host"] = active_host
     config["board_hosts"] = hosts
     for index, host in enumerate(hosts):
-        host.setdefault("name", str(host.get("label") or f"board-{index + 1}"))
-        host.setdefault("label", str(host.get("name") or f"board-{index + 1}"))
-        host.setdefault("type", "gen5_x5h")
+        host_id = ensure_profile_id(host)
+        host.setdefault("name", str(host.get("label") or f"board-host-{index + 1}"))
+        host.setdefault("label", str(host.get("name") or f"board-host-{index + 1}"))
         host.setdefault("user", "")
         host.setdefault("host", "")
         host.setdefault("work_dir", "~/moulin-board-work")
         host.setdefault("direct_copy", "no")
-        host.setdefault("console_device", "")
-        host.setdefault("ufs_loadaddr", "")
-        host.setdefault("ufs_buffersize", "")
-        commands = host.get("commands")
-        if not isinstance(commands, dict):
-            host["commands"] = {}
+        host.setdefault("tftp_root", "/srv/tftp")
+        host.setdefault("nfs_root", "/srv/nfs")
+        host.setdefault("deploy_subdir", "")
+        host.setdefault("server_ip", "")
+        boards = host.setdefault("boards", [])
+        if not isinstance(boards, list):
+            boards = []
+            host["boards"] = boards
+        for board_index, board in enumerate(boards):
+            if not isinstance(board, dict):
+                continue
+            board.setdefault("name", str(board.get("label") or f"board-{board_index + 1}"))
+            ensure_profile_id(board)
+            board["board_host_id"] = host_id
+            board.setdefault("label", str(board.get("name") or f"board-{board_index + 1}"))
+            board.setdefault("type", "gen5_x5h")
+            board.setdefault("console_device", "")
+            board.setdefault("ufs_loadaddr", "")
+            board.setdefault("ufs_buffersize", "")
+            board.setdefault("board_ip", "")
+            board.setdefault("mac_address", "")
+            if not isinstance(board.get("commands"), dict):
+                board["commands"] = {}
     if not hosts:
         config["active_board_host"] = ""
         sync_active_board_host(config)
         return
-    active = str(config.get("active_board_host") or hosts[0].get("name") or "")
-    if not any(str(host.get("name", "")) == active for host in hosts if isinstance(host, dict)):
-        active = str(hosts[0].get("name") or "")
-    config["active_board_host"] = active
+    selected_host = profile_by_reference(hosts, str(config.get("active_board_host") or "")) or hosts[0]
+    config["active_board_host"] = ensure_profile_id(selected_host)
+    boards = [board for host in hosts for board in host.get("boards", []) if isinstance(board, dict)]
+    selected_board = profile_by_reference(boards, str(config.get("active_board") or ""))
+    if selected_board is None and boards:
+        selected_board = boards[0]
+    config["active_board"] = ensure_profile_id(selected_board) if selected_board is not None else ""
+    if selected_board is not None:
+        config["active_board_host"] = str(selected_board.get("board_host_id") or "")
     sync_active_board_host(config)
 
 
-def active_board_host(config: dict[str, Any]) -> dict[str, Any]:
+def active_board_access_host(config: dict[str, Any]) -> dict[str, Any]:
     normalize_board_host_profiles(config) if "board_hosts" not in config else None
     active = str(config.get("active_board_host", ""))
+    host = profile_by_reference(
+        [item for item in config.get("board_hosts", []) if isinstance(item, dict)],
+        active,
+    )
+    if host is not None:
+        config["active_board_host"] = ensure_profile_id(host)
+        return host
+    return empty_board_access_host("")
+
+
+def active_board_host(config: dict[str, Any]) -> dict[str, Any]:
+    return board_target(config)
+
+
+def board_profiles(config: dict[str, Any]) -> list[dict[str, Any]]:
+    normalize_board_host_profiles(config) if "board_hosts" not in config else None
+    return [
+        board
+        for host in config.get("board_hosts", [])
+        if isinstance(host, dict)
+        for board in host.get("boards", [])
+        if isinstance(board, dict)
+    ]
+
+
+def active_board(config: dict[str, Any]) -> dict[str, Any]:
+    active = str(config.get("active_board", ""))
+    board = profile_by_reference(board_profiles(config), active)
+    if board is not None:
+        config["active_board"] = ensure_profile_id(board)
+        return board
+    return empty_board("")
+
+
+def board_host_for_board(config: dict[str, Any], board_name: str) -> dict[str, Any]:
+    board = profile_by_reference(board_profiles(config), board_name)
+    if board is None:
+        return empty_board_access_host("")
+    owner_id = str(board.get("board_host_id") or "")
+    owner = profile_by_reference(
+        [item for item in config.get("board_hosts", []) if isinstance(item, dict)],
+        owner_id,
+    )
+    if owner is not None:
+        return owner
     for host in config.get("board_hosts", []):
-        if isinstance(host, dict) and str(host.get("name", "")) == active:
+        if not isinstance(host, dict):
+            continue
+        if board in host.get("boards", []):
             return host
-    return empty_host_profile("")
+    return empty_board_access_host("")
+
+
+def board_target(config: dict[str, Any], board_name: str = "") -> dict[str, Any]:
+    board = active_board(config) if not board_name else (
+        profile_by_reference(board_profiles(config), board_name) or empty_board("")
+    )
+    host = board_host_for_board(config, str(board.get("id", "")))
+    if not str(board.get("name") or ""):
+        active_host_id = str(config.get("active_board_host") or "")
+        host = profile_by_reference(
+            [item for item in config.get("board_hosts", []) if isinstance(item, dict)],
+            active_host_id,
+        ) or empty_board_access_host("")
+        target = copy.deepcopy(host)
+        target.pop("boards", None)
+        return target
+    target = copy.deepcopy(host)
+    target.pop("boards", None)
+    target.update(copy.deepcopy(board))
+    return target
 
 
 def sync_active_board_host(config: dict[str, Any]) -> None:
-    config["board_host"] = active_board_host(config)
+    config["board_host"] = board_target(config)
 
 
 def empty_project_profile(name: str = "") -> dict[str, Any]:
     return {
+        "id": new_profile_id(),
         "name": name,
         "label": name,
+        "product_type": "gen5_xen_android",
         "project_dir": "",
         "local_project_dir": "",
         "git_url": "",
@@ -451,9 +764,12 @@ def add_project_profile_from_current(
     if not name:
         raise ValueError("Project profile name is required")
     projects = [project for project in config.setdefault("projects", []) if isinstance(project, dict)]
+    for existing in projects:
+        ensure_profile_id(existing)
     if profile_name_exists(projects, name):
         raise ValueError(f"Project already exists: {name}")
     project = dict(active_project(config))
+    project["id"] = new_profile_id()
     project["name"] = name
     project["label"] = name
     project["parameters"] = dict(parameters)
@@ -462,7 +778,7 @@ def add_project_profile_from_current(
     project["docker_image"] = docker_image
     projects.append(project)
     config["projects"] = projects
-    config["active_project"] = name
+    config["active_project"] = ensure_profile_id(project)
     sync_active_project(config)
     return project
 
@@ -500,18 +816,21 @@ def delete_project_profile(config: dict[str, Any], name: str) -> bool:
     projects = [project for project in config.get("projects", []) if isinstance(project, dict)]
     if len(projects) <= 1:
         raise ValueError("Cannot delete the only project")
-    was_active = str(config.get("active_project", "")) == name
-    remaining = [project for project in projects if str(project.get("name", "")) != name]
+    project = profile_by_reference(projects, name)
+    project_id = ensure_profile_id(project) if project is not None else name
+    current = profile_by_reference(projects, str(config.get("active_project", "")))
+    was_active = current is project
+    remaining = [item for item in projects if ensure_profile_id(item) != project_id]
     config["projects"] = remaining
     if was_active:
-        config["active_project"] = first_profile_name(remaining)
+        config["active_project"] = first_profile_id(remaining)
     sync_active_project(config)
     return was_active
 
 
 def apply_delete_project_profile_for_config(config: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
     name = str(project.get("name", ""))
-    active_changed = delete_project_profile(config, name)
+    active_changed = delete_project_profile(config, ensure_profile_id(project))
     return {
         "status": f"Project deleted: {name}",
         "runtime_reload": active_changed,
@@ -520,16 +839,26 @@ def apply_delete_project_profile_for_config(config: dict[str, Any], project: dic
 
 
 def set_active_project_profile(config: dict[str, Any], name: str) -> bool:
-    if str(config.get("active_project", "")) == name:
+    project = profile_by_reference(
+        [item for item in config.get("projects", []) if isinstance(item, dict)],
+        name,
+    )
+    if project is None:
+        raise ValueError(f"Unknown project: {name}")
+    project_id = ensure_profile_id(project)
+    current = profile_by_reference(config.get("projects", []), str(config.get("active_project", "")))
+    current_id = ensure_profile_id(current) if current is not None else ""
+    if current_id == project_id:
+        config["active_project"] = project_id
         return False
-    config["active_project"] = name
+    config["active_project"] = project_id
     sync_active_project(config)
     return True
 
 
 def apply_active_project_profile_for_config(config: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
     name = str(project.get("name", ""))
-    if not set_active_project_profile(config, name):
+    if not set_active_project_profile(config, ensure_profile_id(project)):
         return {
             "changed": False,
             "status": "selected project is already active",
@@ -546,7 +875,7 @@ def apply_active_project_profile_for_config(config: dict[str, Any], project: dic
 
 def apply_project_picker_selection_for_config(config: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
     name = str(project.get("name", ""))
-    set_active_project_profile(config, name)
+    set_active_project_profile(config, ensure_profile_id(project))
     return {
         "status": f"Active project: {project.get('label') or name}",
         "runtime_reload": True,
@@ -562,6 +891,7 @@ def update_project_profile_field(
     *,
     projects_dir: str = "",
 ) -> None:
+    active_project(config)
     old_name = str(project.get("name", ""))
     if key == "name":
         if not value:
@@ -574,11 +904,6 @@ def update_project_profile_field(
     project[key] = value
     if key == "name":
         project["label"] = profile_label_after_rename(str(project.get("label", "")), old_name, value)
-        config["active_project"] = active_profile_name_after_rename(
-            str(config.get("active_project", "")),
-            old_name,
-            value,
-        )
     if active_project(config) is project:
         sync_active_project(config)
 
@@ -628,6 +953,7 @@ def normalize_project_profiles(
         project = {
             "name": str(config.get("active_project") or config.get("project", {}).get("name") or "default"),
             "label": str(config.get("project", {}).get("label") or config.get("active_project") or "default"),
+            "product_type": "gen5_xen_android",
             "project_dir": legacy_project_name or legacy_project_dir,
             "local_project_dir": str(config.get("local", {}).get("project_dir", "workspace/project-overlay")),
             "git_url": str(remote.get("git_url") or config.get("project", {}).get("git_url", "")),
@@ -647,8 +973,12 @@ def normalize_project_profiles(
         config["projects"] = [empty_project_profile("default")]
         projects = config["projects"]
     for index, project in enumerate(projects):
+        ensure_profile_id(project)
         project.setdefault("name", str(project.get("label") or f"project-{index + 1}"))
         project.setdefault("label", str(project.get("name") or f"project-{index + 1}"))
+        project.setdefault("product_type", "gen5_xen_android")
+        if project["product_type"] == "gen5_xen":
+            project["product_type"] = "gen5_xen_android"
         if "project_dir" not in project:
             project["project_dir"] = str(config.get("project", {}).get("project_dir", ""))
         project_dir = str(project.get("project_dir", "")).strip()
@@ -673,19 +1003,21 @@ def normalize_project_profiles(
             project["mappings"] = copy.deepcopy(legacy_mappings) if isinstance(legacy_mappings, list) else []
         if not isinstance(project.get("active_mappings"), list):
             project["active_mappings"] = []
-    active = str(config.get("active_project") or projects[0].get("name") or "")
-    if not any(str(project.get("name", "")) == active for project in projects):
-        active = str(projects[0].get("name") or "")
-    config["active_project"] = active
+    selected = profile_by_reference(projects, str(config.get("active_project") or "")) or projects[0]
+    config["active_project"] = ensure_profile_id(selected)
     sync_active_project(config)
 
 
 def active_project(config: dict[str, Any]) -> dict[str, Any]:
     normalize_project_profiles(config) if "projects" not in config else None
     active = str(config.get("active_project", ""))
-    for project in config.get("projects", []):
-        if isinstance(project, dict) and str(project.get("name", "")) == active:
-            return project
+    project = profile_by_reference(
+        [item for item in config.get("projects", []) if isinstance(item, dict)],
+        active,
+    )
+    if project is not None:
+        config["active_project"] = ensure_profile_id(project)
+        return project
     return empty_project_profile("")
 
 

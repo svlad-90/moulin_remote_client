@@ -8,7 +8,6 @@ from typing import Any, Callable
 
 from components.config.api import accessors as config_accessor_api
 from components.config.api import profiles as config_profile_api
-from components.project_config.api import project_fields as project_fields_api
 from components.moulin.api import manifest as moulin_manifest_api
 from components.remote.api import discovery as remote_discovery_api
 from components.ui.api import input as ui_input_api
@@ -30,8 +29,7 @@ class RemoteFileSelectionController:
         read_git_remote_file: Callable[[dict[str, Any], str], str],
         manifest_cache: dict[tuple[str, ...], dict[str, Any]],
         default_moulin_manifest: str,
-        save_config: Callable[[dict[str, Any]], Any],
-        reset_preflight: Callable[[], Any],
+        field_action_controller: Any,
     ) -> None:
         self.config = config
         self.app_dir = app_dir
@@ -41,8 +39,7 @@ class RemoteFileSelectionController:
         self.read_git_remote_file = read_git_remote_file
         self.manifest_cache = manifest_cache
         self.default_moulin_manifest = default_moulin_manifest
-        self.save_config = save_config
-        self.reset_preflight = reset_preflight
+        self.field_action_controller = field_action_controller
 
     def select_moulin_manifest(self, port: Any) -> None:
         run_select_remote_moulin_manifest(
@@ -55,8 +52,7 @@ class RemoteFileSelectionController:
             read_git_remote_file=self.read_git_remote_file,
             manifest_cache=self.manifest_cache,
             default_moulin_manifest=self.default_moulin_manifest,
-            save_config=self.save_config,
-            reset_preflight=self.reset_preflight,
+            field_action_controller=self.field_action_controller,
         )
 
     def select_dockerfile(self, port: Any) -> None:
@@ -67,8 +63,7 @@ class RemoteFileSelectionController:
             fetch_git_remote_files=self.fetch_git_remote_files,
             read_project_file=self.read_project_file,
             read_git_remote_file=self.read_git_remote_file,
-            save_config=self.save_config,
-            reset_preflight=self.reset_preflight,
+            field_action_controller=self.field_action_controller,
         )
 
 
@@ -183,8 +178,7 @@ def run_select_remote_moulin_manifest(
     read_git_remote_file: Callable[[dict[str, Any], str], str],
     manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str,
-    save_config: Callable[[dict[str, Any]], Any],
-    reset_preflight: Callable[[], Any],
+    field_action_controller: Any,
 ) -> None:
     if not port.remote_project_config_ready():
         return
@@ -235,25 +229,21 @@ def run_select_remote_moulin_manifest(
     if not selected:
         port.status = "Moulin manifest unchanged"
         return
-    plan = project_fields_api.project_field_service().apply_active_file_selection_for_config(
-        config,
-        "moulin_manifest",
-        selected,
+    project = config_profile_api.active_project(config)
+    field_action_controller.apply_project_inline_value(
+        port, project, "moulin_manifest", selected
     )
-    if plan["manifest_cache_reset"]:
-        manifest_cache.clear()
-    if plan["build_params_reload"]:
-        port.build_params = moulin_manifest_api.default_parameters_for_config(
-            config,
-            app_dir=app_dir,
-            remote_read_project_file=read_project_file,
-            cache=manifest_cache,
-            default_moulin_manifest=default_moulin_manifest,
-        )
-    if plan["preflight_reset"]:
-        reset_preflight()
-    save_config(config)
-    port.status = str(plan["status"])
+    if str(project.get("moulin_manifest", "")) != selected:
+        return
+    manifest_cache.clear()
+    port.build_params = moulin_manifest_api.default_parameters_for_config(
+        config,
+        app_dir=app_dir,
+        remote_read_project_file=read_project_file,
+        cache=manifest_cache,
+        default_moulin_manifest=default_moulin_manifest,
+    )
+    port.status = f"Moulin manifest: {selected}"
 
 
 def remote_file_selection_controller(
@@ -266,8 +256,7 @@ def remote_file_selection_controller(
     read_git_remote_file: Callable[[dict[str, Any], str], str],
     manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str,
-    save_config: Callable[[dict[str, Any]], Any],
-    reset_preflight: Callable[[], Any],
+    field_action_controller: Any,
 ) -> RemoteFileSelectionController:
     return RemoteFileSelectionController(
         config,
@@ -278,8 +267,7 @@ def remote_file_selection_controller(
         read_git_remote_file=read_git_remote_file,
         manifest_cache=manifest_cache,
         default_moulin_manifest=default_moulin_manifest,
-        save_config=save_config,
-        reset_preflight=reset_preflight,
+        field_action_controller=field_action_controller,
     )
 
 
@@ -291,8 +279,7 @@ def run_select_remote_dockerfile(
     fetch_git_remote_files: Callable[[], list[str]],
     read_project_file: Callable[[dict[str, Any], str], str],
     read_git_remote_file: Callable[[dict[str, Any], str], str],
-    save_config: Callable[[dict[str, Any]], Any],
-    reset_preflight: Callable[[], Any],
+    field_action_controller: Any,
 ) -> None:
     if not port.remote_project_config_ready():
         return
@@ -343,12 +330,9 @@ def run_select_remote_dockerfile(
     if not selected:
         port.status = "Dockerfile unchanged"
         return
-    plan = project_fields_api.project_field_service().apply_active_file_selection_for_config(
-        config,
-        "dockerfile",
-        selected,
+    project = config_profile_api.active_project(config)
+    field_action_controller.apply_project_inline_value(
+        port, project, "dockerfile", selected
     )
-    if plan["preflight_reset"]:
-        reset_preflight()
-    save_config(config)
-    port.status = str(plan["status"])
+    if str(project.get("dockerfile", "")) == selected:
+        port.status = f"Dockerfile: {selected}"

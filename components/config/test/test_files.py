@@ -30,7 +30,9 @@ class ConfigFileBehaviorTests(unittest.TestCase):
                 "__config_path": str(path),
                 "__runtime": "skip",
                 "ui": {"title": "New"},
+                "plugins": {"diagnostics": {"enabled": True, "config": {"timeout": 10}}},
                 "active_project": "prod",
+                "active_board": "board-b",
             }
             synced = []
 
@@ -39,7 +41,9 @@ class ConfigFileBehaviorTests(unittest.TestCase):
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["preserve"], True)
             self.assertEqual(data["ui"], {"title": "New"})
+            self.assertEqual(data["plugins"], config["plugins"])
             self.assertEqual(data["active_project"], "prod")
+            self.assertEqual(data["active_board"], "board-b")
             self.assertNotIn("__runtime", data)
             self.assertIs(synced[0], config)
 
@@ -64,10 +68,10 @@ class ConfigFileBehaviorTests(unittest.TestCase):
             default_dockerfile="doc/Dockerfile",
         )
 
-        self.assertEqual(config["active_remote"], "build")
+        self.assertEqual(config["active_remote"], config["remotes"][0]["id"])
         self.assertEqual(config["remote"], config["remotes"][0])
         self.assertEqual(config["remote"]["host"], "env-host")
-        self.assertEqual(config["active_project"], "default")
+        self.assertEqual(config["active_project"], config["projects"][0]["id"])
         self.assertEqual(config["project"], config["projects"][0])
         self.assertEqual(config["project"]["project_dir"], "meta-product")
         self.assertEqual(config["project"]["targets"], "full_ufs.img.gz")

@@ -21,6 +21,7 @@ class FakeScreen:
 class FakePort:
     def __init__(self) -> None:
         self.config: dict[str, Any] = {}
+        self.config_store = Mock()
         self.docker_image = "image"
         self.screen = FakeScreen()
         self.show_message = Mock()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 from typing import Any
 
 from components.project_config.api import project_settings_actions
@@ -46,25 +45,51 @@ class FakeSettingsPort:
         return self.prompts.get(label, current)
 
 
+class FakeFieldActionController:
+    def apply_project_inline_value(
+        self,
+        port: Any,
+        project: dict[str, Any],
+        key: str,
+        value: str,
+    ) -> None:
+        project[key] = value.strip()
+        if key == "git_url":
+            port.preflight = "not run"
+            port.preflight_values = {}
+            port.render_cache.pop("header", None)
+        if key == "docker_image":
+            port.docker_image = value.strip()
+
+    def apply_project_values(
+        self,
+        port: Any,
+        project: dict[str, Any],
+        changes: dict[str, Any],
+        *,
+        status: str,
+    ) -> bool:
+        project.update(changes)
+        port.status = status
+        return True
+
+
 class Harness:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
-        self.save_count = 0
-        self.runtime_saves: list[dict[str, Any]] = []
+        self.target_selector = FakeTargetSelector()
+        self.remote_file_selector = FakeRemoteFileSelector()
+        self.profile_actions = FakeProfileActionController()
+        self.project_picker = FakeProjectPickerController()
         self.controller = project_settings_actions.ProjectSettingsActionController(
             config,
-            app_dir=Path("/app"),
-            default_config_path=Path("/app/config.json"),
-            save_config=self.save_config,
-            save_runtime_settings=self.save_runtime_settings,
+            target_selection_controller_factory=lambda: self.target_selector,
+            remote_file_selection_controller=self.remote_file_selector,
+            profile_action_controller=self.profile_actions,
+            project_picker_controller=self.project_picker,
+            field_action_controller=FakeFieldActionController(),
+            reload_runtime=lambda: None,
         )
-
-    def save_config(self, _config: dict[str, Any]) -> None:
-        self.save_count += 1
-
-    def save_runtime_settings(self, config: dict[str, Any], **kwargs: Any) -> None:
-        self.runtime_saves.append({"config": config, **kwargs})
-
 
 class FakeTargetSelector:
     def __init__(self) -> None:
@@ -137,7 +162,7 @@ def config() -> dict[str, Any]:
 
 
 class ProjectSettingsActionControllerTests(unittest.TestCase):
-    def test_navigation_actions_delegate_to_port_and_keep_screen_open(self) -> None:
+    def test_navigation_actions_delegate_to_controllers_and_keep_screen_open(self) -> None:
         cfg = config()
         port = FakeSettingsPort()
         harness = Harness(cfg)
@@ -146,10 +171,11 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 self.assertFalse(harness.controller.run_action(port, {"kind": kind}))
 
-        self.assertEqual(
-            port.calls,
-            ["select_project", "add_project", "delete_project", "manifest", "dockerfile", "targets", "board_artifacts"],
-        )
+        self.assertEqual(port.calls, [])
+        self.assertEqual(harness.project_picker.calls, ["select_project"])
+        self.assertEqual(harness.profile_actions.calls, ["add", "delete-active"])
+        self.assertEqual(harness.remote_file_selector.calls, ["manifest", "dockerfile"])
+        self.assertEqual(harness.target_selector.calls, ["targets", "board_artifacts"])
 
     def test_target_actions_use_injected_target_selection_service(self) -> None:
         cfg = config()
@@ -158,9 +184,6 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
         reloaded: list[bool] = []
         controller = project_settings_actions.ProjectSettingsActionController(
             cfg,
-            app_dir=Path("/app"),
-            default_config_path=Path("/app/config.json"),
-            save_config=lambda _config: None,
             target_selection_controller_factory=lambda: selector,
             reload_runtime=lambda: reloaded.append(True),
         )
@@ -180,9 +203,6 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
         selector = FakeRemoteFileSelector()
         controller = project_settings_actions.ProjectSettingsActionController(
             cfg,
-            app_dir=Path("/app"),
-            default_config_path=Path("/app/config.json"),
-            save_config=lambda _config: None,
             remote_file_selection_controller=selector,
         )
 
@@ -199,9 +219,6 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
         profile_actions = FakeProfileActionController()
         controller = project_settings_actions.ProjectSettingsActionController(
             cfg,
-            app_dir=Path("/app"),
-            default_config_path=Path("/app/config.json"),
-            save_config=lambda _config: None,
             profile_action_controller=profile_actions,
         )
 
@@ -219,9 +236,6 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
         reloaded: list[bool] = []
         controller = project_settings_actions.ProjectSettingsActionController(
             cfg,
-            app_dir=Path("/app"),
-            default_config_path=Path("/app/config.json"),
-            save_config=lambda _config: None,
             project_picker_controller=picker,
             reload_runtime=lambda: reloaded.append(True),
         )
@@ -244,7 +258,7 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertEqual(port.build_params["ENABLE_ANDROID"], "no")
-        self.assertEqual(port.status, "ENABLE_ANDROID=no")
+        self.assertEqual(port.status, "ENABLE_ANDROID=no; build targets=boot_artifacts dom0 domd")
 
     def test_parameter_action_replaces_build_targets_for_new_params(self) -> None:
         cfg = config()
@@ -253,9 +267,6 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
         selector = FakeTargetSelector()
         controller = project_settings_actions.ProjectSettingsActionController(
             cfg,
-            app_dir=Path("/app"),
-            default_config_path=Path("/app/config.json"),
-            save_config=lambda _config: None,
             target_selection_controller_factory=lambda: selector,
         )
 
@@ -320,7 +331,7 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
         self.assertEqual(cfg["projects"][0]["docker_image"], "new-image")
         self.assertEqual(port.docker_image, "new-image")
 
-    def test_save_persists_runtime_settings_and_closes_screen(self) -> None:
+    def test_save_updates_project_through_field_controller_and_closes_screen(self) -> None:
         cfg = config()
         port = FakeSettingsPort()
         harness = Harness(cfg)
@@ -328,11 +339,9 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
         result = harness.controller.run_action(port, {"kind": "save"})
 
         self.assertTrue(result)
-        self.assertEqual(len(harness.runtime_saves), 1)
-        self.assertEqual(harness.runtime_saves[0]["parameters"], port.build_params)
-        self.assertEqual(harness.runtime_saves[0]["targets"], port.build_targets)
-        self.assertEqual(harness.runtime_saves[0]["docker_image"], port.docker_image)
-        self.assertEqual(harness.save_count, 1)
+        self.assertEqual(cfg["projects"][0]["parameters"], port.build_params)
+        self.assertEqual(cfg["projects"][0]["targets"], port.build_targets)
+        self.assertEqual(cfg["projects"][0]["docker_image"], port.docker_image)
         self.assertEqual(port.status, "Project saved")
 
     def test_back_keeps_changes_in_memory_and_closes_screen(self) -> None:
@@ -343,7 +352,6 @@ class ProjectSettingsActionControllerTests(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(port.status, "Project changes kept in memory, not saved")
-        self.assertEqual(harness.save_count, 0)
 
     def test_unknown_action_keeps_screen_open(self) -> None:
         port = FakeSettingsPort()

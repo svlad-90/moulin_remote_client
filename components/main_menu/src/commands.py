@@ -721,12 +721,9 @@ class MainMenuCommandItemsService:
             for build_dir in [self.yocto_incremental_build_dir(component)]
             if build_dir
         ]
-        ninja_components = [
-            str(component["name"])
-            for component in selected
-            if component["builder_type"] in {"bazel", "android"}
+        invalidated_components = [
+            component for component in selected if component["builder_type"] in {"bazel", "android"}
         ]
-        bazel_components = [component for component in selected if component["builder_type"] == "bazel"]
         bazel_config_targets = self.bazel_config_targets_for_components(selected)
         selected_product_targets = " ".join(str(component["name"]) for component in selected)
         changed_files = self.changed_incremental_files(app)
@@ -778,29 +775,23 @@ class MainMenuCommandItemsService:
                     targets=" ".join(bazel_config_targets),
                 )
             )
-        for component in bazel_components:
+        if invalidated_components:
             commands.append(
-                self.remote_command_workflow.bazel_component_command(
+                self.remote_command_workflow.incremental_build_command(
                     app.config,
                     docker_image=app.docker_image,
-                    component=component,
+                    targets=selected_product_targets,
+                    invalidate_components=invalidated_components,
                 )
             )
-        if ninja_components:
+        else:
             commands.append(
                 self.remote_command_workflow.product_build_command(
                     app.config,
                     docker_image=app.docker_image,
-                    targets=" ".join(ninja_components),
+                    targets=selected_product_targets,
                 )
             )
-        commands.append(
-            self.remote_command_workflow.product_build_command(
-                app.config,
-                docker_image=app.docker_image,
-                targets=selected_product_targets,
-            )
-        )
         commands.append(self.mark_incremental_mapping_build_applied_command(app, applied_files=applied_files))
         return commands
 

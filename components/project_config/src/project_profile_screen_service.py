@@ -10,15 +10,12 @@ from components.config.api import profiles as config_profile_api
 class ProjectProfileScreenService:
     """Execute project profile actions and return updated screen state."""
 
-    def __init__(self, config: dict[str, Any], *, profile_action_controller: Any | None = None) -> None:
+    def __init__(self, config: dict[str, Any], *, profile_action_controller: Any) -> None:
         self.config = config
         self.profile_action_controller = profile_action_controller
 
     def add_project(self, port: Any) -> dict[str, Any]:
-        if self.profile_action_controller is None:
-            port.add_project_profile()
-        else:
-            self.profile_action_controller.add_project_profile(port)
+        self.profile_action_controller.add_project_profile(port)
         projects = self._projects()
         return {
             "projects": projects,
@@ -27,10 +24,7 @@ class ProjectProfileScreenService:
         }
 
     def delete_project(self, port: Any, selected_project: dict[str, Any], current_index: int) -> dict[str, Any]:
-        if self.profile_action_controller is None:
-            port.delete_project_profile(selected_project)
-        else:
-            self.profile_action_controller.delete_project_profile(port, selected_project)
+        self.profile_action_controller.delete_project_profile(port, selected_project)
         projects = self._projects()
         return {
             "projects": projects,
@@ -39,9 +33,6 @@ class ProjectProfileScreenService:
         }
 
     def set_active_project(self, port: Any, selected_project: dict[str, Any]) -> None:
-        if self.profile_action_controller is None:
-            port.set_active_project(selected_project)
-            return
         self.profile_action_controller.set_active_project(port, selected_project)
 
     def _projects(self) -> list[dict[str, Any]]:
@@ -51,6 +42,6 @@ class ProjectProfileScreenService:
 def project_profile_screen_service(
     config: dict[str, Any],
     *,
-    profile_action_controller: Any | None = None,
+    profile_action_controller: Any,
 ) -> ProjectProfileScreenService:
     return ProjectProfileScreenService(config, profile_action_controller=profile_action_controller)

@@ -8,6 +8,8 @@ from typing import Any
 
 from components.config.api import accessors as config_accessor_api
 from components.config.api import profiles as config_profile_api
+from components.plugins.api import model as plugin_model_api
+from components.plugins.api import settings as plugin_settings_api
 from components.remote.api import workflow as remote_workflow_api
 from components.ui.api import input as ui_input_api
 from components.ui.api import preflight as ui_preflight_api
@@ -69,7 +71,7 @@ class MainMenuSetupItemsService:
 
     def build_host_session_items(self, app: Any) -> list[MenuItem]:
         has_build_hosts = bool([remote for remote in app.config.get("remotes", []) if isinstance(remote, dict)])
-        has_board_hosts = bool([host for host in app.config.get("board_hosts", []) if isinstance(host, dict)])
+        has_boards = bool(config_profile_api.board_profiles(app.config))
         return [
             MenuItem(
                 "Select build host" if has_build_hosts else "Add build host",
@@ -109,17 +111,17 @@ class MainMenuSetupItemsService:
                 allow_during_job=True,
             ),
             MenuItem(
-                "Select board host" if has_board_hosts else "Add board host",
+                "Select board" if has_boards else "Configure board hosts",
                 "sessions / board host",
                 (
-                    "Choose the active board host profile used by flashing, TFTP/NFS deploy, and board shell commands."
-                    if has_board_hosts
-                    else "Open board host profile setup."
+                    "Choose the physical board used by flashing, TFTP/NFS deploy, and board shell commands."
+                    if has_boards
+                    else "Configure a board access host and add a physical board."
                 ),
-                lambda app: self._host_selection_preview(app.config, "active_board_host", "board_hosts"),
+                lambda app: self._board_selection_preview(app.config),
                 (
                     lambda app: app.config_workflow_controller().select_active_board_host(app)
-                    if has_board_hosts
+                    if has_boards
                     else app.config_workflow_controller().run_board_host_configurations_screen(app)
                 ),
                 allow_during_job=True,
@@ -129,6 +131,11 @@ class MainMenuSetupItemsService:
     def _host_selection_preview(self, config: dict[str, Any], active_key: str, list_key: str) -> str:
         active = str(config.get(active_key, ""))
         names = [str(profile.get("name", "")) for profile in config.get(list_key, []) if isinstance(profile, dict)]
+        return f"Active: {active or '<none>'} | Available: {', '.join(names) or '<none>'}"
+
+    def _board_selection_preview(self, config: dict[str, Any]) -> str:
+        active = str(config.get("active_board") or "")
+        names = [str(board.get("name") or "") for board in config_profile_api.board_profiles(config)]
         return f"Active: {active or '<none>'} | Available: {', '.join(names) or '<none>'}"
 
     def preflight_action_items(self, app: Any) -> list[MenuItem]:
@@ -195,8 +202,7 @@ def set_ui_setting(config: dict[str, Any], name: str, enabled: bool) -> None:
 def toggle_ui_setting(app: Any, name: str, label: str) -> None:
     ui = app.config.get("ui")
     enabled = not (isinstance(ui, dict) and bool(ui.get(name)))
-    set_ui_setting(app.config, name, enabled)
-    app.dependencies.save_config(app.config)
+    app.config_store.update_config(lambda config: set_ui_setting(config, name, enabled))
     app.status = f"{label}: {'yes' if enabled else 'no'}"
     app.menu_dirty = True
     app.main_full_redraw = True
@@ -204,13 +210,24 @@ def toggle_ui_setting(app: Any, name: str, label: str) -> None:
 
 def run_general_settings_screen(app: Any) -> None:
     index = 0
-    entries = [
+    entries: list[dict[str, Any]] = [
         {
             "label": "Show commands in logs",
             "key": "show_commands",
             "description": "Show the exact command or script before each action runs.",
+            "kind": "ui",
         }
     ]
+    plugin_runtime = app.plugin_runtime() if hasattr(app, "plugin_runtime") else None
+    for definition in plugin_runtime.definitions(refresh=True) if plugin_runtime is not None else []:
+        entries.append(
+            {
+                "label": f"Plugin: {definition.name}",
+                "description": definition.error or "Enable this plugin. Press c to configure its settings.",
+                "kind": "plugin",
+                "definition": definition,
+            }
+        )
     app.screen.timeout(-1)
     while True:
         app.screen.erase()
@@ -226,16 +243,23 @@ def run_general_settings_screen(app: Any) -> None:
 
         app.add(0, 0, "Settings"[:width], curses.A_BOLD)
         app.add(1, 0, "Up/Down: select | Enter/Space: toggle | q/Esc: back"[:width], app.accent_attr())
-        app.draw_box(3, 0, height - 6, width, "General")
+        app.draw_box(3, 0, height - 5, width, "General")
         visible_width = max(1, width - 4)
-        for row_offset, entry in enumerate(entries):
+        visible_entries = max(1, height - 10)
+        first_visible = min(max(0, index - visible_entries + 1), max(0, len(entries) - visible_entries))
+        for row_offset, entry in enumerate(entries[first_visible : first_visible + visible_entries]):
+            entry_index = first_visible + row_offset
             row = 4 + row_offset
-            checked = setting_enabled_text(app.config, str(entry["key"])) == "yes"
+            if entry["kind"] == "plugin":
+                definition = entry["definition"]
+                checked = plugin_model_api.plugin_enabled(app.config, definition.plugin_id)
+            else:
+                checked = setting_enabled_text(app.config, str(entry["key"])) == "yes"
             marker = "[x]" if checked else "[ ]"
             text = f"{marker} {entry['label']}"
-            attr = app.selected_attr() if row_offset == index else 0
+            attr = app.selected_attr() if entry_index == index else 0
             app.add(row, 2, text[:visible_width].ljust(visible_width), attr)
-        detail_row = 6 + len(entries)
+        detail_row = height - 5
         current = entries[index]
         app.add(detail_row, 2, str(current["description"])[:visible_width])
         app.add(height - 1, 0, app.status[:width].ljust(width), curses.A_REVERSE)
@@ -248,7 +272,14 @@ def run_general_settings_screen(app: Any) -> None:
             index = min(len(entries) - 1, index + 1)
         elif ch in (10, 13, ord(" ")):
             current = entries[index]
-            toggle_ui_setting(app, str(current["key"]), str(current["label"]))
+            if current["kind"] == "plugin":
+                definition = current["definition"]
+                enabled = not plugin_model_api.plugin_enabled(app.config, definition.plugin_id)
+                plugin_runtime.set_enabled(app, definition, enabled)
+            else:
+                toggle_ui_setting(app, str(current["key"]), str(current["label"]))
+        elif ui_input_api.key_code_matches(ch, "c") and entries[index]["kind"] == "plugin":
+            plugin_settings_api.run_plugin_settings_screen(app, entries[index]["definition"])
         elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
             app.screen.timeout(250)
             app.status = "Settings closed"

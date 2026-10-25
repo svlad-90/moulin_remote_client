@@ -134,6 +134,7 @@ class MainPanelsController:
         menu_visible_rows: int,
         running_jobs: list[dict[str, Any]],
         menu_tabs: list[str] | None = None,
+        menu_tab_labels: dict[str, str] | None = None,
         active_menu_tab: str = "",
         menu_focus: str = "items",
     ) -> None:
@@ -141,12 +142,13 @@ class MainPanelsController:
         port.draw_box(panel_top, 0, panel_height, left_width, "Actions", actions_attr)
         row = panel_top + 1
         tabs = menu_tabs or []
+        tab_names = menu_tab_labels or {}
         items_active = port.focus_panel == "actions" and menu_focus == "items"
         if tabs:
             labels = {
-                tab: f"[{ui_menu_api.tab_label(tab)}]"
+                tab: f"[{tab_names.get(tab, ui_menu_api.tab_label(tab))}]"
                 if tab == active_menu_tab
-                else f" {ui_menu_api.tab_label(tab)} "
+                else f" {tab_names.get(tab, ui_menu_api.tab_label(tab))} "
                 for tab in tabs
             }
             active_index = tabs.index(active_menu_tab) if active_menu_tab in tabs else 0

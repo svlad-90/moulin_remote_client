@@ -12,9 +12,6 @@ from components.project_config.api.target_policy import (
     target_selection_policy_service,
 )
 from components.project_config.src.fields import (
-    apply_active_project_file_selection_for_config,
-    apply_active_project_settings_field_for_config,
-    apply_project_inline_field_update_for_config,
     build_target_action_description,
     build_target_action_label,
     next_parameter_value,
@@ -49,9 +46,6 @@ __all__ = [
     "ProjectFieldService",
     "ProjectSettingsPolicyService",
     "TargetSelectionPolicyService",
-    "apply_active_project_file_selection_for_config",
-    "apply_active_project_settings_field_for_config",
-    "apply_project_inline_field_update_for_config",
     "build_target_action_description",
     "build_target_action_label",
     "next_parameter_value",

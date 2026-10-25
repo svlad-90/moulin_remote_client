@@ -21,12 +21,20 @@ class MainMenuStateController:
         self.mapping_selection_service = project_selection_api.project_mapping_selection_service()
 
     def item_enabled(self, port: Any, item: MenuItem) -> bool:
+        if item.availability is not None:
+            enabled, _reason = item.availability(port)
+            if not enabled:
+                return False
         return ui_menu.item_enabled_for_context(
             item,
             self._availability_context(port),
         )
 
     def disabled_reason(self, port: Any, item: MenuItem) -> str:
+        if item.availability is not None:
+            enabled, reason = item.availability(port)
+            if not enabled:
+                return reason
         return ui_menu.disabled_reason_for_context(
             item,
             self._availability_context(port),

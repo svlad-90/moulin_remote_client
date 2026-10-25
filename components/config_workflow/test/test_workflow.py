@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
 
+from components.config.api.entities import core_profile_contributor
+from components.config.api.store import config_store
 from components.config_workflow.api import workflow
 
 
@@ -65,15 +67,21 @@ class FakePort:
         return 3
 
 
+def _store(config: dict[str, Any]):
+    store = config_store(config)
+    store.initialize([core_profile_contributor()])
+    return store
+
+
 def make_controller(config: dict[str, Any] | None = None) -> workflow.ConfigWorkflowController:
+    values = config or {}
     return workflow.config_workflow_controller(
-        config or {},
+        values,
         app_dir=Path("/app"),
-        default_config_path=Path("/app/config.json"),
         default_build_targets="target-a",
         default_moulin_manifest="product.yaml",
         default_dockerfile="doc/Dockerfile",
-        save_config=Mock(),
+        config_store=_store(values),
         capture_command=Mock(return_value=""),
         remote_read_project_file=Mock(return_value=""),
         manifest_cache={},
@@ -123,7 +131,6 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
         run_screen.assert_called_once_with(
             port,
             controller.config,
-            save_config=controller.save_config,
             profile_action_controller=profile_controller,
             field_action_controller=field_controller,
         )
@@ -156,11 +163,10 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
         controller = workflow.config_workflow_controller(
             cfg,
             app_dir=Path("/app"),
-            default_config_path=Path("/app/config.json"),
             default_build_targets="target-a",
             default_moulin_manifest="product.yaml",
             default_dockerfile="doc/Dockerfile",
-            save_config=Mock(),
+            config_store=_store(cfg),
             capture_command=capture_command,
             remote_read_project_file=Mock(side_effect=RuntimeError("missing checkout file")),
             manifest_cache={},
@@ -188,11 +194,10 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
         controller = workflow.config_workflow_controller(
             cfg,
             app_dir=Path("/app"),
-            default_config_path=Path("/app/config.json"),
             default_build_targets="target-a",
             default_moulin_manifest="product.yaml",
             default_dockerfile="doc/Dockerfile",
-            save_config=Mock(),
+            config_store=_store(cfg),
             capture_command=Mock(),
             remote_read_project_file=Mock(return_value="checkout content"),
             manifest_cache={},
@@ -222,9 +227,9 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
 
         controller.select_active_remote(port)
 
-        self.assertEqual(cfg["active_remote"], "build-b")
+        self.assertEqual(cfg["active_remote"], cfg["remotes"][1]["id"])
         self.assertEqual(port.status, "Active build host: build-b")
-        controller.save_config.assert_called_once_with(cfg)
+        self.assertEqual(controller.config_store.revision, 1)
         port.connection_workflow_service.return_value.start_build_host_connect.assert_called_once_with(port)
         rendered_text = "\n".join(row[2] for row in port.rows)
         self.assertIn("Select build host", rendered_text)
@@ -233,10 +238,15 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
 
     def test_select_active_board_host_uses_profile_picker(self) -> None:
         cfg = {
-            "active_board_host": "board-a",
+            "active_board_host": "lab",
+            "active_board": "board-a",
             "board_hosts": [
-                {"name": "board-a", "host": "10.0.0.3", "user": "board"},
-                {"name": "board-b", "host": "10.0.0.4", "user": "board"},
+                {
+                    "name": "lab",
+                    "host": "10.0.0.3",
+                    "user": "board",
+                    "boards": [{"name": "board-a"}, {"name": "board-b"}],
+                },
             ],
         }
         controller = make_controller(cfg)
@@ -245,10 +255,11 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
 
         controller.select_active_board_host(port)
 
-        self.assertEqual(cfg["active_board_host"], "board-b")
-        self.assertEqual(port.status, "Active board host: board-b")
-        controller.save_config.assert_called_once_with(cfg)
-        port.connection_workflow_service.return_value.start_board_host_connect.assert_called_once_with(port)
+        self.assertEqual(cfg["active_board_host"], cfg["board_hosts"][0]["id"])
+        self.assertEqual(cfg["active_board"], cfg["board_hosts"][0]["boards"][1]["id"])
+        self.assertEqual(port.status, "Active board: board-b")
+        self.assertEqual(controller.config_store.revision, 1)
+        port.connection_workflow_service.return_value.start_board_host_connect.assert_not_called()
 
     def test_select_active_remote_cancel_keeps_current_profile(self) -> None:
         cfg = {"active_remote": "build-a", "remotes": [{"name": "build-a"}]}
@@ -258,9 +269,8 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
 
         controller.select_active_remote(port)
 
-        self.assertEqual(cfg["active_remote"], "build-a")
+        self.assertEqual(cfg["active_remote"], cfg["remotes"][0]["id"])
         self.assertEqual(port.status, "Select build host cancelled")
-        controller.save_config.assert_not_called()
 
     def test_select_active_remote_reports_missing_profiles(self) -> None:
         cfg = {"active_remote": "build-a", "remotes": []}
@@ -271,7 +281,6 @@ class ConfigWorkflowControllerTests(unittest.TestCase):
 
         self.assertEqual(cfg["active_remote"], "build-a")
         self.assertEqual(port.status, "Select build host: no profiles configured")
-        controller.save_config.assert_not_called()
 
 
 if __name__ == "__main__":

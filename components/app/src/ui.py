@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from components.build_runtime.api import env as config_env
 from components.main_menu.api import items as main_menu_items
+from components.plugins.api import runtime as plugin_runtime_api
 from components.ui.api import action_execution as ui_action_execution
 from components.ui.api import main_draw as ui_main_draw
 from components.ui.api import main_keys as ui_main_keys
@@ -41,9 +42,10 @@ class AppUiController:
         self.manifest_cache = manifest_cache
         self.env = env
         self.confirm_action = confirm_action
+        self.plugins = plugin_runtime_api.plugin_runtime(app_dir / "plugins")
 
     def build_items(self, port: Any) -> list[MenuItem]:
-        return main_menu_items.main_menu_builder(
+        items = main_menu_items.main_menu_builder(
             app_dir=self.app_dir,
             default_config_path=self.default_config_path,
             default_dockerfile=self.default_dockerfile,
@@ -53,6 +55,8 @@ class AppUiController:
             remote_read_project_file=self.remote_read_project_file,
             manifest_cache=self.manifest_cache,
         ).build_items(port)
+        items.extend(self.plugins.build_items(port))
+        return items
 
     def run(self, port: Any) -> None:
         ui_main_run_loop.main_run_loop_controller(
@@ -60,10 +64,17 @@ class AppUiController:
         ).run(port)
 
     def handle_main_key(self, port: Any, ch: int) -> None:
+        if self.plugins.handle_view_key(port, ch):
+            return
         ui_main_keys.main_key_controller().handle_key(port, ch)
 
     def draw(self, port: Any) -> None:
+        if self.plugins.draw_view(port):
+            return
         ui_main_draw.main_draw_controller(app_dir=self.app_dir).draw(port)
+
+    def poll_plugin_view(self, port: Any) -> None:
+        self.plugins.poll_view(port)
 
     def run_selected(self, port: Any) -> None:
         ui_action_execution.action_execution_controller(

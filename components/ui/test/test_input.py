@@ -23,6 +23,23 @@ class InputBehaviorTests(unittest.TestCase):
         self.assertTrue(ui_input.key_code_matches(ui_input.TEXT_KEY_OFFSET + ord("й"), "q"))
         self.assertFalse(ui_input.key_code_matches(10, "q"))
 
+    def test_command_key_codes_follow_physical_keys_across_layouts(self) -> None:
+        russian_layout = {
+            "a": "ф", "b": "и", "c": "с", "d": "в", "e": "у", "f": "а",
+            "g": "п", "h": "р", "i": "ш", "j": "о", "k": "л", "l": "д",
+            "m": "ь", "n": "т", "o": "щ", "p": "з", "q": "й", "r": "к",
+            "s": "ы", "t": "е", "u": "г", "v": "м", "w": "ц", "x": "ч",
+            "y": "н", "z": "я",
+        }
+
+        for latin, russian in russian_layout.items():
+            with self.subTest(key=latin):
+                russian_code = ui_input.encode_text_key(russian)
+                self.assertEqual(ui_input.normalize_command_key_code(russian_code), ord(latin))
+                self.assertTrue(ui_input.key_code_matches(russian_code, latin))
+
+        self.assertTrue(ui_input.key_code_matches(ui_input.encode_text_key("і"), "s"))
+
     def test_key_code_to_text_preserves_current_client_decoding(self) -> None:
         encoded = ui_input.TEXT_KEY_OFFSET + ord("ф")
 

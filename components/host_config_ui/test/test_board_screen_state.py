@@ -35,6 +35,26 @@ class BoardScreenStateControllerTests(unittest.TestCase):
         self.assertEqual(controller.state.field_index, 0)
         self.assertEqual(controller.state.focus, "hosts")
 
+    def test_selected_board_initializes_from_persisted_active_board(self) -> None:
+        cfg = {
+            "active_board_host": "host-a",
+            "active_board": "board-b",
+            "board_hosts": [
+                {
+                    "name": "host-a",
+                    "boards": [{"name": "board-a"}, {"name": "board-b"}],
+                }
+            ],
+        }
+        controller = board_screen_state.BoardScreenStateController(cfg)
+        hosts = controller.hosts()
+        controller.sync_selection(hosts, [])
+
+        board = controller.selected_board(controller.boards(controller.selected_host(hosts)))
+
+        self.assertEqual(controller.state.board_index, 1)
+        self.assertEqual(board, {"name": "board-b"})
+
     def test_navigation_action_moves_focus_and_indexes(self) -> None:
         controller = board_screen_state.BoardScreenStateController(config())
         port = FakePort()

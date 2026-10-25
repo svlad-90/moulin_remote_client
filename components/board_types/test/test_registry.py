@@ -2,10 +2,46 @@ from __future__ import annotations
 
 import unittest
 
+from components.board_types.api.base import BoardAction, BoardCapability, BoardCommandDefault, BoardTypeAdapter
 from components.board_types.api import registry
 
 
 class BoardTypeRegistryTests(unittest.TestCase):
+    def test_reboot_capability_is_inferred_from_action_and_commands(self) -> None:
+        class Adapter(BoardTypeAdapter):
+            type_id = "test"
+
+            def actions(self, _config: dict[str, object]) -> list[BoardAction]:
+                return [
+                    BoardAction(
+                        "restart_board",
+                        "Restart",
+                        "Restart the board",
+                        required_commands=("power_off", "boot_mode", "power_on"),
+                    )
+                ]
+
+            def command_defaults(self) -> list[BoardCommandDefault]:
+                return [
+                    BoardCommandDefault("power_off", "Power off", ""),
+                    BoardCommandDefault("boot_mode", "Boot mode", ""),
+                    BoardCommandDefault("power_on", "Power on", ""),
+                ]
+
+        adapter = Adapter()
+
+        self.assertNotIn(BoardCapability.REBOOT, adapter.capabilities())
+        self.assertIn(
+            BoardCapability.REBOOT,
+            adapter.capabilities(
+                {"commands": {"power_off": "off", "boot_mode": "boot", "power_on": "on"}}
+            ),
+        )
+        self.assertNotIn(
+            BoardCapability.REBOOT,
+            adapter.capabilities({"commands": {"power_off": "off", "power_on": "on"}}),
+        )
+
     def test_default_registry_returns_gen5_x5h_adapter(self) -> None:
         reg = registry.board_type_registry()
 
@@ -22,6 +58,10 @@ class BoardTypeRegistryTests(unittest.TestCase):
     def test_gen5_x5h_adapter_declares_current_board_actions(self) -> None:
         adapter = registry.board_type_registry().adapter_for_type("gen5_x5h")
 
+        self.assertEqual(
+            adapter.capabilities(),
+            frozenset({BoardCapability.REBOOT, BoardCapability.REFLASH, BoardCapability.REFLASH_BOOTLOADERS}),
+        )
         self.assertEqual(
             [(action.action_id, action.label) for action in adapter.actions({})],
             [

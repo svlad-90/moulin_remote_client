@@ -20,7 +20,13 @@ class FakePort:
         self.board_connection_state = "connected"
 
 
-def _item(label: str, *, requires_remote: bool = False, requires_project: bool = False) -> MenuItem:
+def _item(
+    label: str,
+    *,
+    requires_remote: bool = False,
+    requires_project: bool = False,
+    availability: Any = None,
+) -> MenuItem:
     return MenuItem(
         label,
         "build commands",
@@ -29,6 +35,7 @@ def _item(label: str, *, requires_remote: bool = False, requires_project: bool =
         lambda _port: None,
         requires_remote=requires_remote,
         requires_project=requires_project,
+        availability=availability,
     )
 
 
@@ -54,6 +61,16 @@ def _config(app_dir: Path) -> dict[str, Any]:
 
 
 class MainMenuStateControllerTests(unittest.TestCase):
+    def test_plugin_availability_disables_item_with_plugin_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            port = FakePort(_config(app_dir))
+            controller = state.main_menu_state_controller(app_dir=app_dir)
+            item = _item("Start test run", availability=lambda _port: (False, "runner is unavailable"))
+
+            self.assertFalse(controller.item_enabled(port, item))
+            self.assertEqual(controller.disabled_reason(port, item), "runner is unavailable")
+
     def test_item_enabled_uses_preflight_requirements(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)

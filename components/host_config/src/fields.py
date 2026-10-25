@@ -10,28 +10,35 @@ from components.config.api import profiles as config_profiles
 
 
 def board_host_fields(host: dict[str, Any] | None = None) -> list[tuple[str, str]]:
-    fields = [
+    return [
         ("Profile name", "name"),
         ("Display label", "label"),
-        ("Board type", "type"),
         ("SSH user", "user"),
         ("SSH host", "host"),
         ("Working dir", "work_dir"),
         ("Direct copy", "direct_copy"),
-        ("Console device", "console_device"),
-        ("UFS load addr", "ufs_loadaddr"),
-        ("UFS buffer size", "ufs_buffersize"),
         ("TFTP root", "tftp_root"),
         ("NFS root", "nfs_root"),
         ("Deploy subdir", "deploy_subdir"),
         ("TFTP server IP", "server_ip"),
+    ]
+
+
+def board_fields(board: dict[str, Any] | None = None) -> list[tuple[str, str]]:
+    fields = [
+        ("Board name", "name"),
+        ("Display label", "label"),
+        ("Board type", "type"),
+        ("Console device", "console_device"),
+        ("UFS load addr", "ufs_loadaddr"),
+        ("UFS buffer size", "ufs_buffersize"),
         ("Board IP", "board_ip"),
         ("MAC address", "mac_address"),
     ]
-    if host is not None:
+    if board is not None:
         fields.extend(
             (command["label"], command["key"])
-            for command in host_fields.board_host_field_service().command_defaults_for_host(host)
+            for command in host_fields.board_host_field_service().command_defaults_for_host(board)
         )
     return fields
 
@@ -52,7 +59,10 @@ def host_profile_row_model(
     active_name: str,
     selected: bool,
 ) -> dict[str, Any]:
-    is_active = str(profile.get("name", "")) == str(active_name)
+    is_active = str(active_name) in {
+        str(profile.get("id") or ""),
+        str(profile.get("name") or ""),
+    }
     active_mark = "*" if is_active else " "
     user_host = f"{profile.get('user', '')}@{profile.get('host', '')}"
     active_suffix = "  ACTIVE" if is_active else ""
@@ -87,7 +97,10 @@ def project_profile_row_model(
     active_name: str,
     selected: bool,
 ) -> dict[str, Any]:
-    is_active = str(project.get("name", "")) == str(active_name)
+    is_active = str(active_name) in {
+        str(project.get("id") or ""),
+        str(project.get("name") or ""),
+    }
     active_mark = "*" if is_active else " "
     manifest = str(project.get("moulin_manifest", "")) or "<not set>"
     targets = str(project.get("targets", "")) or "<not set>"
@@ -201,7 +214,6 @@ def configuration_screen_key_action(
         return {"action": "quit"}
     return {"action": "noop"}
 
-
 def normalize_board_host_field_value(key: str, value: str) -> str:
     return host_fields.board_host_field_service().normalize_value(key, value)
 
@@ -222,58 +234,12 @@ def board_host_connection_reset_needed(key: str, host_name: str, active_board_ho
     return host_fields.board_host_field_service().connection_reset_needed(key, host_name, active_board_host)
 
 
-def apply_board_host_inline_field_update_for_config(
-    config: dict[str, Any],
-    host: dict[str, Any],
-    key: str,
-    raw_value: str,
-) -> dict[str, Any]:
-    return host_fields.board_host_field_service().apply_inline_field_update_for_config(config, host, key, raw_value)
-
-
-def apply_board_host_direct_copy_toggle_for_config(config: dict[str, Any], host: dict[str, Any]) -> dict[str, Any]:
-    return host_fields.board_host_field_service().apply_direct_copy_toggle_for_config(config, host)
-
-
 def normalize_remote_field_value(key: str, value: str) -> str:
     return host_fields.build_host_field_service().normalize_value(key, value)
 
 
 def remote_connection_reset_needed(key: str, remote_name: str, active_remote: str) -> bool:
     return host_fields.build_host_field_service().connection_reset_needed(key, remote_name, active_remote)
-
-
-def apply_remote_inline_field_update_for_config(
-    config: dict[str, Any],
-    remote: dict[str, Any],
-    key: str,
-    raw_value: str,
-) -> dict[str, Any]:
-    return host_fields.build_host_field_service().apply_inline_field_update_for_config(config, remote, key, raw_value)
-
-
-def apply_remote_labeled_field_update_for_config(
-    config: dict[str, Any],
-    remote: dict[str, Any],
-    key: str,
-    raw_value: str,
-    label: str,
-) -> dict[str, Any]:
-    return host_fields.build_host_field_service().apply_labeled_field_update_for_config(
-        config,
-        remote,
-        key,
-        raw_value,
-        label,
-    )
-
-
-def apply_remote_projects_dir_selection_for_config(
-    config: dict[str, Any],
-    remote: dict[str, Any],
-    selected: str,
-) -> dict[str, Any]:
-    return host_fields.build_host_field_service().apply_projects_dir_selection_for_config(config, remote, selected)
 
 
 def board_host_field_enabled(key: str, host: dict[str, Any]) -> bool:
@@ -414,18 +380,3 @@ def remote_draft_enter_action_for_config(
     if kind == "cancel":
         return {"action": "cancel", "status": "Build host add cancelled"}
     return {"action": "noop"}
-
-
-def apply_remote_draft_create_for_config(config: dict[str, Any], draft: dict[str, str]) -> dict[str, Any]:
-    new_remote = {key: str(value).strip() for key, value in draft.items()}
-    if not new_remote.get("label"):
-        new_remote["label"] = new_remote["name"]
-    new_remote["projects_dir"] = ""
-    config.setdefault("remotes", []).append(new_remote)
-    config["active_remote"] = new_remote["name"]
-    config_profiles.sync_active_remote(config)
-    return {
-        "status": f"Remote profile added: {new_remote['name']}",
-        "connection_reset": True,
-        "preflight_reset": True,
-    }

@@ -21,6 +21,7 @@
 - [Keyboard Reference](#keyboard-reference)
 - [Safety Notes](#safety-notes)
 - [Development Notes](#development-notes)
+- [Validation](#validation)
 
 ## Start With Moulin
 
@@ -163,11 +164,26 @@ components/
   project/                           # mappings and project inventory domain
   project_config_ui/                 # project config screens
   project_mapping_ui/                # mapping browser screens
+  plugins/                           # plugin discovery, capabilities, and custom views
   remote/                            # build-host commands
   sync/                              # mapping sync and explicit mapped-file copy
   ui/                                # curses rendering/session state
 workspace/                           # local runtime state, ignored by Git
 ```
+
+## Plugins
+
+The client discovers extensions from `plugins/*/plugin.yaml`. Plugins are
+disabled by default and can be enabled from **Settings**, where their declared
+configuration is also editable. A declarative plugin can add tabs and actions
+without implementing terminal rendering. Python handlers receive a restricted
+context for commands, dialogs, plugin configuration, and all configured board
+profiles.
+
+Plugins that need a specialized screen can declare a custom view. The client
+continues to own the curses event loop, redraws, resize handling, navigation,
+background jobs, and dialogs; the view receives host-delivered events and a
+bounded drawing canvas. See `plugins/README.md` for the manifest and API shape.
 
 ## Requirements
 
@@ -834,3 +850,34 @@ The component boundary is service-oriented:
 
 Keep new product- or board-specific behavior behind project profiles or board
 type adapters instead of hardcoding it in the main menu.
+
+## Validation
+
+Pull requests and pushes to `main` run flake8, mypy, Python compilation, and
+the unit test suite in GitHub Actions. Install both dependency sets to run the
+same Python checks directly:
+
+```sh
+python3 -m pip install -r requirements.txt -r requirements-dev.txt
+python3 -m flake8 .
+python3 -m mypy
+python3 -m unittest discover -s . -p 'test_*.py'
+```
+
+The mypy file list in `mypy.ini` is the enforced typed baseline. Imported
+legacy modules are not followed implicitly; add a module to that list when its
+typing errors have been resolved. Flake8 currently blocks syntax errors and
+undefined names (`E9,F63,F7,F82`) without forcing a repository-wide formatting
+rewrite.
+
+From the Agent Workspace root, the repository validation policy reproduces the
+complete Actions job through `act` and its `moulin-act:22.04` runner image:
+
+```sh
+python3 -m agent_tools.tools.repo_guard validate \
+  --repo tasks/gen5_virtio_backends/dev/moulin_remote_client \
+  --include-heavy
+```
+
+The pre-push guard accepts the commit only while that Docker-backed validation
+receipt is current for the exact commit being pushed.

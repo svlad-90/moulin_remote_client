@@ -162,7 +162,8 @@ class SingleIplTests(unittest.TestCase):
     def test_command_plan_discovers_without_serial_and_flashes_only_selected(self):
         config = sample_config()
         profiles.normalize_board_host_profiles(config)
-        profiles.active_board_host(config).update(board_ip='10.0.0.2', server_ip='10.0.0.1')
+        profiles.active_board(config)["board_ip"] = "10.0.0.2"
+        profiles.active_board_access_host(config)["server_ip"] = "10.0.0.1"
         service = workflow.board_command_workflow_service(
             app_dir=ROOT, default_moulin_manifest='product.yaml',
             flash_bootloaders_tool=ROOT / 'board_tools/flash_bootloaders.py',
@@ -192,7 +193,7 @@ class SingleIplTests(unittest.TestCase):
         self.assertIn('--name test.srec --name second.srec', subset[-1][-1])
         self.assertEqual(sum('--power-off-command' in command[-1] for command in subset), 1)
         self.assertLess(subset[-2][-1].index('--check'), subset[-2][-1].index('--power-off-command'))
-        profiles.active_board_host(config)['board_ip'] = ''
+        profiles.active_board(config)["board_ip"] = ""
         commands = service.board_action_commands(config, 'flash_single_ipl', build_params={
             '_ipl_name': 'test.srec', '_ipl_snapshot': '/tmp/ipls',
         })
@@ -202,7 +203,7 @@ class SingleIplTests(unittest.TestCase):
         options = args[args.index('-c') + 2:]
         self.assertNotIn('--ipaddr', options)
         self.assertIn('--serverip', options)
-        profiles.active_board_host(config)['board_ip'] = 'invalid'
+        profiles.active_board(config)["board_ip"] = "invalid"
         with self.assertRaisesRegex(ValueError, 'valid IPv4'):
             service.board_action_commands(config, 'flash_single_ipl', build_params={
                 '_ipl_name': 'test.srec', '_ipl_snapshot': '/tmp/ipls',
@@ -303,7 +304,7 @@ class SingleIplTests(unittest.TestCase):
     def test_board_actions_use_the_same_uboot_helper_source(self):
         config = sample_config()
         profiles.normalize_board_host_profiles(config)
-        profiles.active_board_host(config)['board_ip'] = '10.0.0.2'
+        profiles.active_board(config)["board_ip"] = "10.0.0.2"
         service = workflow.board_command_workflow_service(
             app_dir=ROOT, default_moulin_manifest='product.yaml',
             flash_bootloaders_tool=ROOT / 'board_tools/flash_bootloaders.py',

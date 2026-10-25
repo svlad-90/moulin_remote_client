@@ -410,6 +410,21 @@ class commands:
         return commands._build().build_command(remote, project_dir, docker_image, targets)
 
     @staticmethod
+    def build_remote_incremental_build_command_for_config(
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        targets: str,
+        invalidate_components: list[dict[str, Any]],
+    ) -> list[str]:
+        return commands._build().incremental_build_command_for_config(
+            config,
+            docker_image=docker_image,
+            targets=targets,
+            invalidate_components=invalidate_components,
+        )
+
+    @staticmethod
     def build_remote_component_clean_command_for_config(
         config: dict[str, Any],
         *,

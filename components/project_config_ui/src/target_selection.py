@@ -9,7 +9,6 @@ from typing import Any, Callable
 from components.config.api import accessors as config_accessor_api
 from components.project_config.api import fields as project_field_api
 from components.config.api import profiles as config_profile_api
-from components.build_runtime.api import runtime as config_runtime_api
 from components.moulin.api import manifest as moulin_manifest_api
 from components.ui.api import input as ui_input_api
 from components.ui.api import menu as ui_menu_api
@@ -24,16 +23,12 @@ class TargetSelectionController:
         config: dict[str, Any],
         *,
         target_candidates: Callable[[dict[str, str]], list[dict[str, str]]],
-        app_dir: Path,
-        default_config_path: Path,
-        save_config: Callable[[dict[str, Any]], Any],
+        field_action_controller: Any,
         target_policy_service: project_field_api.TargetSelectionPolicyService | None = None,
     ) -> None:
         self.config = config
         self.target_candidates = target_candidates
-        self.app_dir = app_dir
-        self.default_config_path = default_config_path
-        self.save_config = save_config
+        self.field_action_controller = field_action_controller
         self.target_policy_service = target_policy_service or project_field_api.target_selection_policy_service()
 
     def select_build_targets(
@@ -55,19 +50,16 @@ class TargetSelectionController:
         if selected_text is None:
             return
         port.build_targets = selected_text
-        plan = config_profile_api.apply_active_project_targets_for_config(self.config, selected_text)
-        config_runtime_api.save_current_runtime_build_settings(
-            self.config,
-            parameters=port.build_params,
-            targets=port.build_targets,
-            docker_image=port.docker_image,
-            app_dir=self.app_dir,
-            default_path=self.default_config_path,
+        self.field_action_controller.apply_project_values(
+            port,
+            config_profile_api.active_project(self.config),
+            {
+                "parameters": dict(port.build_params),
+                "targets": port.build_targets,
+                "docker_image": port.docker_image,
+            },
+            status="Build target selection saved",
         )
-        self.save_config(self.config)
-        if plan["runtime_reload"]:
-            reload_runtime()
-        port.status = str(plan["status"])
 
     def build_target_text_for_params(self, build_params: dict[str, str], current_text: Any = "") -> str:
         candidates = self.target_candidates(build_params)
@@ -95,11 +87,12 @@ class TargetSelectionController:
         )
         if selected_text is None:
             return
-        plan = config_profile_api.apply_active_project_board_artifacts_for_config(self.config, selected_text)
-        self.save_config(self.config)
-        if plan["runtime_reload"]:
-            reload_runtime()
-        port.status = str(plan["status"])
+        self.field_action_controller.apply_project_values(
+            port,
+            project,
+            {"board_artifacts": selected_text},
+            status="Board artifact selection saved",
+        )
 
     def select_targets(
         self,
@@ -223,8 +216,7 @@ def target_selection_controller_for_config(
     remote_read_project_file: Callable[[dict[str, Any], str], str],
     manifest_cache: dict[tuple[str, ...], dict[str, Any]],
     default_moulin_manifest: str,
-    default_config_path: Path,
-    save_config: Callable[[dict[str, Any]], Any],
+    field_action_controller: Any,
 ) -> TargetSelectionController:
     return TargetSelectionController(
         config,
@@ -236,7 +228,5 @@ def target_selection_controller_for_config(
             default_moulin_manifest=default_moulin_manifest,
             build_params=build_params,
         ),
-        app_dir=app_dir,
-        default_config_path=default_config_path,
-        save_config=save_config,
+        field_action_controller=field_action_controller,
     )

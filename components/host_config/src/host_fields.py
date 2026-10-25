@@ -86,49 +86,6 @@ class BoardHostFieldService:
     def connection_reset_needed(self, key: str, host_name: str, active_board_host: str) -> bool:
         return key in ("type", "user", "host", "work_dir") and str(host_name) == str(active_board_host)
 
-    def apply_inline_field_update_for_config(
-        self,
-        config: dict[str, Any],
-        host: dict[str, Any],
-        key: str,
-        raw_value: str,
-    ) -> dict[str, Any]:
-        value = self.normalize_value(key, raw_value)
-        command_id = self.command_id_for_field(key)
-        if command_id:
-            commands = host.setdefault("commands", {})
-            if not isinstance(commands, dict):
-                commands = {}
-                host["commands"] = commands
-            if value:
-                commands[command_id] = value
-            else:
-                commands.pop(command_id, None)
-            config_profiles.sync_active_board_host(config)
-            return {
-                "value": value,
-                "status": f"{key} updated",
-                "connection_reset": False,
-            }
-        config_profiles.update_board_host_profile_field(config, host, key, value)
-        return {
-            "value": value,
-            "status": f"{key} updated",
-            "connection_reset": self.connection_reset_needed(
-                key,
-                str(host.get("name", "")),
-                str(config.get("active_board_host", "")),
-            ),
-        }
-
-    def apply_direct_copy_toggle_for_config(self, config: dict[str, Any], host: dict[str, Any]) -> dict[str, Any]:
-        value = self.next_direct_copy_value(str(host.get("direct_copy", "no")))
-        config_profiles.update_board_host_profile_field(config, host, "direct_copy", value)
-        return {
-            "value": value,
-            "status": f"Direct copy: {value}",
-        }
-
     def field_enabled(self, key: str, host: dict[str, Any]) -> bool:
         if self.command_id_for_field(key):
             return True
@@ -197,58 +154,16 @@ class BuildHostFieldService:
     def connection_reset_needed(self, key: str, remote_name: str, active_remote: str) -> bool:
         return key in ("user", "host", "projects_dir") and str(remote_name) == str(active_remote)
 
-    def apply_inline_field_update_for_config(
-        self,
-        config: dict[str, Any],
-        remote: dict[str, Any],
-        key: str,
-        raw_value: str,
-    ) -> dict[str, Any]:
-        value = self.normalize_value(key, raw_value)
-        config_profiles.update_remote_profile_field(config, remote, key, value)
-        return {
-            "value": value,
-            "status": f"{key} updated",
-            "connection_reset": self.connection_reset_needed(
-                key,
-                str(remote.get("name", "")),
-                str(config.get("active_remote", "")),
-            ),
-        }
-
-    def apply_labeled_field_update_for_config(
-        self,
-        config: dict[str, Any],
-        remote: dict[str, Any],
-        key: str,
-        raw_value: str,
-        label: str,
-    ) -> dict[str, Any]:
-        plan = self.apply_inline_field_update_for_config(config, remote, key, raw_value)
-        return {
-            **plan,
-            "status": f"{label} updated",
-        }
-
-    def apply_projects_dir_selection_for_config(
-        self,
-        config: dict[str, Any],
-        remote: dict[str, Any],
-        selected: str,
-    ) -> dict[str, Any]:
-        remote["projects_dir"] = selected
-        config_profiles.sync_active_remote(config)
-        return {
-            "status": f"Projects dir: {selected}",
-        }
-
     def field_enabled(self, key: str, remote: dict[str, Any], *, active_remote: str, connected: bool) -> bool:
         if key in ("back", "name", "label", "user", "projects_dir"):
             return True
         if key == "host":
             return bool(str(remote.get("user", "")).strip())
         if key in ("moulin_manifest", "dockerfile"):
-            return str(remote.get("name", "")) == str(active_remote) and connected
+            return str(active_remote) in {
+                str(remote.get("id") or ""),
+                str(remote.get("name") or ""),
+            } and connected
         return True
 
     def field_disabled_reason(
@@ -262,7 +177,10 @@ class BuildHostFieldService:
         if key == "host":
             return "set SSH user first"
         if key in ("moulin_manifest", "dockerfile"):
-            if str(remote.get("name", "")) != str(active_remote):
+            if str(active_remote) not in {
+                str(remote.get("id") or ""),
+                str(remote.get("name") or ""),
+            }:
                 return "set this remote active first"
             if not str(remote.get("user", "")).strip():
                 return "set SSH user first"
@@ -292,10 +210,14 @@ class BuildHostFieldService:
         *,
         connected: bool,
     ) -> bool:
+        active = config_profiles.active_remote(config)
+        active_reference = str(config.get("active_remote", ""))
+        if str(remote.get("name") or "") == str(active.get("name") or ""):
+            active_reference = str(remote.get("id") or remote.get("name") or "")
         return self.field_enabled(
             key,
             remote,
-            active_remote=str(config.get("active_remote", "")),
+            active_remote=active_reference,
             connected=connected,
         )
 
@@ -305,10 +227,14 @@ class BuildHostFieldService:
         remote: dict[str, Any],
         config: dict[str, Any],
     ) -> str:
+        active = config_profiles.active_remote(config)
+        active_reference = str(config.get("active_remote", ""))
+        if str(remote.get("name") or "") == str(active.get("name") or ""):
+            active_reference = str(remote.get("id") or remote.get("name") or "")
         return self.field_disabled_reason(
             key,
             remote,
-            active_remote=str(config.get("active_remote", "")),
+            active_remote=active_reference,
             remote_has_project_dir=accessors.remote_has_project_dir_for_config(config),
         )
 

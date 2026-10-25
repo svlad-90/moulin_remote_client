@@ -13,8 +13,11 @@ from components.ui.api import input as ui_input_api
 class BoardScreenState:
     host_index: int = 0
     host_index_initialized: bool = False
+    board_index: int = 0
+    board_index_initialized: bool = False
     field_index: int = 0
     focus: str = "hosts"
+    detail_scope: str = "host"
     editing_key: str = ""
     editing_value: str = ""
     editing_cursor: int = 0
@@ -45,6 +48,20 @@ class BoardScreenStateController:
 
     def selected_host(self, hosts: list[dict[str, Any]]) -> dict[str, Any] | None:
         return hosts[self.state.host_index] if hosts else None
+
+    @staticmethod
+    def boards(host: dict[str, Any] | None) -> list[dict[str, Any]]:
+        return [item for item in (host or {}).get("boards", []) if isinstance(item, dict)]
+
+    def selected_board(self, boards: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if not self.state.board_index_initialized:
+            self.state.board_index = config_profile_api.active_profile_index(
+                boards,
+                str(self.config.get("active_board", "")),
+            )
+            self.state.board_index_initialized = True
+        self.state.board_index = min(self.state.board_index, max(0, len(boards) - 1))
+        return boards[self.state.board_index] if boards else None
 
     def selected_field_key(self, fields: list[tuple[str, str]]) -> str:
         if fields and 0 <= self.state.field_index < len(fields):

@@ -181,40 +181,41 @@ def config_with_remotes() -> dict[str, Any]:
 
 
 class RemoteConfigurationScreenControllerTests(unittest.TestCase):
-    def test_run_remote_configurations_screen_quit_saves_config(self) -> None:
+    def test_run_remote_configurations_screen_quit_restores_timeout(self) -> None:
         port = FakeRemoteConfigPort([ord("q")])
-        saved: list[dict[str, Any]] = []
 
         remote_screen.run_remote_configurations_screen(
             port,
             config_with_remotes(),
-            save_config=saved.append,
         )
 
-        self.assertEqual(len(saved), 1)
         self.assertEqual(port.screen.timeouts[-1], 250)
 
-    def test_run_remote_configurations_screen_add_action_uses_port(self) -> None:
+    def test_run_remote_configurations_screen_add_action_uses_controller(self) -> None:
         port = FakeRemoteConfigPort([ord("a"), ord("q")])
+        controller = FakeProfileActionController()
 
         remote_screen.run_remote_configurations_screen(
             port,
             config_with_remotes(),
-            save_config=lambda _config: None,
+            profile_action_controller=controller,
         )
 
-        self.assertEqual(port.add_calls, 1)
+        self.assertEqual(controller.calls, [("add", "")])
+        self.assertEqual(port.add_calls, 0)
 
     def test_run_remote_configurations_screen_set_active_uses_selected_remote(self) -> None:
         port = FakeRemoteConfigPort([ord("j"), ord("s"), ord("q")])
+        controller = FakeProfileActionController()
 
         remote_screen.run_remote_configurations_screen(
             port,
             config_with_remotes(),
-            save_config=lambda _config: None,
+            profile_action_controller=controller,
         )
 
-        self.assertEqual(port.set_active_calls, ["build-b"])
+        self.assertEqual(controller.calls, [("set-active", "build-b")])
+        self.assertEqual(port.set_active_calls, [])
 
     def test_run_remote_configurations_screen_uses_profile_action_controller_for_add(self) -> None:
         port = FakeRemoteConfigPort([ord("a"), ord("q")])
@@ -223,7 +224,6 @@ class RemoteConfigurationScreenControllerTests(unittest.TestCase):
         remote_screen.run_remote_configurations_screen(
             port,
             config_with_remotes(),
-            save_config=lambda _config: None,
             profile_action_controller=controller,
         )
 
@@ -237,7 +237,6 @@ class RemoteConfigurationScreenControllerTests(unittest.TestCase):
         remote_screen.run_remote_configurations_screen(
             port,
             config_with_remotes(),
-            save_config=lambda _config: None,
             profile_action_controller=controller,
         )
 
@@ -253,7 +252,6 @@ class RemoteConfigurationScreenControllerTests(unittest.TestCase):
         remote_screen.run_remote_configurations_screen(
             port,
             config,
-            save_config=lambda _config: None,
             field_action_controller=controller,
         )
 
@@ -272,7 +270,6 @@ class RemoteConfigurationScreenControllerTests(unittest.TestCase):
             remote_screen.run_remote_configurations_screen(
                 port,
                 config_with_remotes(),
-                save_config=lambda _config: None,
                 remote_file_selection_controller=selector,
             )
 
@@ -282,21 +279,18 @@ class RemoteConfigurationScreenControllerTests(unittest.TestCase):
         port = FakeRemoteConfigPort([ord("s"), ord("q")])
         profile_actions = FakeProfileActionController()
         field_actions = FakeFieldActionController()
-        saved: list[dict[str, Any]] = []
         config = config_with_remotes()
 
         remote_screen.run_edit_remote_screen(
             port,
             config,
             config["remotes"][0],
-            save_config=saved.append,
             profile_action_controller=profile_actions,
             field_action_controller=field_actions,
             browse_project_directory=lambda _start: None,
         )
 
         self.assertEqual(profile_actions.calls, [("set-active", "build-a")])
-        self.assertEqual(len(saved), 1)
 
     def test_run_edit_remote_screen_uses_field_action_controller_for_projects_dir(self) -> None:
         port = FakeRemoteConfigPort([ord("b"), ord("q")])
@@ -308,7 +302,6 @@ class RemoteConfigurationScreenControllerTests(unittest.TestCase):
             port,
             config,
             config["remotes"][0],
-            save_config=lambda _config: None,
             profile_action_controller=profile_actions,
             field_action_controller=field_actions,
             browse_project_directory=lambda _start: "/mnt/new",
@@ -327,7 +320,6 @@ class RemoteConfigurationScreenControllerTests(unittest.TestCase):
             port,
             config,
             config["remotes"][0],
-            save_config=lambda _config: None,
             profile_action_controller=profile_actions,
             field_action_controller=field_actions,
             browse_project_directory=lambda _start: None,
@@ -338,24 +330,32 @@ class RemoteConfigurationScreenControllerTests(unittest.TestCase):
     def test_run_add_remote_screen_creates_profile_and_resets_state(self) -> None:
         keys = [10, ord("j"), ord("j"), 10, ord("j"), 10, ord("j"), 10]
         port = FakeRemoteConfigPort(keys, prompts=["new-build", "new-user", "10.0.0.3"])
-        saved: list[dict[str, Any]] = []
         reset_calls: list[bool] = []
         config = config_with_remotes()
+
+        def create_remote(values: dict[str, Any]) -> dict[str, Any]:
+            record = {"id": "new-id", **values}
+            config["remotes"].append(record)
+            config["active_remote"] = record["id"]
+            return {
+                "connection_reset": True,
+                "preflight_reset": True,
+                "status": f"Remote profile added: {record['name']}",
+            }
 
         remote_screen.run_add_remote_screen(
             port,
             config,
-            save_config=saved.append,
             reset_preflight=lambda: reset_calls.append(True),
+            create_remote=create_remote,
         )
 
-        self.assertEqual(config["active_remote"], "new-build")
+        self.assertEqual(config["active_remote"], config["remotes"][-1]["id"])
         self.assertEqual(config["remotes"][-1]["label"], "new-build")
         self.assertEqual(config["remotes"][-1]["user"], "new-user")
         self.assertEqual(config["remotes"][-1]["host"], "10.0.0.3")
         self.assertEqual(port.connection_state, "disconnected")
         self.assertEqual(reset_calls, [True])
-        self.assertEqual(len(saved), 1)
         self.assertEqual(port.status, "Remote profile added: new-build")
 
 

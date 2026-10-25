@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from components.build_runtime.api import runtime as runtime_api
+from components.config.api.store import config_store
 from components.main_menu.api import items
 from components.main_menu.api import state
 from components.ui.api import menu as menu_api
@@ -113,6 +114,7 @@ class FakeApp:
         self.reload_config_calls = 0
         self.saved_configs: list[dict[str, Any]] = []
         self.dependencies = SimpleNamespace(save_config=lambda config: self.saved_configs.append(config))
+        self.config_store = config_store(self.config, save=self.dependencies.save_config)
         self.status = ""
         self.menu_dirty = False
         self.main_full_redraw = False
@@ -218,12 +220,14 @@ def _config(app_dir: Path) -> dict[str, Any]:
             }
         ],
         "active_board_host": "board",
+        "active_board": "board-1",
         "board_hosts": [
             {
                 "name": "board",
                 "user": "tester",
                 "host": "10.0.0.2",
                 "work_dir": "/srv/tftp/demo",
+                "boards": [{"name": "board-1", "type": "gen5_x5h"}],
             }
         ],
         "active_project": "prod",
@@ -268,7 +272,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertIn("Run product build", labels)
             self.assertIn("Incremental rebuild", labels)
             self.assertIn("Clean incremental build", labels)
-            self.assertIn("Select board host", labels)
+            self.assertIn("Select board", labels)
             self.assertIn("Copy build artifacts", labels)
             self.assertIn("Sync mapped files", labels)
             self.assertNotIn("Analyze changed Yocto recipes", labels)
@@ -330,7 +334,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             mapping_labels = [item.label for item in menu_items if item.group == "build / files mapping"]
             self.assertEqual(mapping_labels, ["Sync mapped files", "Open mapped workspace"])
             self.assertIn("Select build host", [item.label for item in menu_items if item.group == "sessions / build host"])
-            self.assertIn("Select board host", [item.label for item in menu_items if item.group == "sessions / board host"])
+            self.assertIn("Select board", [item.label for item in menu_items if item.group == "sessions / board host"])
             flashing_labels = [item.label for item in menu_items if item.group == "flashing / commands"]
             flashing_configuration_labels = [item.label for item in menu_items if item.group == "flashing / configuration"]
             flashing_host_labels = [item.label for item in menu_items if item.group == "flashing / hosts"]
@@ -447,7 +451,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             menu_items = builder.setup_items.build_items(app)
 
             build_item = next(item for item in menu_items if item.label == "Add build host")
-            board_item = next(item for item in menu_items if item.label == "Add board host")
+            board_item = next(item for item in menu_items if item.label == "Configure board hosts")
 
             build_item.handler(app)
             board_item.handler(app)
@@ -592,7 +596,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(app.reload_config_calls, 1)
             title, commands = app.workflow.command_calls[0]
             self.assertEqual(title, "Clean incremental build")
-            self.assertEqual(len(commands), 7)
+            self.assertEqual(len(commands), 5)
             self.assertIn('ACTION = "clean"', commands[0][-1])
             self.assertIn('TARGETS = "rcar-image-adas".strip()', commands[0][-1])
             self.assertNotIn('TARGETS = "full_ufs.img.gz"', commands[0][-1])
@@ -604,14 +608,14 @@ class MainMenuBuilderTests(unittest.TestCase):
                 "tools/bazel --max_idle_secs=1 build //common-modules/xen-virtual-device:xen_virtual_device_aarch64/.config",
                 commands[2][-1],
             )
-            self.assertIn(
-                "cd android_kernel && tools/bazel --max_idle_secs=1 run --verbose_failures //common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist -- --destdir=../android/out/android_kernel/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64",
-                commands[3][-1],
-            )
-            self.assertIn("touch \"$p\"", commands[3][-1])
-            self.assertIn("ninja doma_kernel doma", commands[4][-1])
-            self.assertIn("ninja domd doma_kernel doma boot_artifacts", commands[5][-1])
-            self.assertIn("marked mapped-file changes as applied by build", commands[6][-1])
+            self.assertIn("TARGETS = [", commands[3][-1])
+            self.assertIn("doma_kernel", commands[3][-1])
+            self.assertIn("bazel_build", commands[3][-1])
+            self.assertIn("doma", commands[3][-1])
+            self.assertIn("android_build", commands[3][-1])
+            self.assertIn("boot_artifacts", commands[3][-1])
+            self.assertIn('subprocess.run(["ninja", *TARGETS]', commands[3][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[4][-1])
             settings_path = app_dir / "state" / "build-settings.json"
             self.assertEqual(
                 json.loads(settings_path.read_text(encoding="utf-8"))["incremental_components"],
@@ -1010,7 +1014,7 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             self.assertEqual(app.dialog_workflow.confirm_calls, [])
             _title, commands = app.workflow.command_calls[0]
-            self.assertEqual(len(commands), 6)
+            self.assertEqual(len(commands), 4)
             command_text = "\n".join(command[-1] for command in commands if command)
             self.assertNotIn('ACTION = "clean"', command_text)
             self.assertIn("moulin product.yaml", commands[0][-1])
@@ -1018,13 +1022,12 @@ class MainMenuBuilderTests(unittest.TestCase):
                 "tools/bazel --max_idle_secs=1 build //common-modules/xen-virtual-device:xen_virtual_device_aarch64/.config",
                 commands[1][-1],
             )
-            self.assertIn(
-                "cd android_kernel && tools/bazel --max_idle_secs=1 run //common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist -- --destdir=../android/out/android_kernel/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64",
-                commands[2][-1],
-            )
-            self.assertIn("ninja doma_kernel doma", commands[3][-1])
-            self.assertIn("ninja doma_kernel doma", commands[4][-1])
-            self.assertIn("marked mapped-file changes as applied by build", commands[5][-1])
+            self.assertIn("TARGETS = [", commands[2][-1])
+            self.assertIn("doma_kernel", commands[2][-1])
+            self.assertIn("bazel_build", commands[2][-1])
+            self.assertIn("doma", commands[2][-1])
+            self.assertIn("android_build", commands[2][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[3][-1])
 
     def test_incremental_handler_skips_yocto_impact_without_selected_yocto_component(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1058,14 +1061,15 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(app.reload_config_calls, 1)
             self.assertEqual(app.dialog_workflow.confirm_calls, [])
             _title, commands = app.workflow.command_calls[0]
-            self.assertEqual(len(commands), 4)
+            self.assertEqual(len(commands), 3)
             command_text = "\n".join(command[-1] for command in commands if command)
             self.assertNotIn('ACTION = "clean"', command_text)
             self.assertNotIn("Scanning available recipes", command_text)
             self.assertIn("moulin product.yaml", commands[0][-1])
-            self.assertIn("ninja doma", commands[1][-1])
-            self.assertIn("ninja doma", commands[2][-1])
-            self.assertIn("marked mapped-file changes as applied by build", commands[3][-1])
+            self.assertIn("TARGETS = [", commands[1][-1])
+            self.assertIn("doma", commands[1][-1])
+            self.assertIn("android_build", commands[1][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[2][-1])
 
     def test_incremental_handler_runs_custom_script_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

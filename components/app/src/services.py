@@ -78,7 +78,6 @@ class AppServicesController:
         )
         self.workflows = app_workflows.app_workflow_controller(
             app_dir=app_dir,
-            default_config_path=default_config_path,
             default_dockerfile=default_dockerfile,
             default_moulin_manifest=default_moulin_manifest,
             default_build_targets=default_build_targets,
@@ -126,6 +125,10 @@ class AppServicesController:
 
     def poll_background_tasks(self, port: Any) -> None:
         self.workflows.poll_project_source_reload(port)
+        self.ui.poll_plugin_view(port)
+
+    def plugin_runtime(self) -> Any:
+        return self.ui.plugins
 
     def poll_active_job(self, port: Any, job: dict[str, Any] | None = None) -> None:
         self.jobs.poll_active_job(port, job)

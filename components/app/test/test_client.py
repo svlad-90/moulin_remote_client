@@ -126,6 +126,36 @@ class ClientAppFactoryTests(unittest.TestCase):
             self.assertIs(fake_state.initialize_calls[0][1].__self__, fake_services)
             self.assertEqual(fake_state.initialize_calls[0][1].__name__, "build_items")
 
+    def test_plugin_migration_runs_before_store_initialization_and_saves_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_state = FakeAppState()
+            fake_services = FakeServices()
+            fake_terminal = FakeTerminalPort()
+            fake_terminal_adapter = FakeTerminalAdapter()
+            runtime = Mock()
+
+            def migrate(config: dict[str, Any]) -> bool:
+                config["migrated"] = True
+                return True
+
+            runtime.migrate_loaded_config.side_effect = migrate
+            runtime.config_contributors.return_value = ()
+            fake_services.plugin_runtime = Mock(return_value=runtime)
+            dependencies = self.make_dependencies(Path(tmpdir))
+            ClientApp = client.client_app_class(dependencies)
+
+            with (
+                patch.object(ClientApp, "app_state_controller", return_value=fake_state),
+                patch.object(ClientApp, "app_services_controller", return_value=fake_services),
+                patch.object(ClientApp, "terminal_port_controller", return_value=fake_terminal),
+                patch.object(ClientApp, "terminal_port_adapter", return_value=fake_terminal_adapter),
+            ):
+                app = ClientApp(FakeScreen(), {})
+
+            self.assertTrue(app.config["migrated"])
+            dependencies.save_config.assert_called_once_with(app.config)
+            runtime.config_contributors.assert_called_once_with(app)
+
     def test_facade_methods_delegate_to_owned_controllers(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_state = FakeAppState()

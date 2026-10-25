@@ -4,6 +4,7 @@ import copy
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from components.moulin.api import manifest
 
@@ -92,6 +93,7 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
             "active_remote": "build",
             "projects": [
                 {
+                    "id": "prod-id",
                     "name": "prod",
                     "project_dir": "meta-product",
                     "git_url": "https://example.test/product.git",
@@ -109,7 +111,7 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
 
         self.assertEqual(first, {"min_ver": "1.0", "images": {"full_ufs": {}}})
         self.assertIs(first, second)
-        self.assertEqual(calls, [("https://example.test/product.git", "main", "prod", "prod.yaml")])
+        self.assertEqual(calls, [("https://example.test/product.git", "main", "prod-id", "prod.yaml")])
 
         config["projects"][0]["git_ref"] = "next"
         manifest.load_manifest_for_config(config, app_dir=Path("/tmp/app"), remote_read_project_file=read_remote, cache=cache)
@@ -121,10 +123,10 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("https://example.test/product.git", "main", "prod", "prod.yaml"),
-                ("https://example.test/product.git", "next", "prod", "prod.yaml"),
-                ("https://example.test/fork.git", "next", "prod", "prod.yaml"),
-                ("https://example.test/fork.git", "next", "prod", "next.yaml"),
+                ("https://example.test/product.git", "main", "prod-id", "prod.yaml"),
+                ("https://example.test/product.git", "next", "prod-id", "prod.yaml"),
+                ("https://example.test/fork.git", "next", "prod-id", "prod.yaml"),
+                ("https://example.test/fork.git", "next", "prod-id", "next.yaml"),
             ],
         )
 
@@ -647,6 +649,34 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
                 {"name": "domd", "builder_type": "yocto", "target": "rcar-image-adas"},
             ],
         )
+
+    def test_android_build_context_comes_from_effective_builders(self) -> None:
+        builders = [
+            {"name": "doma_kernel", "builder_type": "bazel", "build_dir": "android_kernel"},
+            {"name": "doma", "builder_type": "android", "build_dir": "android"},
+        ]
+
+        context = manifest.android_build_context_from_builders(
+            builders,
+            {"DOMA_LUNCH_TARGET": "aosp_xenvm-userdebug"},
+        )
+
+        self.assertEqual(context.component_name, "doma")
+        self.assertEqual(context.build_dir, "android")
+        self.assertEqual(context.setup_commands[-1], "lunch aosp_xenvm-userdebug")
+        self.assertEqual(
+            context.environment["TARGET_PREBUILT_KERNEL"],
+            "../android_kernel/out/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64/Image",
+        )
+
+    def test_android_build_context_rejects_ambiguous_android_components(self) -> None:
+        builders = [
+            {"name": "doma", "builder_type": "android", "build_dir": "android-a"},
+            {"name": "domu", "builder_type": "android", "build_dir": "android-u"},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "multiple Android components"):
+            manifest.android_build_context_from_builders(builders, {})
 
     def test_component_builders_from_manifest_treats_android_param_as_doma_alias(self) -> None:
         data = {

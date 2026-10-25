@@ -15,7 +15,10 @@ def project_profile_row_model(
     active_name: str,
     selected: bool,
 ) -> dict[str, Any]:
-    is_active = str(project.get("name", "")) == str(active_name)
+    is_active = str(active_name) in {
+        str(project.get("id") or ""),
+        str(project.get("name") or ""),
+    }
     active_mark = "*" if is_active else " "
     manifest = str(project.get("moulin_manifest", "")) or "<not set>"
     targets = str(project.get("targets", "")) or "<not set>"
@@ -63,31 +66,6 @@ def project_preflight_reset_needed(key: str) -> bool:
 
 def project_docker_image_update_needed(key: str) -> bool:
     return project_fields.project_field_service().docker_image_update_needed(key)
-
-
-def apply_project_inline_field_update_for_config(
-    config: dict[str, Any],
-    project: dict[str, Any],
-    key: str,
-    raw_value: str,
-) -> dict[str, Any]:
-    return project_fields.project_field_service().apply_inline_field_update_for_config(config, project, key, raw_value)
-
-
-def apply_active_project_file_selection_for_config(
-    config: dict[str, Any],
-    key: str,
-    selected: str,
-) -> dict[str, Any]:
-    return project_fields.project_field_service().apply_active_file_selection_for_config(config, key, selected)
-
-
-def apply_active_project_settings_field_for_config(
-    config: dict[str, Any],
-    key: str,
-    raw_value: str,
-) -> dict[str, Any]:
-    return project_fields.project_field_service().apply_active_settings_field_for_config(config, key, raw_value)
 
 
 def project_field_enabled(

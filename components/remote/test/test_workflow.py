@@ -185,6 +185,24 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
                 targets="boot_artifacts full_ufs.img.gz",
             ),
         )
+        invalidate_components = [
+            {"name": "doma_kernel", "builder_type": "bazel"},
+            {"name": "doma", "builder_type": "android"},
+        ]
+        self.assertEqual(
+            service.incremental_build_command(
+                config,
+                docker_image="prod_img",
+                targets="doma_kernel doma",
+                invalidate_components=invalidate_components,
+            ),
+            commands.build_remote_incremental_build_command_for_config(
+                config,
+                docker_image="prod_img",
+                targets="doma_kernel doma",
+                invalidate_components=invalidate_components,
+            ),
+        )
         yocto_impact = service.yocto_impact_command(
             config,
             docker_image="prod_img",

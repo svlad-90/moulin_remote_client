@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from components.config.api import accessors as config_accessor_api
+from components.config.api import entities as config_entities_api
 from components.config.api import profiles as config_profile_api
+from components.config.api import store as config_store_api
 from components.ui.api import input as ui_input_api
 from components.ui.api import session as ui_session_api
 
@@ -17,13 +19,13 @@ class ProfileActionController:
         self,
         config: dict[str, Any],
         *,
-        save_config: Callable[[dict[str, Any]], None],
+        config_store: config_store_api.ConfigStore,
         confirm_action: Callable[[str, str], bool],
         reload_runtime: Callable[[], None],
         restore_project_menu_input: Callable[[], None],
     ) -> None:
         self.config = config
-        self.save_config = save_config
+        self.config_store = config_store
         self.confirm_action = confirm_action
         self.reload_runtime = reload_runtime
         self.restore_project_menu_input = restore_project_menu_input
@@ -33,16 +35,41 @@ class ProfileActionController:
             return
         self.reload_runtime()
 
+    def _config_store(self, port: Any) -> config_store_api.ConfigStore:
+        return self.config_store
+
+    @staticmethod
+    def _delete_details(summary: str, plan: config_store_api.DeletionPlan) -> str:
+        if not plan.impacts:
+            return summary
+        lines = [summary, "", "Dependent configuration:"]
+        lines.extend(f"- {description}" for description in dict.fromkeys(impact.link.description for impact in plan.impacts))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _blocked_status(plan: config_store_api.DeletionPlan) -> str:
+        descriptions = "; ".join(dict.fromkeys(impact.link.description for impact in plan.blockers))
+        return f"Cannot delete {plan.target_label}: {descriptions}"
+
     def delete_board_host(self, port: Any, host: dict[str, Any]) -> None:
         name = str(host.get("name", ""))
-        if not self.confirm_action("Delete board host", f"Delete board host profile {name}."):
+        host_id = config_profile_api.ensure_profile_id(host)
+        store = self._config_store(port)
+        plan = store.prepare_delete(config_store_api.EntityRef("board_host", host_id))
+        if plan.blockers:
+            port.status = self._blocked_status(plan)
+            return
+        if not self.confirm_action(
+            "Delete board host",
+            self._delete_details(f"Delete board host profile {name}.", plan),
+        ):
             port.status = "Board host delete cancelled"
             return
-        plan = config_profile_api.apply_delete_board_host_profile_for_config(self.config, host)
-        if plan["connection_reset"]:
+        was_active = str(self.config.get("active_board_host") or "") == host_id
+        store.execute_delete(plan)
+        if was_active:
             port.board_connection_state = "disconnected"
-        self.save_config(self.config)
-        port.status = str(plan["status"])
+        port.status = f"Board host profile deleted: {name}"
 
     def add_board_host(self, port: Any) -> None:
         default_name = config_profile_api.next_board_host_name(self.config.get("board_hosts", []))
@@ -54,12 +81,58 @@ class ProfileActionController:
             port.status = "Board host add cancelled"
             return
         try:
-            plan = config_profile_api.apply_add_board_host_profile_for_config(self.config, name)
+            self._config_store(port).create_entity("board_host", {"name": name})
         except ValueError as exc:
             port.status = str(exc)
             return
-        self.save_config(self.config)
-        port.status = str(plan["status"])
+        port.status = f"Board host profile added: {name}"
+
+    def add_board(self, port: Any, host: dict[str, Any]) -> dict[str, Any] | None:
+        default_name = config_profile_api.next_board_name(host)
+        name = port.prompt("Board name", default_name).strip()
+        if ui_input_api.prompt_was_cancelled(port) or not name:
+            port.status = "Board add cancelled"
+            return None
+        try:
+            store = self._config_store(port)
+            result = store.create_entity(
+                "board",
+                {
+                    "name": name,
+                    "board_host_id": config_profile_api.ensure_profile_id(host),
+                },
+            )
+        except ValueError as exc:
+            port.status = str(exc)
+            return None
+        current_host = config_profile_api.board_host_for_board(
+            self.config,
+            result.reference.entity_id,
+        )
+        if current_host is not None and current_host is not host:
+            host.clear()
+            host.update(current_host)
+        port.status = f"Board added: {name}"
+        return store.entity(result.reference)
+
+    def delete_board(self, port: Any, host: dict[str, Any], board: dict[str, Any]) -> bool:
+        name = str(board.get("name") or "")
+        board_id = str(board.get("id") or "")
+        store = self._config_store(port)
+        plan = store.prepare_delete(config_store_api.EntityRef("board", board_id))
+        if plan.blockers:
+            port.status = self._blocked_status(plan)
+            return False
+        if not self.confirm_action("Delete board", self._delete_details(f"Delete board {name}.", plan)):
+            port.status = "Board delete cancelled"
+            return False
+        previous_host = str(self.config.get("active_board_host") or "")
+        was_active = str(self.config.get("active_board") or "") == board_id
+        store.execute_delete(plan)
+        if was_active and str(self.config.get("active_board_host") or "") != previous_host:
+            port.board_connection_state = "disconnected"
+        port.status = f"Board deleted: {name}"
+        return True
 
     def _host_switch_blocked(self, port: Any) -> bool:
         if port.active_job is not None or port.board_job is not None:
@@ -71,30 +144,75 @@ class ProfileActionController:
         return False
 
     def set_active_board_host(self, port: Any, host: dict[str, Any]) -> None:
-        if str(host.get("name", "")) != str(self.config.get("active_board_host", "")):
+        host_id = config_profile_api.ensure_profile_id(host)
+        changed = host_id != str(self.config.get("active_board_host", ""))
+        if changed:
             if self._host_switch_blocked(port):
                 return
-        plan = config_profile_api.apply_active_board_host_profile_for_config(self.config, host)
-        if plan["connection_reset"]:
+            self._config_store(port).replace_references(
+                "core.active_board_host",
+                config_entities_api.SELECTION,
+                (config_store_api.EntityRef("board_host", host_id),),
+            )
             port.board_connection_state = "disconnected"
-        if plan["changed"]:
-            self.save_config(self.config)
-        port.status = str(plan["status"])
-        if plan["changed"] and config_accessor_api.board_host_has_ssh_for_config(self.config):
+        port.status = f"Active board host: {host.get('name')}" if changed else "selected board host is already active"
+        if changed and config_accessor_api.board_host_has_ssh_for_config(self.config):
+            port.connection_workflow_service().start_board_host_connect(port)
+
+    def set_active_board(self, port: Any, board: dict[str, Any]) -> None:
+        name = str(board.get("name") or "")
+        board_id = config_profile_api.ensure_profile_id(board)
+        target_host = config_profile_api.board_host_for_board(self.config, board_id)
+        target_host_id = config_profile_api.ensure_profile_id(target_host)
+        board["board_host_id"] = target_host_id
+        current_host = config_profile_api.active_board_access_host(self.config)
+        previous_host = str(self.config.get("active_board_host") or "")
+        if str(current_host.get("name") or ""):
+            previous_host = config_profile_api.ensure_profile_id(current_host)
+        if target_host_id != previous_host and self._host_switch_blocked(port):
+            return
+        try:
+            changed = board_id != str(self.config.get("active_board") or "")
+            if changed:
+                self._config_store(port).replace_references(
+                    "core.active_board",
+                    config_entities_api.SELECTION,
+                    (config_store_api.EntityRef("board", board_id),),
+                )
+        except ValueError as exc:
+            port.status = str(exc)
+            return
+        if not changed:
+            port.status = "selected board is already active"
+            return
+        host_changed = target_host_id != previous_host
+        if host_changed:
+            port.board_connection_state = "disconnected"
+        port.status = f"Active board: {name}"
+        if host_changed and config_accessor_api.board_host_has_ssh_for_config(self.config):
             port.connection_workflow_service().start_board_host_connect(port)
 
     def delete_remote(self, port: Any, remote: dict[str, Any]) -> None:
         name = str(remote.get("name", ""))
-        if not self.confirm_action("Delete build host", f"Delete build host profile {name}."):
+        remote_id = config_profile_api.ensure_profile_id(remote)
+        store = self._config_store(port)
+        plan = store.prepare_delete(config_store_api.EntityRef("build_host", remote_id))
+        if plan.blockers:
+            port.status = self._blocked_status(plan)
+            return
+        if not self.confirm_action(
+            "Delete build host",
+            self._delete_details(f"Delete build host profile {name}.", plan),
+        ):
             port.status = "Build host delete cancelled"
             return
-        plan = config_profile_api.apply_delete_remote_profile_for_config(self.config, remote)
-        if plan["connection_reset"]:
+        was_active = str(self.config.get("active_remote") or "") == remote_id
+        store.execute_delete(plan)
+        if was_active:
             port.connection_state = "disconnected"
-        if plan["preflight_reset"]:
+        if was_active:
             ui_session_api.reset_preflight(port)
-        self.save_config(self.config)
-        port.status = str(plan["status"])
+        port.status = f"Build host profile deleted: {name}"
 
     def add_remote(self, port: Any) -> None:
         default_name = config_profile_api.next_remote_name(self.config.get("remotes", []))
@@ -106,59 +224,92 @@ class ProfileActionController:
             port.status = "Build host add cancelled"
             return
         try:
-            plan = config_profile_api.apply_add_remote_profile_for_config(self.config, name)
+            self._config_store(port).create_entity("build_host", {"name": name})
         except ValueError as exc:
             port.status = str(exc)
             return
-        self.save_config(self.config)
-        port.status = str(plan["status"])
+        port.status = f"Build host profile added: {name}"
+
+    def create_remote_from_values(self, port: Any, values: dict[str, Any]) -> dict[str, Any]:
+        name = str(values.get("name") or "").strip()
+        payload = dict(values)
+        payload["name"] = name
+        payload["label"] = str(payload.get("label") or name)
+        payload["make_active"] = True
+        self._config_store(port).create_entity("build_host", payload)
+        return {
+            "status": f"Build host profile added: {name}",
+            "connection_reset": True,
+            "preflight_reset": True,
+        }
 
     def set_active_remote(self, port: Any, remote: dict[str, Any]) -> None:
-        if str(remote.get("name", "")) != str(self.config.get("active_remote", "")):
+        remote_id = config_profile_api.ensure_profile_id(remote)
+        changed = remote_id != str(self.config.get("active_remote", ""))
+        if changed:
             if self._host_switch_blocked(port):
                 return
-        plan = config_profile_api.apply_active_remote_profile_for_config(self.config, remote)
-        if plan["connection_reset"]:
+            self._config_store(port).replace_references(
+                "core.active_build_host",
+                config_entities_api.SELECTION,
+                (config_store_api.EntityRef("build_host", remote_id),),
+            )
             port.connection_state = "disconnected"
-        if plan["preflight_reset"]:
             ui_session_api.reset_preflight(port)
-        if plan["changed"]:
-            self.save_config(self.config)
-        port.status = str(plan["status"])
-        if plan["changed"] and config_accessor_api.remote_has_ssh_for_config(self.config):
+        port.status = f"Active build host: {remote.get('name')}" if changed else "selected build host is already active"
+        if changed and config_accessor_api.remote_has_ssh_for_config(self.config):
             port.connection_workflow_service().start_build_host_connect(port)
 
-    def delete_project_profile(self, port: Any, project: dict[str, Any]) -> None:
+    def delete_project_profile(
+        self,
+        port: Any,
+        project: dict[str, Any],
+        *,
+        reset_preflight: bool = True,
+    ) -> None:
         name = str(project.get("name", ""))
         if not config_profile_api.can_delete_project_profile(self.config):
             port.status = "Cannot delete the only project"
             return
-        if not self.confirm_action("Delete project", f"Remove project profile {name} from the client config."):
+        project_id = config_profile_api.ensure_profile_id(project)
+        store = self._config_store(port)
+        plan = store.prepare_delete(config_store_api.EntityRef("project", project_id))
+        if plan.blockers:
+            port.status = self._blocked_status(plan)
+            return
+        if not self.confirm_action(
+            "Delete project",
+            self._delete_details(f"Remove project profile {name} from the client config.", plan),
+        ):
             self.restore_project_menu_input()
             port.status = "Project delete cancelled"
             return
         try:
-            plan = config_profile_api.apply_delete_project_profile_for_config(self.config, project)
+            was_active = str(self.config.get("active_project") or "") == project_id
+            store.execute_delete(plan)
         except ValueError as exc:
             port.status = str(exc)
             return
-        if plan["runtime_reload"]:
+        if was_active:
             self._reload_runtime_if_build_connected(port)
-        if plan["preflight_reset"]:
+        if was_active and reset_preflight:
             ui_session_api.reset_preflight(port)
-        self.save_config(self.config)
         self.restore_project_menu_input()
-        port.status = str(plan["status"])
+        port.status = f"Project deleted: {name}"
 
     def set_active_project(self, port: Any, project: dict[str, Any]) -> None:
-        plan = config_profile_api.apply_active_project_profile_for_config(self.config, project)
-        if plan["runtime_reload"]:
+        project_id = config_profile_api.ensure_profile_id(project)
+        changed = project_id != str(self.config.get("active_project") or "")
+        if changed:
+            self._config_store(port).replace_references(
+                "core.active_project",
+                config_entities_api.SELECTION,
+                (config_store_api.EntityRef("project", project_id),),
+            )
             self._reload_runtime_if_build_connected(port)
-        if plan["preflight_reset"]:
             ui_session_api.reset_preflight(port)
-        if plan["changed"]:
-            self.save_config(self.config)
-        port.status = str(plan["status"])
+        label = project.get("label") or project.get("name")
+        port.status = f"Active project: {label}" if changed else "selected project is already active"
 
     def add_project_profile(self, port: Any) -> None:
         name = port.prompt("Project profile name", "project").strip()
@@ -169,57 +320,41 @@ class ProfileActionController:
             port.status = "Project add cancelled: empty name"
             return
         try:
-            plan = config_profile_api.apply_add_project_profile_for_config(
-                self.config,
-                name,
-                parameters=port.build_params,
-                targets=port.build_targets,
-                board_artifacts=port.board_artifacts,
-                docker_image=port.docker_image,
+            self._config_store(port).create_entity(
+                "project",
+                {
+                    "name": name,
+                    "parameters": port.build_params,
+                    "targets": port.build_targets,
+                    "board_artifacts": port.board_artifacts,
+                    "docker_image": port.docker_image,
+                },
             )
         except ValueError as exc:
             port.status = str(exc)
             return
-        if plan["runtime_reload"]:
-            self._reload_runtime_if_build_connected(port)
-        self.save_config(self.config)
-        port.status = str(plan["status"])
+        self._reload_runtime_if_build_connected(port)
+        port.status = f"Project added: {name}"
 
     def delete_active_project_profile(self, port: Any) -> None:
-        active = str(self.config.get("active_project", ""))
-        if not config_profile_api.can_delete_project_profile(self.config):
-            port.status = "Cannot delete the only project"
-            return
-        if not self.confirm_action("Delete project", f"Remove project profile {active} from the client config."):
-            self.restore_project_menu_input()
-            port.status = "Project delete cancelled"
-            return
-        try:
-            plan = config_profile_api.apply_delete_project_profile_for_config(
-                self.config,
-                config_profile_api.active_project(self.config),
-            )
-        except ValueError as exc:
-            port.status = str(exc)
-            return
-        if plan["runtime_reload"]:
-            self._reload_runtime_if_build_connected(port)
-        self.save_config(self.config)
-        self.restore_project_menu_input()
-        port.status = str(plan["status"])
+        self.delete_project_profile(
+            port,
+            config_profile_api.active_project(self.config),
+            reset_preflight=False,
+        )
 
 
 def profile_action_controller(
     config: dict[str, Any],
     *,
-    save_config: Callable[[dict[str, Any]], None],
+    config_store: config_store_api.ConfigStore,
     confirm_action: Callable[[str, str], bool],
     reload_runtime: Callable[[], None],
     restore_project_menu_input: Callable[[], None],
 ) -> ProfileActionController:
     return ProfileActionController(
         config,
-        save_config=save_config,
+        config_store=config_store,
         confirm_action=confirm_action,
         reload_runtime=reload_runtime,
         restore_project_menu_input=restore_project_menu_input,

@@ -106,6 +106,7 @@ class MainDrawController:
         item_labels = tuple(item.label for item in port.items)
         item_enabled = tuple(item_enabled_values)
         menu_tabs = tuple(ui_menu_api.menu_tabs(port.items))
+        menu_tab_labels = ui_menu_api.menu_tab_labels(port.items)
         selection = tuple(port.mapping_selection_cache)
         mapping_status = port.mapping_status_snapshot()
 
@@ -133,6 +134,7 @@ class MainDrawController:
             item_labels,
             item_enabled,
             menu_tabs,
+            menu_tab_labels,
             rendered,
         )
         self._draw_details(
@@ -259,6 +261,7 @@ class MainDrawController:
         item_labels: tuple[str, ...],
         item_enabled: tuple[bool, ...],
         menu_tabs: tuple[str, ...],
+        menu_tab_labels: dict[str, str],
         rendered: list[str],
     ) -> None:
         actions_sig = (
@@ -270,6 +273,7 @@ class MainDrawController:
             getattr(port, "menu_focus", "items"),
             getattr(port, "active_menu_tab", ""),
             menu_tabs,
+            tuple(menu_tab_labels.items()),
             active_labels,
             item_labels,
             item_enabled,
@@ -285,6 +289,7 @@ class MainDrawController:
                 menu_visible_rows=menu_visible_rows,
                 running_jobs=running_jobs,
                 menu_tabs=list(menu_tabs),
+                menu_tab_labels=menu_tab_labels,
                 active_menu_tab=getattr(port, "active_menu_tab", ""),
                 menu_focus=getattr(port, "menu_focus", "items"),
             )

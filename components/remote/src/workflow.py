@@ -164,6 +164,21 @@ class RemoteCommandWorkflowService:
             targets=targets,
         )
 
+    def incremental_build_command(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        targets: str,
+        invalidate_components: list[dict[str, Any]],
+    ) -> list[str]:
+        return self.build_service.incremental_build_command_for_config(
+            config,
+            docker_image=docker_image,
+            targets=targets,
+            invalidate_components=invalidate_components,
+        )
+
     def component_clean_command(
         self,
         config: dict[str, Any],

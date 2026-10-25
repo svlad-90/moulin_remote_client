@@ -1,0 +1,100 @@
+api_version: 1
+id: cts-vts
+name: CTS & VTS
+entrypoint: plugin.py
+
+views:
+  - id: dashboard
+    label: Test runs
+    factory: create_dashboard
+  - id: runner-configuration
+    label: Test runner configuration
+    factory: create_runner_configuration
+  - id: board-profile-configuration
+    label: Board profile configuration
+    factory: create_board_profile_configuration
+  - id: product-profile-configuration
+    label: Product profile configuration
+    factory: create_product_profile_configuration
+  - id: test-profile-configuration
+    label: Test profile configuration
+    factory: create_test_profile_configuration
+  - id: test-run-configuration
+    label: Test run configuration
+    factory: create_test_run_configuration
+  - id: available-boards
+    label: Boards status
+    factory: create_available_boards
+
+tabs:
+  - id: cts-vts
+    label: CTS&VTS
+    actions:
+      - id: runner
+        label: Test runner configuration
+        description: Manage named test-runner SSH and workspace profiles.
+        group: Configuration
+        view: runner-configuration
+        preview: runner_preview
+      - id: boards
+        label: Board profile configuration
+        description: Create or update a named set of Android devices.
+        group: Configuration
+        view: board-profile-configuration
+        preview: board_profiles_preview
+      - id: products
+        label: Product profile configuration
+        description: Select the build host and product used for images and VTS.
+        group: Configuration
+        view: product-profile-configuration
+        preview: product_profiles_preview
+      - id: tests
+        label: Test profile configuration
+        description: Configure suites, revisions, filters, and recovery limits.
+        group: Configuration
+        view: test-profile-configuration
+        preview: test_profiles_preview
+      - id: runs
+        label: Test run configuration
+        description: Bind board, test, and product profiles to a named run.
+        group: Configuration
+        view: test-run-configuration
+        preview: runs_preview
+      - id: dashboard
+        label: Test run status
+        description: Inspect configured profiles and test-run state.
+        group: Status
+        view: dashboard
+      - id: available-boards
+        label: Boards status
+        description: Resolve selected Android devices and inspect their ADB and build identity.
+        group: Status
+        view: available-boards
+      - id: prepare
+        label: Prepare test run
+        description: Build, flash, and prepare selected test artifacts.
+        group: Commands
+        handler: prepare_test_run
+        preview: active_run_preview
+        availability: configured_run_available
+      - id: start
+        label: Start / continue test run
+        description: Validate devices and start or continue detached Tradefed execution.
+        group: Commands
+        handler: start_or_continue
+        preview: active_run_preview
+        availability: configured_run_available
+      - id: stop
+        label: Stop test run
+        description: Stop the detached supervisor for the active run.
+        group: Commands
+        handler: stop_test_run
+        preview: active_run_preview
+        availability: running_run_available
+      - id: reset
+        label: Reset test run data
+        description: Remove results or the complete active run workspace.
+        group: Commands
+        handler: reset_test_run
+        preview: active_run_preview
+        availability: configured_run_available
