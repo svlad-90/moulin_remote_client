@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from components.board.src.builder import board_command_builder
-from components.board.src.flash import board_flash_command_service
 from components.board.src.session import board_session_command_service
 from components.board.src.transfer import board_artifact_transfer_service
 from components.board_types.api import base as board_type_base_api
@@ -43,7 +42,6 @@ class BoardCommandWorkflowService:
             remote_read_project_file=remote_read_project_file,
             manifest_cache=manifest_cache,
         )
-        self.flash_service = board_flash_command_service(command_builder=self.command_builder)
         self.board_type_registry = board_type_registry_api.board_type_registry()
 
     def connect_command(self, config: dict[str, Any]) -> list[str]:
@@ -306,7 +304,6 @@ class BoardCommandWorkflowService:
             xt_imager_tool=self.xt_imager_tool,
             command_builder=self.command_builder,
             transfer_service=self.transfer_service,
-            flash_service=self.flash_service,
         )
 
 

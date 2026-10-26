@@ -638,7 +638,11 @@ The built-in `gen5_x5h` workflow is:
    - Deploy `board_tools/flash_bootloaders.py` to the board host.
    - Run the X5H flash mode helper.
    - Unpack boot artifacts under `<work dir>/artifacts`.
-   - Run the helper from `build-domd/ipls`:
+   - Let the `gen5_x5h` board adapter locate exactly one
+     `build-domd/.../ipls/x5h_bootloaders.yaml` and run the helper from that
+     `ipls` directory. Both the direct `build-domd/ipls` layout and nested
+     Yocto deploy layouts are supported; missing or ambiguous layouts stop the
+     action before flashing:
 
      ```sh
      python3 ./flash_bootloaders.py --port /dev/GEN5_CONSOLE --config x5h_bootloaders.yaml --mode all

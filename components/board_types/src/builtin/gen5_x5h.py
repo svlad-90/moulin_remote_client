@@ -109,7 +109,12 @@ def _bootloader_parts_from_archive(
             if not member.isfile():
                 continue
             file_names.add(member.name)
-            if not member.name.endswith("/build-domd/ipls/x5h_bootloaders.yaml"):
+            member_path = PurePosixPath(member.name)
+            if not (
+                member_path.name == "x5h_bootloaders.yaml"
+                and member_path.parent.name == "ipls"
+                and "build-domd" in member_path.parts[:-2]
+            ):
                 continue
             config_count += 1
             config_name = member.name
@@ -118,7 +123,9 @@ def _bootloader_parts_from_archive(
                 raise ValueError("Cannot read x5h_bootloaders.yaml from boot artifacts")
             document = yaml.safe_load(config_stream)
         if config_count != 1:
-            raise ValueError("Expected one build-domd/ipls/x5h_bootloaders.yaml in boot artifacts")
+            raise ValueError(
+                "Expected one build-domd/.../ipls/x5h_bootloaders.yaml in boot artifacts"
+            )
         entries = document.get("images", []) if isinstance(document, dict) else []
         if not isinstance(entries, list):
             raise ValueError("x5h_bootloaders.yaml images must be a list")
@@ -1554,6 +1561,21 @@ echo "rootfs deploy: done" >&2
             "-name '*boot-artifacts*.tar.gz' -o -name '*boot_artifacts*.tar.gz' -o "
             "-name '*boot-artifacts*.tar' -o -name '*boot_artifacts*.tar' \\) -print -quit)\n"
         )
+        resolve_ipls_dir = (
+            "resolve_ipls_dir() {\n"
+            "    configs=$(find \"$1\" -type f \\( "
+            "-path '*/build-domd/ipls/x5h_bootloaders.yaml' -o "
+            "-path '*/build-domd/*/ipls/x5h_bootloaders.yaml' \\) -print)\n"
+            "    config_count=$(printf '%s\\n' \"$configs\" | sed '/^$/d' | wc -l)\n"
+            "    if [ \"$config_count\" -ne 1 ]; then\n"
+            "        echo 'expected one build-domd/.../ipls/x5h_bootloaders.yaml under: '"
+            "\"$1\" >&2\n"
+            "        exit 2\n"
+            "    fi\n"
+            "    config=$configs\n"
+            "    ipls_dir=$(dirname \"$config\")\n"
+            "}\n"
+        )
         unpack_script = (
             "set -euo pipefail\n"
             f"cd {builder.quote_remote_shell_path(work_dir)}\n"
@@ -1570,10 +1592,8 @@ echo "rootfs deploy: done" >&2
             "echo 'unpack boot artifacts: '\"$archive\"\n"
             "echo 'to: '\"$artifact_dir\"\n"
             "tar -xf \"$archive\" -C \"$artifact_dir\" --strip-components=1\n"
-            "ipls_dir=\"$artifact_dir/build-domd/ipls\"\n"
-            "if [ ! -d \"$ipls_dir\" ]; then echo 'build-domd/ipls not found in unpacked boot artifacts: '\"$artifact_dir\" >&2; exit 2; fi\n"
-            "config=\"$ipls_dir/x5h_bootloaders.yaml\"\n"
-            "if [ ! -f \"$config\" ]; then echo 'x5h_bootloaders.yaml not found in: '\"$ipls_dir\" >&2; exit 2; fi\n"
+            f"{resolve_ipls_dir}"
+            "resolve_ipls_dir \"$artifact_dir\"\n"
             "echo 'ipls dir: '\"$ipls_dir\"\n"
             "echo 'config: '\"$config\"\n"
         )
@@ -1586,8 +1606,9 @@ echo "rootfs deploy: done" >&2
             "artifact_name=${archive_base%.tar.bz2}\n"
             "artifact_name=${artifact_name%.tar.gz}\n"
             "artifact_name=${artifact_name%.tar}\n"
-            "ipls_dir=\"$archive_dir/$artifact_name/build-domd/ipls\"\n"
-            "if [ ! -d \"$ipls_dir\" ]; then echo 'build-domd/ipls not found: '\"$ipls_dir\" >&2; exit 2; fi\n"
+            "artifact_dir=\"$archive_dir/$artifact_name\"\n"
+            f"{resolve_ipls_dir}"
+            "resolve_ipls_dir \"$artifact_dir\"\n"
             "echo 'install bootloader flasher to: '\"$ipls_dir/flash_bootloaders.py\"\n"
             f"cp {builder.quote_remote_shell_path(remote_tool)} \"$ipls_dir/flash_bootloaders.py\"\n"
             "chmod +x \"$ipls_dir/flash_bootloaders.py\"\n"
@@ -1604,9 +1625,9 @@ echo "rootfs deploy: done" >&2
             "artifact_name=${archive_base%.tar.bz2}\n"
             "artifact_name=${artifact_name%.tar.gz}\n"
             "artifact_name=${artifact_name%.tar}\n"
-            "ipls_dir=\"$archive_dir/$artifact_name/build-domd/ipls\"\n"
-            "if [ ! -d \"$ipls_dir\" ]; then echo 'build-domd/ipls not found: '\"$ipls_dir\" >&2; exit 2; fi\n"
-            "if [ ! -f \"$ipls_dir/x5h_bootloaders.yaml\" ]; then echo 'x5h_bootloaders.yaml not found in: '\"$ipls_dir\" >&2; exit 2; fi\n"
+            "artifact_dir=\"$archive_dir/$artifact_name\"\n"
+            f"{resolve_ipls_dir}"
+            "resolve_ipls_dir \"$artifact_dir\"\n"
             "if [ ! -f \"$ipls_dir/flash_bootloaders.py\" ]; then echo 'flash_bootloaders.py not installed in: '\"$ipls_dir\" >&2; exit 2; fi\n"
             "cd \"$ipls_dir\"\n"
             "echo 'run bootloader flasher from: '\"$PWD\"\n"

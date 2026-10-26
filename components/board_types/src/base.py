@@ -72,7 +72,6 @@ class BoardActionContext:
     xt_imager_tool: Path | None = None
     command_builder: Any = None
     transfer_service: Any = None
-    flash_service: Any = None
 
 
 class BoardCapability(str, Enum):

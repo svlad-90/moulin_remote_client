@@ -21,7 +21,9 @@ class Gen5LocalArtifactTests(unittest.TestCase):
             )
             with tarfile.open(archive_path, "w:bz2") as archive:
                 for name, data in (("x5h_bootloaders.yaml", config), ("first.srec", b"SREC")):
-                    info = tarfile.TarInfo("release/build-domd/ipls/" + name)
+                    info = tarfile.TarInfo(
+                        "release/yocto/build-domd/tmp/deploy/images/ironhide/ipls/" + name
+                    )
                     info.size = len(data)
                     archive.addfile(info, io.BytesIO(data))
 
@@ -37,6 +39,23 @@ class Gen5LocalArtifactTests(unittest.TestCase):
         self.assertTrue(progress)
         self.assertEqual([current for current, _total in progress], sorted(current for current, _total in progress))
         self.assertEqual(progress[-1], (archive_size, archive_size))
+
+    def test_rejects_multiple_bootloader_configs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "boot-artifacts.tar.bz2"
+            config = b"images: []\n"
+            with tarfile.open(archive_path, "w:bz2") as archive:
+                for variant in ("first", "second"):
+                    info = tarfile.TarInfo(
+                        f"release/build-domd/{variant}/ipls/x5h_bootloaders.yaml"
+                    )
+                    info.size = len(config)
+                    archive.addfile(info, io.BytesIO(config))
+
+            with self.assertRaisesRegex(ValueError, "Expected one build-domd"):
+                Gen5X5hBoardAdapter().local_artifact_parts(
+                    "flash_single_ipl", archive_path
+                )
 
 
 if __name__ == "__main__":
