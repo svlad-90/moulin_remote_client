@@ -13,11 +13,20 @@ import tempfile
 import yaml
 
 
+def is_bootloader_config(member_name):
+    path = PurePosixPath(member_name)
+    return (
+        path.name == 'x5h_bootloaders.yaml'
+        and path.parent.name == 'ipls'
+        and 'build-domd' in path.parts[:-2]
+    )
+
+
 def archive_images(archive):
     configs = [m for m in archive.getmembers()
-               if m.isfile() and m.name.endswith('/build-domd/ipls/x5h_bootloaders.yaml')]
+               if m.isfile() and is_bootloader_config(m.name)]
     if len(configs) != 1:
-        raise ValueError('Expected one build-domd/ipls/x5h_bootloaders.yaml in boot artifacts')
+        raise ValueError('Expected one build-domd/.../ipls/x5h_bootloaders.yaml in boot artifacts')
     config = configs[0]
     with archive.extractfile(config) as stream:
         entries = yaml.safe_load(stream)['images']

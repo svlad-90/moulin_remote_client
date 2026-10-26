@@ -5,7 +5,6 @@ from pathlib import Path
 
 import moulin_remote_client as client
 from components.board.api import builder as board_builder_api
-from components.board.api import flash as board_flash_api
 from components.board.api import transfer as board_transfer_api
 from components.board.api import workflow as board_workflow_api
 from components.config.api import accessors as config_accessors
@@ -264,27 +263,17 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         self.assertIn("boot_artifacts: artifacts/boot.tar (manifest component target_images)", argv[1][2])
         self.assertIn("full_ufs.img.gz: full_ufs.img.gz (manifest image output)", argv[1][2])
 
-    def test_flash_bootloaders_commands_from_config_match_low_level_builder(self) -> None:
+    def test_flash_bootloaders_commands_are_owned_by_gen5_board_type(self) -> None:
         config = sample_config()
         config_profiles.normalize_board_host_profiles(config)
-        flash = self._flash_service()
         workflow = self._workflow_service()
 
-        argv = flash.flash_bootloaders_command_plan(
-            board_host=config_accessors.board_host_spec_for_config(config),
-            work_dir=config_accessors.board_work_dir_for_config(config),
-            artifacts_dir=config_accessors.board_artifacts_dir_for_config(config),
-            tool=client.FLASH_BOOTLOADERS_TOOL,
-            console=config_accessors.board_console_device_for_config(config),
-        )
+        argv = workflow.flash_bootloaders_commands(config)
 
-        self.assertEqual(
-            argv,
-            workflow.flash_bootloaders_commands(config),
-        )
         self.assertEqual(len(argv), 6)
         self.assertIn("x5h_flash", argv[2][-1])
         self.assertIn("tar -xf \"$archive\" -C \"$artifact_dir\" --strip-components=1", argv[3][-1])
+        self.assertIn("*/build-domd/*/ipls/x5h_bootloaders.yaml", argv[3][-1])
         self.assertIn('PYTHONUNBUFFERED=1 python3 -u ./flash_bootloaders.py --port "$console"', argv[5][-1])
         self.assertIn("x5h_boot", argv[5][-1])
 
@@ -326,9 +315,6 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             remote_read_project_file=remote_read_project_file,
             manifest_cache={},
         )
-
-    def _flash_service(self) -> board_flash_api.BoardFlashCommandService:
-        return board_flash_api.board_flash_command_service(command_builder=board_builder_api.board_command_builder())
 
     def _workflow_service(self) -> board_workflow_api.BoardCommandWorkflowService:
         return board_workflow_api.board_command_workflow_service(

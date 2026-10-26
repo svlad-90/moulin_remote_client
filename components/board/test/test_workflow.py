@@ -601,7 +601,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("/tmp/app/workspace/board-network/prod/dom0-initramfs/uInitramfs", push[2])
         self.assertIn("board@192.0.2.10:/srv/tftp/demo/projects/prod/uInitramfs", push[2])
 
-    def test_flash_services_match_command_builders(self) -> None:
+    def test_gen5_board_type_builds_flash_commands_and_capabilities(self) -> None:
         config = sample_config()
         config_profiles.normalize_board_host_profiles(config)
         service = self._service()
