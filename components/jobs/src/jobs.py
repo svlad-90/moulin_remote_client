@@ -140,14 +140,31 @@ def log_visible_lines(height: int, *, expanded: bool) -> int:
     return max(1, logs_height - 6)
 
 
+def compact_log_lines(source: list[str]) -> list[str]:
+    compacted: list[str] = []
+    previous = None
+    repeats = 0
+    for line in source:
+        if line == "" and compacted and compacted[-1] == "":
+            continue
+        if line and line == previous:
+            repeats += 1
+            compacted[-1] = f"{line} [repeated {repeats} times]"
+            continue
+        compacted.append(line)
+        previous = line if line else None
+        repeats = 1
+    return compacted
+
+
 def job_output_lines(job: dict[str, Any] | None) -> list[str]:
     if job is None:
         return []
     lock = job.get("output_lock")
     if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
         with lock:
-            return list(job.get("output", []))
-    return list(job.get("output", []))
+            return compact_log_lines(list(job.get("output", [])))
+    return compact_log_lines(list(job.get("output", [])))
 
 
 def wrapped_job_output_lines(job: dict[str, Any] | None, width: int) -> list[str]:
@@ -162,14 +179,14 @@ def wrapped_job_output_lines(job: dict[str, Any] | None, width: int) -> list[str
             cached = cache.get(inner_width)
             if cached is not None and cached[0] == revision:
                 return cached[1]
-            source = list(job.get("output", []))
+            source = compact_log_lines(list(job.get("output", [])))
     else:
         revision = int(job.get("output_revision", 0))
         cache = job.setdefault("wrapped_output_cache", {})
         cached = cache.get(inner_width)
         if cached is not None and cached[0] == revision:
             return cached[1]
-        source = list(job.get("output", []))
+        source = compact_log_lines(list(job.get("output", [])))
 
     lines: list[str] = []
     for line in source:
@@ -659,22 +676,8 @@ def sanitize_log_line(line: str) -> str:
 
 
 def append_log_line_locked(job: dict[str, Any], output: Any, line: str) -> bool:
-    if line == "" and job.get("last_log_line_blank"):
-        return False
-    if line and output and job.get("last_log_line_value") == line:
-        repeats = int(job.get("last_log_line_repeats", 1)) + 1
-        output[-1] = f"{line} [repeated {repeats} times]"
-        job["last_log_line_repeats"] = repeats
-        job["last_log_line_blank"] = False
-        return True
     output.append(line)
     job["last_log_line_blank"] = line == ""
-    if line:
-        job["last_log_line_value"] = line
-        job["last_log_line_repeats"] = 1
-    else:
-        job.pop("last_log_line_value", None)
-        job.pop("last_log_line_repeats", None)
     return True
 
 
@@ -683,17 +686,27 @@ def trim_output(output: Any, max_lines: int = 1000) -> None:
         del output[: len(output) - max_lines]
 
 
+def finish_stream_line_locked(job: dict[str, Any]) -> None:
+    job["partial_output"] = ""
+    job["partial_live"] = False
+    job["terminal_cursor_column"] = 0
+    job.pop("terminal_cursor_up", None)
+    job.pop("terminal_escape", None)
+
+
 def append_job_output(job: dict[str, Any], line: str) -> None:
     lines = [sanitize_log_line(part) for part in re.split(r"\r\n|\n|\r", line)]
     lock = job.get("output_lock")
     if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
         with lock:
+            finish_stream_line_locked(job)
             output = job.setdefault("output", deque(maxlen=1000))
             for clean_line in lines:
                 append_log_line_locked(job, output, clean_line)
             trim_output(output)
             job["output_revision"] = int(job.get("output_revision", 0)) + 1
     else:
+        finish_stream_line_locked(job)
         output = job.setdefault("output", deque(maxlen=1000))
         for clean_line in lines:
             append_log_line_locked(job, output, clean_line)
@@ -710,35 +723,36 @@ def append_job_output_stream(job: dict[str, Any], text: str) -> None:
         append_job_output_stream_locked(job, text)
 
 
-def clear_terminal_footer_locked(job: dict[str, Any], output: Any) -> None:
-    cursor_up = max(1, int(job.pop("terminal_cursor_up", 1)))
-    prefixes = (
-        "Setscene tasks:",
-        "Currently ",
-        "No currently running tasks",
-        "Running tasks ",
-        "Waiting for ",
-    )
-    marker = None
-    scan_limit = max(32, cursor_up + 8)
-    for offset, line in enumerate(reversed(output)):
-        if offset >= scan_limit:
-            break
-        if str(line).startswith(prefixes):
-            marker = len(output) - offset - 1
-            if str(line).startswith(("Setscene tasks:", "Waiting for ")):
-                break
-    remove_count = len(output) - marker if marker is not None else min(cursor_up, len(output))
-    for _ in range(remove_count):
-        output.pop()
+def erase_rewound_display_tail_locked(
+    job: dict[str, Any],
+    output: Any,
+    line: str,
+    cursor: int,
+    live: bool,
+) -> tuple[str, bool]:
+    cursor_up = max(1, int(job.pop("terminal_cursor_up")))
+    current_index = len(output) - 1 if live else len(output)
+    target_index = current_index - cursor_up
+    if target_index < 0:
+        output.clear()
+        line = ""
+    else:
+        line = str(output[target_index])[:cursor]
+        while len(output) > target_index:
+            output.pop()
+        if line:
+            output.append(line)
+    live = bool(line)
     job["last_log_line_blank"] = bool(output and output[-1] == "")
     job.pop("last_log_line_value", None)
     job.pop("last_log_line_repeats", None)
+    return line, live
 
 
 def append_job_output_stream_locked(job: dict[str, Any], text: str) -> None:
     output = job.setdefault("output", deque(maxlen=1000))
-    partial = str(job.get("partial_output", ""))
+    line = str(job.get("partial_output", ""))
+    cursor = max(0, int(job.get("terminal_cursor_column", len(line))))
     live = bool(job.get("partial_live", False))
     text = str(job.pop("terminal_escape", "")) + text
 
@@ -750,6 +764,21 @@ def append_job_output_stream_locked(job: dict[str, Any], text: str) -> None:
             output.append(value)
             live = True
         job["last_log_line_blank"] = value == ""
+
+    def render_line() -> None:
+        nonlocal live
+        clean_line = sanitize_log_line(line)
+        if clean_line:
+            set_live(clean_line)
+        elif live:
+            if output:
+                output.pop()
+            live = False
+            job["last_log_line_blank"] = bool(output and output[-1] == "")
+
+    def csi_mode(params: str) -> int:
+        first_param = params.split(";", 1)[0]
+        return int(first_param) if first_param.isdigit() else 0
 
     index = 0
     while index < len(text):
@@ -765,37 +794,72 @@ def append_job_output_stream_locked(job: dict[str, Any], text: str) -> None:
             params, _intermediate, final = match.groups()
             if final == "A":
                 first_param = params.split(";", 1)[0]
-                job["terminal_cursor_up"] = int(first_param) if first_param.isdigit() else 1
+                cursor_up = int(first_param) if first_param.isdigit() else 1
+                job["terminal_cursor_up"] = int(job.get("terminal_cursor_up", 0)) + max(1, cursor_up)
             elif final == "J":
-                clear_terminal_footer_locked(job, output)
-                partial = ""
-                live = False
+                mode = csi_mode(params)
+                rewound = "terminal_cursor_up" in job
+                if mode == 0 and rewound:
+                    line, live = erase_rewound_display_tail_locked(job, output, line, cursor, live)
+                else:
+                    job.pop("terminal_cursor_up", None)
+                if mode == 1 and not rewound:
+                    output.clear()
+                    erased = min(cursor + 1, len(line))
+                    line = (" " * erased) + line[erased:]
+                elif mode == 2:
+                    output.clear()
+                    line = ""
+                elif mode == 0 and not rewound:
+                    line = line[:cursor]
+                render_line()
+            elif final == "K":
+                job.pop("terminal_cursor_up", None)
+                mode = csi_mode(params)
+                if mode == 1:
+                    erased = min(cursor + 1, len(line))
+                    line = (" " * erased) + line[erased:]
+                elif mode == 2:
+                    line = ""
+                else:
+                    line = line[:cursor]
+                render_line()
+            elif final != "m":
+                job.pop("terminal_cursor_up", None)
             index += match.end()
             continue
         if char == "\r":
-            if partial:
-                set_live(sanitize_log_line(partial))
-                partial = ""
+            job.pop("terminal_cursor_up", None)
+            cursor = 0
             index += 1
             continue
         if char == "\n":
-            if partial:
-                set_live(sanitize_log_line(partial))
-                partial = ""
+            job.pop("terminal_cursor_up", None)
             if live and output:
                 completed = output.pop()
                 live = False
                 append_log_line_locked(job, output, completed)
+            elif line:
+                append_log_line_locked(job, output, sanitize_log_line(line))
+            else:
+                append_log_line_locked(job, output, "")
+            line = ""
+            cursor = 0
             index += 1
             continue
-        partial += char
-        if len(partial) >= 120 or live:
-            set_live(sanitize_log_line(partial))
+        job.pop("terminal_cursor_up", None)
+        if cursor > len(line):
+            line += " " * (cursor - len(line))
+        if cursor == len(line):
+            line += char
+        else:
+            line = line[:cursor] + char + line[cursor + 1 :]
+        cursor += 1
+        render_line()
         index += 1
-    if partial:
-        set_live(sanitize_log_line(partial))
-    job["partial_output"] = partial
+    job["partial_output"] = line
     job["partial_live"] = live
+    job["terminal_cursor_column"] = cursor
     if text:
         job["output_revision"] = int(job.get("output_revision", 0)) + 1
     trim_output(output)

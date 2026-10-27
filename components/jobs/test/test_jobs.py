@@ -278,6 +278,39 @@ class JobsBehaviorTests(unittest.TestCase):
         self.assertEqual(job["partial_output"], "")
         self.assertFalse(job["partial_live"])
 
+    def test_append_job_output_stream_erases_rewound_terminal_line(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "completed step\n")
+        jobs.append_job_output_stream(job, "temporary progress\r")
+        jobs.append_job_output_stream(job, "\x1b[")
+        jobs.append_job_output_stream(job, "K")
+        jobs.append_job_output_stream(job, "next step\n")
+
+        self.assertEqual(jobs.job_output_lines(job), ["completed step", "next step"])
+        self.assertEqual(job["partial_output"], "")
+        self.assertFalse(job["partial_live"])
+
+    def test_append_job_output_stream_preserves_text_before_erase_to_end(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "ordinary\x1b[K\n")
+        jobs.append_job_output_stream(job, "12345\r12\x1b[0K\n")
+
+        self.assertEqual(jobs.job_output_lines(job), ["ordinary", "12"])
+        self.assertEqual(job["partial_output"], "")
+        self.assertFalse(job["partial_live"])
+
+    def test_append_job_output_stream_honors_other_erase_line_modes(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "abcdef\r12\x1b[1K\n")
+        jobs.append_job_output_stream(job, "abcdef\r12\x1b[2KX\n")
+
+        self.assertEqual(jobs.job_output_lines(job), ["   def", "  X"])
+        self.assertEqual(job["partial_output"], "")
+        self.assertFalse(job["partial_live"])
+
     def test_append_job_output_stream_collapses_consecutive_duplicate_lines(self) -> None:
         job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
 
@@ -302,23 +335,104 @@ class JobsBehaviorTests(unittest.TestCase):
 
         self.assertEqual(jobs.job_output_lines(job), ["warning", "warning details"])
 
-    def test_append_job_output_stream_replaces_bitbake_terminal_footer(self) -> None:
+    def test_plain_log_append_finishes_active_stream_line(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "tail")
+        jobs.append_job_output(job, "exit: 0")
+        jobs.append_job_output(job, "next step")
+        jobs.append_job_output_stream(job, "new output\n")
+
+        self.assertEqual(jobs.job_output_lines(job), ["tail", "exit: 0", "next step", "new output"])
+        self.assertEqual(job["partial_output"], "")
+        self.assertFalse(job["partial_live"])
+
+    def test_append_job_output_stream_replaces_cursor_addressed_footer(self) -> None:
         job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
 
         jobs.append_job_output_stream(
             job,
-            "Setscene tasks: 10 of 10\nCurrently  2 running tasks (20 of 30)\n",
+            "progress group\n2 active items\n",
         )
         jobs.append_job_output_stream(job, "\x1b[2")
         jobs.append_job_output_stream(
             job,
-            "A\x1b[JSetscene tasks: 10 of 10\nNo currently running tasks (30 of 30)\n",
+            "A\x1b[Jprogress group\nall items complete\n",
         )
 
         self.assertEqual(
             jobs.job_output_lines(job),
-            ["Setscene tasks: 10 of 10", "No currently running tasks (30 of 30)"],
+            ["progress group", "all items complete"],
         )
+
+    def test_append_job_output_stream_honors_erase_display_modes(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "one\ntwo\nthree\r\x1b[1J")
+        self.assertEqual(jobs.job_output_lines(job), [" hree"])
+
+        jobs.append_job_output_stream(job, "four\nfive\n\x1b[2J")
+        self.assertEqual(jobs.job_output_lines(job), [])
+
+    def test_append_job_output_stream_display_erase_preserves_cursor(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "abc\x1b[JX\n")
+        jobs.append_job_output_stream(job, "abc\x1b[2JX\n")
+
+        self.assertEqual(jobs.job_output_lines(job), ["   X"])
+
+    def test_append_job_output_stream_display_erase_on_empty_line_keeps_history(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "one\n\x1b[J")
+        jobs.append_job_output_stream(job, "\x1b[3J")
+
+        self.assertEqual(jobs.job_output_lines(job), ["one"])
+
+    def test_append_job_output_stream_discards_stale_vertical_cursor(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "one\ntwo\n\x1b[1Anew text\x1b[J\n")
+
+        self.assertEqual(jobs.job_output_lines(job), ["one", "two", "new text"])
+
+    def test_append_job_output_stream_erases_from_rewound_active_line(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "one\ntwo\x1b[A\x1b[J")
+
+        self.assertEqual(jobs.job_output_lines(job), ["one"])
+        self.assertEqual(job["partial_output"], "one")
+        self.assertTrue(job["partial_live"])
+
+    def test_append_job_output_stream_does_not_guess_rewound_erase_start(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "one\ntwo\nthree\n\x1b[A\x1b[1J")
+
+        self.assertEqual(jobs.job_output_lines(job), ["one", "two", "three"])
+
+    def test_rewound_display_erase_counts_duplicate_physical_rows(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "keep\nsame\nsame\n\x1b[2A\x1b[J")
+
+        self.assertEqual(jobs.job_output_lines(job), ["keep"])
+
+    def test_rewound_display_erase_counts_blank_physical_rows(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "keep\nfooter\n\n\x1b[2A\x1b[J")
+
+        self.assertEqual(jobs.job_output_lines(job), ["keep"])
+
+    def test_consecutive_cursor_up_sequences_accumulate(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "one\ntwo\nthree\n\x1b[A\x1b[1A\x1b[J")
+
+        self.assertEqual(jobs.job_output_lines(job), ["one"])
 
     def test_read_process_output_stream_appends_chunks_and_marks_dirty(self) -> None:
         read_fd, write_fd = os.pipe()
