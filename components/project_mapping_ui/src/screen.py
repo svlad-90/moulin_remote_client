@@ -144,7 +144,17 @@ class ProjectMappingScreenController:
                     return
                 continue
 
-            left_width = min(44, max(34, width // 3))
+            longest_label = max(
+                (
+                    len(self.presentation_service.mapping_selection_row_label(mapping, selected))
+                    for mapping in all_mappings
+                ),
+                default=0,
+            )
+            left_width = min(
+                max(34, longest_label + 4),
+                width - 45,
+            )
             right_left = left_width + 1
             right_width = width - right_left
             panel_top = 3
