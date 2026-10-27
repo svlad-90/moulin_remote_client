@@ -174,11 +174,13 @@ class MainKeyControllerTests(unittest.TestCase):
         port = FakePort()
         port.logs_expanded = True
         port.focus_before_logs_expanded = "logs"
+        port.log_follow = False
 
         main_keys.main_key_controller().handle_key(port, 27)
 
         self.assertFalse(port.logs_expanded)
         self.assertEqual(port.focus_panel, "logs")
+        self.assertTrue(port.log_follow)
         self.assertTrue(port.main_full_redraw)
         self.assertEqual(port.render_cache, {})
 
