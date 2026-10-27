@@ -209,6 +209,19 @@ class RemoteCommandWorkflowService:
             args=args,
         )
 
+    def target_output_clean_command(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        targets: list[str],
+    ) -> list[str]:
+        return self.build_service.target_output_clean_command_for_config(
+            config,
+            docker_image=docker_image,
+            targets=targets,
+        )
+
     def bazel_config_command(
         self,
         config: dict[str, Any],
