@@ -4,6 +4,7 @@ import curses
 import importlib.util
 import io
 import json
+import os
 import shlex
 from pathlib import Path
 import sys
@@ -51,11 +52,16 @@ class SingleIplTests(unittest.TestCase):
             old = root / 'old-boot-artifacts.tar'
             old.touch()
             path = self.make_archive(root)
+            old_time = 1_700_000_000_000_000_000
+            archive_time = old_time + 1_000_000_000
+            os.utime(old, ns=(old_time, old_time))
+            os.utime(path, ns=(archive_time, archive_time))
             with tarfile.open(path) as archive:
                 _, images = self.helper.archive_images(archive)
             self.assertEqual(images, [{'name': 'test.srec', 'flash_addr': '0x1000'}])
             self.assertEqual(self.helper.find_archive(root), path)
-            old.touch()
+            newer_time = archive_time + 1_000_000_000
+            os.utime(old, ns=(newer_time, newer_time))
             self.assertEqual(self.helper.find_archive(root), old)
 
     def test_archive_reports_when_no_boot_artifacts_exist(self):
