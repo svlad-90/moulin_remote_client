@@ -56,6 +56,7 @@ class MainMenuCommandItemsService:
         self.mapping_selection_service = project_selection_api.project_mapping_selection_service()
         self.component_clean_action_index = 0
         self.component_clean_dry_run = True
+        self.moulin_target_clean_index = 0
         self.artifact_source_index = 0
 
     def build_items(self, app: Any) -> list[MenuItem]:
@@ -158,7 +159,7 @@ class MainMenuCommandItemsService:
             MenuItem(
                 "Incremental rebuild",
                 "build / commands",
-                "Rebuild selected Moulin components without cleaning Yocto recipes; Bazel and Android use the same rebuild path as clean mode.",
+                "Rebuild selected Moulin components and optionally invalidate selected final image targets first.",
                 lambda app: ui_menu_api.command_preview(
                     self.incremental_product_build_commands(app, clean_yocto=False)
                 ),
@@ -546,21 +547,32 @@ class MainMenuCommandItemsService:
         title = "Clean incremental build" if clean_yocto else "Incremental rebuild"
         app.reload_config_from_disk()
         components = self.incremental_components(app)
-        selected_names = self.select_incremental_component_names(app, components)
+        scope = self.incremental_build_scope(app, components)
+        selected_names = self.select_incremental_component_names(app, scope)
         if selected_names is None:
             app.status = f"{title} cancelled"
             return None
         if not selected_names:
-            app.status = f"{title} cancelled: no components selected"
+            app.status = f"{title} cancelled: nothing selected"
             return None
-        if clean_yocto and not self.confirm_incremental_build_clean(app, selected_names=selected_names):
+        component_names = [name for name in selected_names if not name.startswith("moulin-target:")]
+        moulin_targets = [name.removeprefix("moulin-target:") for name in selected_names if name.startswith("moulin-target:")]
+        if clean_yocto and not self.confirm_incremental_build_clean(app, selected_names=component_names):
+            app.status = f"{title} cancelled"
+            return None
+        if moulin_targets and not self.confirm_moulin_target_clean(app, moulin_targets):
             app.status = f"{title} cancelled"
             return None
         config_runtime_api.save_runtime_incremental_components(app.config, self.app_dir, selected_names)
         return app.command_workflow_service().run_commands(
             app,
             title,
-            self.incremental_product_build_commands(app, selected_names=selected_names, clean_yocto=clean_yocto),
+            self.incremental_product_build_commands(
+                app,
+                selected_names=component_names,
+                moulin_targets=moulin_targets,
+                clean_yocto=clean_yocto,
+            ),
         )
 
     def run_bitbake_cleanup(self, app: Any) -> int:
@@ -706,13 +718,15 @@ class MainMenuCommandItemsService:
         app: Any,
         selected_names: list[str] | None = None,
         *,
+        moulin_targets: list[str] | None = None,
         clean_yocto: bool = False,
     ) -> list[list[str]]:
         components = self.incremental_components(app)
         selected_name_set = set(selected_names or [])
         selected = [component for component in components if component["name"] in selected_name_set]
-        if not selected:
+        if selected_names is None:
             selected = [component for component in components if component["supported"]]
+        selected_moulin_targets = list(dict.fromkeys(moulin_targets or []))
 
         yocto_recipes = [
             str(component["target"])
@@ -730,7 +744,11 @@ class MainMenuCommandItemsService:
             component for component in selected if component["builder_type"] in {"bazel", "android"}
         ]
         bazel_config_targets = self.bazel_config_targets_for_components(selected)
-        selected_product_targets = " ".join(str(component["name"]) for component in selected)
+        product_targets = list(dict.fromkeys([
+            *(str(component["name"]) for component in selected),
+            *selected_moulin_targets,
+        ]))
+        selected_product_targets = " ".join(product_targets)
         changed_files = self.changed_incremental_files(app)
         applied_files = self.applied_incremental_files(app, selected, changed_files)
 
@@ -772,6 +790,14 @@ class MainMenuCommandItemsService:
                 build_params=app.build_params,
             )
         )
+        if selected_moulin_targets:
+            commands.append(
+                self.remote_command_workflow.target_output_clean_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                    targets=selected_moulin_targets,
+                )
+            )
         if bazel_config_targets:
             commands.append(
                 self.remote_command_workflow.bazel_config_command(
@@ -800,6 +826,36 @@ class MainMenuCommandItemsService:
         commands.append(self.mark_incremental_mapping_build_applied_command(app, applied_files=applied_files))
         return commands
 
+    def incremental_build_scope(
+        self,
+        app: Any,
+        components: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        component_names = {str(component["name"]) for component in components}
+        component_items = [
+            {
+                **component,
+                "selection_kind": "component",
+                "display_name": str(component["name"]),
+                "default_selected": True,
+            }
+            for component in components
+        ]
+        target_items = [
+            {
+                "name": f"moulin-target:{target['target']}",
+                "display_name": target["target"],
+                "builder_type": "Moulin output",
+                "supported": True,
+                "selection_kind": "moulin_target",
+                "default_selected": False,
+                "description": target["desc"] or target["source"],
+            }
+            for target in self.cleanable_moulin_targets(app)
+            if target["target"] not in component_names
+        ]
+        return [*component_items, *target_items]
+
     def run_component_clean_menu(self, app: Any) -> Any:
         while True:
             action = self.select_component_clean_action(app)
@@ -814,6 +870,145 @@ class MainMenuCommandItemsService:
             if result is CLEAN_COMPONENT_BACK:
                 continue
             return result
+
+    def run_moulin_target_clean(self, app: Any) -> Any:
+        app.reload_config_from_disk()
+        targets = self.cleanable_moulin_targets(app)
+        if not targets:
+            app.status = "No Moulin targets are available to clean"
+            return None
+        selected_targets = self.select_moulin_clean_targets(app, targets)
+        if selected_targets is None:
+            app.status = "Moulin target cleanup cancelled"
+            return None
+        if not selected_targets:
+            app.status = "Moulin target cleanup cancelled: no targets selected"
+            return None
+        if not self.confirm_moulin_target_clean(app, selected_targets):
+            app.status = "Moulin target cleanup cancelled"
+            return None
+        return app.command_workflow_service().run_commands(
+            app,
+            "Clean Moulin targets",
+            [
+                self.remote_command_workflow.target_output_clean_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                    targets=selected_targets,
+                )
+            ],
+        )
+
+    def cleanable_moulin_targets(self, app: Any) -> list[dict[str, str]]:
+        try:
+            candidates = moulin_manifest_api.target_candidates_for_config(
+                app.config,
+                app_dir=self.app_dir,
+                remote_read_project_file=self.remote_read_project_file,
+                cache=self.manifest_cache,
+                default_moulin_manifest=self.default_moulin_manifest,
+                build_params=app.build_params,
+            )
+        except Exception as exc:
+            app.status = f"Moulin target discovery failed: {exc}"
+            candidates = []
+        by_target = {
+            str(candidate.get("target", "")).strip(): {
+                "target": str(candidate.get("target", "")).strip(),
+                "source": str(candidate.get("source", "manifest")),
+                "desc": str(candidate.get("desc", "")),
+            }
+            for candidate in candidates
+            if self.safe_relative_path(str(candidate.get("target", "")))
+        }
+        for target in shlex.split(app.build_targets):
+            if not self.safe_relative_path(target):
+                continue
+            by_target.setdefault(
+                target,
+                {"target": target, "source": "project selection", "desc": "Configured build target"},
+            )
+        return [by_target[target] for target in sorted(by_target)]
+
+    def select_moulin_clean_targets(
+        self,
+        app: Any,
+        targets: list[dict[str, str]],
+    ) -> list[str] | None:
+        selected: set[str] = set()
+        index = ui_menu_api.clamp_index(self.moulin_target_clean_index, len(targets))
+        app.screen.timeout(-1)
+        try:
+            while True:
+                app.screen.erase()
+                height, width = app.screen.getmaxyx()
+                if height < 14 or width < 72:
+                    app.add(0, 0, "Terminal is too small. Need at least 72x14.", app.warn_attr())
+                    app.screen.refresh()
+                    ch = app.read_key()
+                    if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                        return None
+                    continue
+
+                index = ui_menu_api.clamp_index(index, len(targets))
+                self.moulin_target_clean_index = index
+                app.draw_box(0, 0, height - 2, width, "Clean Moulin Targets")
+                app.add(1, 2, "Select final target outputs to invalidate; dependencies are kept.", app.accent_attr())
+                selected_text = "Selected: " + (" ".join(sorted(selected)) if selected else "none")
+                app.add(2, 2, ui_text_api.fit_text(selected_text, width - 4))
+                top = 4
+                visible = max(1, height - top - 5)
+                start = min(max(0, index - visible + 1), max(0, len(targets) - visible))
+                for row_offset, target_index in enumerate(range(start, min(len(targets), start + visible))):
+                    target = targets[target_index]
+                    name = target["target"]
+                    mark = "[x]" if name in selected else "[ ]"
+                    label = f"{mark} {name}"
+                    attr = app.selected_attr() if target_index == index else 0
+                    app.add(top + row_offset, 2, ui_text_api.fit_text(label, width - 4).ljust(width - 4), attr)
+
+                current = targets[index]
+                details = current["source"]
+                if current["desc"]:
+                    details += f": {current['desc']}"
+                app.add(height - 4, 2, ui_text_api.fit_text(details, width - 4))
+                footer = "Up/Down: select | Space: toggle | Enter: clean | q/Esc: back"
+                app.add(height - 2, 0, footer[:width], app.accent_attr())
+                app.add(height - 1, 0, app.status[:width].ljust(width), curses.A_REVERSE)
+                app.screen.refresh()
+                ch = app.read_key()
+                if ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+                    index = ui_menu_api.move_index(index, len(targets), -1)
+                elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j"):
+                    index = ui_menu_api.move_index(index, len(targets), 1)
+                elif ch == ord(" "):
+                    name = targets[index]["target"]
+                    if name in selected:
+                        selected.remove(name)
+                        app.status = f"Disabled {name}"
+                    else:
+                        selected.add(name)
+                        app.status = f"Enabled {name}"
+                elif ch in (10, 13):
+                    return [target["target"] for target in targets if target["target"] in selected]
+                elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                    return None
+        finally:
+            self.moulin_target_clean_index = index
+            app.screen.timeout(250)
+
+    def confirm_moulin_target_clean(self, app: Any, targets: list[str]) -> bool:
+        return app.dialog_workflow_controller().run_confirm_dialog(
+            app,
+            ui_dialog_api.ConfirmContent(
+                title="Confirm",
+                warning="Stop other builds first. Only final outputs are removed; dependencies are kept.",
+                subject=f"Clean Moulin targets: {', '.join(targets)}",
+                details="For a compressed image, both .img.gz and its adjacent .img output are invalidated.",
+                footer="Enter/y: clean | n/q/Esc: back",
+            ),
+            redraw_background=False,
+        )
 
     def select_component_clean_action(self, app: Any) -> dict[str, object] | None:
         actions: list[dict[str, object]] = [
@@ -1429,7 +1624,7 @@ done
         components: list[dict[str, Any]],
         *,
         title: str = "Incremental Build",
-        prompt: str = "Select Moulin components to rebuild, then press Enter.",
+        prompt: str = "Select components and optional Moulin outputs to rebuild, then press Enter.",
         supported_description: str = "Incremental rebuild is supported for {builder_type}.",
         unsupported_description: str = "Incremental rebuild is not supported for {builder_type} yet.",
         use_stored_selection: bool = True,
@@ -1437,7 +1632,10 @@ done
     ) -> list[str] | None:
         supported = [component for component in components if component["supported"]]
         supported_names = {str(component["name"]) for component in supported}
-        change_state = self.incremental_change_state(app, components)
+        manifest_components = [
+            component for component in components if component.get("selection_kind", "component") == "component"
+        ]
+        change_state = self.incremental_change_state(app, manifest_components)
         auto_names = (
             [name for name in change_state["components"] if name in supported_names]
             if use_auto_selection
@@ -1448,8 +1646,13 @@ done
             if use_stored_selection
             else []
         )
-        fallback_names = supported_names if use_stored_selection or use_auto_selection else set()
-        selected = set(stored_names or auto_names or fallback_names) & supported_names
+        stored_supported_names = [name for name in stored_names or [] if name in supported_names]
+        fallback_names = {
+            str(component["name"])
+            for component in supported
+            if component.get("default_selected", True)
+        } if use_stored_selection or use_auto_selection else set()
+        selected = set(stored_supported_names or auto_names or fallback_names)
         index = 0
         app.screen.timeout(-1)
         try:
@@ -1484,20 +1687,24 @@ done
                     row = top + offset
                     enabled = bool(component["supported"])
                     name = str(component["name"])
+                    display_name = str(component.get("display_name", name))
                     mark = "[x]" if name in selected else "[ ]"
                     if not enabled:
                         mark = "[-]"
-                    label = f"{mark} {name} ({component['builder_type']})"
+                    label = f"{mark} {display_name} ({component['builder_type']})"
                     attr = app.disabled_attr() if not enabled else app.selected_attr() if offset == index else 0
                     app.add(row, 2, ui_text_api.fit_text(label, width - 4).ljust(width - 4), attr)
 
                 if components:
                     current = components[index]
-                    desc = (
-                        supported_description.format(builder_type=current["builder_type"])
-                        if current["supported"]
-                        else unsupported_description.format(builder_type=current["builder_type"])
-                    )
+                    if current.get("selection_kind") == "moulin_target":
+                        desc = "Invalidate this final output, then rebuild it: " + str(current.get("description", ""))
+                    else:
+                        desc = (
+                            supported_description.format(builder_type=current["builder_type"])
+                            if current["supported"]
+                            else unsupported_description.format(builder_type=current["builder_type"])
+                        )
                     app.add(height - 4, 2, ui_text_api.fit_text(desc, width - 4))
                 footer = "Up/Down: select | Space: toggle supported | Enter: run | q/Esc: cancel"
                 app.add(height - 2, 0, footer[:width], app.accent_attr())

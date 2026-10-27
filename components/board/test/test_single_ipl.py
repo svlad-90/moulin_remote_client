@@ -45,17 +45,23 @@ class SingleIplTests(unittest.TestCase):
                 archive.addfile(info, io.BytesIO(data))
         return path
 
-    def test_archive_lists_only_ufs_files_and_rejects_ambiguous_archives(self):
+    def test_archive_lists_only_ufs_files_and_uses_most_recent_archive(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            old = root / 'old-boot-artifacts.tar'
+            old.touch()
             path = self.make_archive(root)
             with tarfile.open(path) as archive:
                 _, images = self.helper.archive_images(archive)
             self.assertEqual(images, [{'name': 'test.srec', 'flash_addr': '0x1000'}])
             self.assertEqual(self.helper.find_archive(root), path)
-            (root / 'old-boot-artifacts.tar').touch()
-            with self.assertRaises(ValueError):
-                self.helper.find_archive(root)
+            old.touch()
+            self.assertEqual(self.helper.find_archive(root), old)
+
+    def test_archive_reports_when_no_boot_artifacts_exist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, 'No boot-artifacts archive'):
+                self.helper.find_archive(Path(directory))
 
     def test_wrapper_extracts_selected_file_and_cleans_staging(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -173,6 +173,21 @@ class MainRunLoopControllerTests(unittest.TestCase):
         self.assertEqual(port.draw_calls, 1)
         self.assertEqual(port.screen.timeouts, [0, 0, 0])
 
+    def test_mouse_batch_yields_to_draw_after_time_budget(self) -> None:
+        port = FakePort([curses.KEY_MOUSE])
+        times = iter([1.0, 1.0, 1.02, 1.02])
+        controller = main_run_loop.main_run_loop_controller(
+            auto_connect_enabled=False,
+            monotonic=lambda: next(times),
+        )
+
+        controller._handle_input(port, curses.KEY_MOUSE)
+
+        self.assertEqual(port.key_calls, [curses.KEY_MOUSE])
+        self.assertEqual(port.screen.keys, [curses.KEY_MOUSE])
+        self.assertEqual(port.draw_calls, 1)
+        self.assertEqual(port.screen.timeouts, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -791,6 +791,36 @@ raise SystemExit(main())
             self.product_docker_command(project_dir, docker_image, f"ninja {quoted_args}"),
         )
 
+    def target_output_clean_command(
+        self,
+        remote: str,
+        project_dir: str,
+        docker_image: str,
+        targets: list[str],
+    ) -> list[str]:
+        quoted_targets = " ".join(shlex.quote(target) for target in targets)
+        inner = (
+            "set -eu; "
+            f"for target in {quoted_targets}; do "
+            "if [ -d \"$target\" ]; then "
+            "printf 'refusing to remove directory target: %s\\n' \"$target\" >&2; exit 2; "
+            "fi; "
+            "case \"$target\" in "
+            "*.img.gz) image=${target%.gz}; "
+            "if [ -d \"$image\" ]; then "
+            "printf 'refusing to remove directory image: %s\\n' \"$image\" >&2; exit 2; "
+            "fi; "
+            "printf 'invalidate Moulin output: %s\\n' \"$image\"; rm -f -- \"$image\";; "
+            "esac; "
+            "printf 'invalidate Moulin output: %s\\n' \"$target\"; rm -f -- \"$target\"; "
+            "done"
+        )
+        return self.session_service.remote_shell_command(
+            remote,
+            project_dir,
+            self.product_docker_command(project_dir, docker_image, inner),
+        )
+
     def bazel_config_command(self, remote: str, project_dir: str, docker_image: str, targets: str) -> list[str]:
         quoted_targets = " ".join(shlex.quote(target) for target in shlex.split(targets))
         inner = f"cd android_kernel && tools/bazel --max_idle_secs=1 build {quoted_targets}; BUILD_RESULT=$?; tools/bazel shutdown; exit ${{BUILD_RESULT}}"
@@ -895,6 +925,20 @@ raise SystemExit(main())
             config_accessors.remote_project_dir_for_config(config),
             docker_image,
             args,
+        )
+
+    def target_output_clean_command_for_config(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        targets: list[str],
+    ) -> list[str]:
+        return self.target_output_clean_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            docker_image,
+            targets,
         )
 
     def bazel_config_command_for_config(

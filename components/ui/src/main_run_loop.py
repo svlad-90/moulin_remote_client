@@ -10,6 +10,7 @@ from components.jobs.api import jobs as job_api
 
 
 MAX_MOUSE_EVENTS_PER_DRAW = 256
+MAX_MOUSE_BATCH_SECONDS = 0.012
 
 
 class MainRunLoopController:
@@ -95,7 +96,12 @@ class MainRunLoopController:
                 selected=port.selected,
                 active=job_api.has_active_job(port.active_job, port.board_job),
             )
-            if ch != curses.KEY_MOUSE or keys >= MAX_MOUSE_EVENTS_PER_DRAW or port.done:
+            if (
+                ch != curses.KEY_MOUSE
+                or keys >= MAX_MOUSE_EVENTS_PER_DRAW
+                or self.monotonic() - batch_started >= MAX_MOUSE_BATCH_SECONDS
+                or port.done
+            ):
                 break
             port.screen.timeout(0)
             ch = port.read_key()

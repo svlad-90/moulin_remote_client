@@ -201,6 +201,33 @@ class ProjectScreenControllerTests(unittest.TestCase):
             self.assertEqual(len(saved), 1)
             self.assertEqual(port.status, "Activate mappings closed")
 
+    def test_select_mappings_screen_expands_list_for_full_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            port = FakeProjectPort([ord("q")])
+            mapping = {
+                "name": "android-kernel-xen-virtual-device-build",
+                "remote": "android_kernel/common-modules/xen-virtual-device",
+                "local": "android_kernel/common-modules/xen-virtual-device",
+                "kind": "directory",
+                "push": False,
+            }
+            config = config_with_mappings(app_dir, [mapping])
+
+            screen.run_select_mappings_screen(
+                port,
+                config,
+                app_dir,
+                save_config=lambda _config: None,
+                add_mapping_screen=lambda: None,
+            )
+
+            expected = "[ ] android-kernel-xen-virtual-device-build (directory, pull-only)"
+            mapping_box = next(box for box in port.boxes if box[-1] == "Mappings")
+            rendered = next(text.rstrip() for _row, col, text, _attr in port.rows if col == 2)
+            self.assertEqual(rendered, expected)
+            self.assertEqual(mapping_box[3], len(expected) + 4)
+
     def test_project_mapping_screen_controller_owns_select_mappings_screen(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)

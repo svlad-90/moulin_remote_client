@@ -71,6 +71,7 @@ class MainKeyController:
         if ui_input_api.key_code_matches(ch, "f") or ch == 27:
             port.logs_expanded = False
             port.focus_panel = port.focus_before_logs_expanded
+            port.log_follow = True
             port.main_full_redraw = True
             port.render_cache.clear()
         elif ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):

@@ -441,6 +441,95 @@ class MainMenuBuilderTests(unittest.TestCase):
                 ],
             )
 
+    def test_moulin_target_cleanup_runs_ninja_clean_for_selected_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "images:",
+                    "  full:",
+                    "    desc: Full image",
+                    "  full_ufs:",
+                    "    desc: Full UFS image",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            builder.command_items.select_moulin_clean_targets = (
+                lambda _app, _targets: ["full.img.gz", "full_ufs.img.gz"]
+            )
+
+            result = builder.command_items.run_moulin_target_clean(app)
+
+            self.assertEqual(result, 0)
+            self.assertEqual(app.reload_config_calls, 1)
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
+            title, commands = app.workflow.command_calls[0]
+            self.assertEqual(title, "Clean Moulin targets")
+            self.assertEqual(len(commands), 1)
+            script = commands[0][-1]
+            self.assertNotIn("ninja -t clean", script)
+            self.assertIn("invalidate Moulin output", script)
+            self.assertIn("image=${target%.gz}", script)
+            self.assertIn("for target in full.img.gz full_ufs.img.gz", script)
+
+    def test_moulin_target_cleanup_includes_configured_target_missing_from_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "min_ver: '1.0'\n",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.build_targets = "custom-output"
+
+            targets = builder.command_items.cleanable_moulin_targets(app)
+
+            self.assertEqual(
+                targets,
+                [{"target": "custom-output", "source": "project selection", "desc": "Configured build target"}],
+            )
+
+    def test_moulin_target_cleanup_selector_supports_multiple_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [ord(" "), curses.KEY_DOWN, ord(" "), 10])
+            targets = [
+                {"target": "full.img.gz", "source": "manifest", "desc": "Full image"},
+                {"target": "full_ufs.img.gz", "source": "manifest", "desc": "Full UFS image"},
+            ]
+
+            selected = builder.command_items.select_moulin_clean_targets(app, targets)
+
+            self.assertEqual(selected, ["full.img.gz", "full_ufs.img.gz"])
+            self.assertEqual(app.screen.timeouts, [-1, 250])
+
     def test_local_artifact_actions_persist_the_last_selected_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
@@ -822,6 +911,57 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertIn("ninja dom0", commands[-2][-1])
             self.assertIn("marked mapped-file changes as applied by build", commands[-1][-1])
 
+    def test_incremental_rebuild_invalidates_and_builds_selected_moulin_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  doma:",
+                    "    builder:",
+                    "      type: android",
+                    "images:",
+                    "  full_ufs:",
+                    "    desc: Full UFS image",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            builder.command_items.select_incremental_component_names = lambda _app, scope: [
+                "doma",
+                next(str(item["name"]) for item in scope if item["name"] == "moulin-target:full_ufs.img.gz"),
+            ]
+            incremental_item = next(
+                item for item in builder.command_items.build_items(app) if item.label == "Incremental rebuild"
+            )
+
+            incremental_item.handler(app)
+
+            title, commands = app.workflow.command_calls[0]
+            self.assertEqual(title, "Incremental rebuild")
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
+            self.assertIn("moulin product.yaml", commands[0][-1])
+            self.assertIn("invalidate Moulin output", commands[1][-1])
+            self.assertIn("for target in full_ufs.img.gz", commands[1][-1])
+            self.assertIn("TARGETS = [", commands[2][-1])
+            self.assertIn("doma", commands[2][-1])
+            self.assertIn("full_ufs.img.gz", commands[2][-1])
+            self.assertIn("marked mapped-file changes as applied by build", commands[3][-1])
+            self.assertEqual(
+                runtime_api.load_runtime_incremental_components(app.config, app_dir),
+                ["doma", "moulin-target:full_ufs.img.gz"],
+            )
+
     def test_incremental_handler_limits_yocto_scan_to_selected_component_build_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
@@ -1060,6 +1200,118 @@ class MainMenuBuilderTests(unittest.TestCase):
             )
 
             self.assertEqual(selected, ["dom0"])
+
+    def test_incremental_selector_leaves_moulin_outputs_disabled_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  doma:",
+                    "    builder:",
+                    "      type: android",
+                    "images:",
+                    "  full_ufs:",
+                    "    desc: Full UFS image",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [10])
+            components = builder.command_items.incremental_components(app)
+            scope = builder.command_items.incremental_build_scope(app, components)
+
+            selected = builder.command_items.select_incremental_component_names(app, scope)
+
+            self.assertEqual(selected, ["doma"])
+            self.assertIn("moulin-target:full_ufs.img.gz", [str(item["name"]) for item in scope])
+            self.assertNotIn("moulin-target:doma", [str(item["name"]) for item in scope])
+
+    def test_incremental_selector_restores_stored_moulin_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  doma:",
+                    "    builder:",
+                    "      type: android",
+                    "images:",
+                    "  full_ufs:",
+                    "    desc: Full UFS image",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [10])
+            runtime_api.save_runtime_incremental_components(
+                app.config,
+                app_dir,
+                ["doma", "moulin-target:full_ufs.img.gz"],
+            )
+            scope = builder.command_items.incremental_build_scope(
+                app,
+                builder.command_items.incremental_components(app),
+            )
+
+            selected = builder.command_items.select_incremental_component_names(app, scope)
+
+            self.assertEqual(selected, ["doma", "moulin-target:full_ufs.img.gz"])
+
+    def test_incremental_selector_ignores_missing_stored_items_before_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            manifest_text = "\n".join(
+                [
+                    "min_ver: '1.0'",
+                    "components:",
+                    "  doma:",
+                    "    builder:",
+                    "      type: android",
+                ]
+            )
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: manifest_text,
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [10])
+            runtime_api.save_runtime_incremental_components(
+                app.config,
+                app_dir,
+                ["removed-component", "moulin-target:removed.img.gz"],
+            )
+            scope = builder.command_items.incremental_build_scope(
+                app,
+                builder.command_items.incremental_components(app),
+            )
+
+            selected = builder.command_items.select_incremental_component_names(app, scope)
+
+            self.assertEqual(selected, ["doma"])
 
     def test_incremental_handler_ignores_android_components_when_android_is_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
