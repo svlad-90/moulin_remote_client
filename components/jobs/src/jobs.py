@@ -30,6 +30,8 @@ def create_command_job(
         "index": 0,
         "output": deque(initial_output or [], maxlen=1000),
         "output_lock": threading.Lock(),
+        "output_revision": 0,
+        "wrapped_output_cache": {},
         "process": None,
         "current_command": "",
         "rc": None,
@@ -149,9 +151,28 @@ def job_output_lines(job: dict[str, Any] | None) -> list[str]:
 
 
 def wrapped_job_output_lines(job: dict[str, Any] | None, width: int) -> list[str]:
+    if job is None:
+        return []
     inner_width = max(1, width)
+    lock = job.get("output_lock")
+    if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
+        with lock:
+            revision = int(job.get("output_revision", 0))
+            cache = job.setdefault("wrapped_output_cache", {})
+            cached = cache.get(inner_width)
+            if cached is not None and cached[0] == revision:
+                return cached[1]
+            source = list(job.get("output", []))
+    else:
+        revision = int(job.get("output_revision", 0))
+        cache = job.setdefault("wrapped_output_cache", {})
+        cached = cache.get(inner_width)
+        if cached is not None and cached[0] == revision:
+            return cached[1]
+        source = list(job.get("output", []))
+
     lines: list[str] = []
-    for line in job_output_lines(job):
+    for line in source:
         if not line:
             lines.append("")
             continue
@@ -165,6 +186,8 @@ def wrapped_job_output_lines(job: dict[str, Any] | None, width: int) -> list[str
             )
             or [""]
         )
+    cache.clear()
+    cache[inner_width] = (revision, lines)
     return lines
 
 
@@ -638,8 +661,20 @@ def sanitize_log_line(line: str) -> str:
 def append_log_line_locked(job: dict[str, Any], output: Any, line: str) -> bool:
     if line == "" and job.get("last_log_line_blank"):
         return False
+    if line and output and job.get("last_log_line_value") == line:
+        repeats = int(job.get("last_log_line_repeats", 1)) + 1
+        output[-1] = f"{line} [repeated {repeats} times]"
+        job["last_log_line_repeats"] = repeats
+        job["last_log_line_blank"] = False
+        return True
     output.append(line)
     job["last_log_line_blank"] = line == ""
+    if line:
+        job["last_log_line_value"] = line
+        job["last_log_line_repeats"] = 1
+    else:
+        job.pop("last_log_line_value", None)
+        job.pop("last_log_line_repeats", None)
     return True
 
 
@@ -657,11 +692,13 @@ def append_job_output(job: dict[str, Any], line: str) -> None:
             for clean_line in lines:
                 append_log_line_locked(job, output, clean_line)
             trim_output(output)
+            job["output_revision"] = int(job.get("output_revision", 0)) + 1
     else:
         output = job.setdefault("output", deque(maxlen=1000))
         for clean_line in lines:
             append_log_line_locked(job, output, clean_line)
         trim_output(output)
+        job["output_revision"] = int(job.get("output_revision", 0)) + 1
 
 
 def append_job_output_stream(job: dict[str, Any], text: str) -> None:
@@ -673,33 +710,94 @@ def append_job_output_stream(job: dict[str, Any], text: str) -> None:
         append_job_output_stream_locked(job, text)
 
 
+def clear_terminal_footer_locked(job: dict[str, Any], output: Any) -> None:
+    cursor_up = max(1, int(job.pop("terminal_cursor_up", 1)))
+    prefixes = (
+        "Setscene tasks:",
+        "Currently ",
+        "No currently running tasks",
+        "Running tasks ",
+        "Waiting for ",
+    )
+    marker = None
+    scan_limit = max(32, cursor_up + 8)
+    for offset, line in enumerate(reversed(output)):
+        if offset >= scan_limit:
+            break
+        if str(line).startswith(prefixes):
+            marker = len(output) - offset - 1
+            if str(line).startswith(("Setscene tasks:", "Waiting for ")):
+                break
+    remove_count = len(output) - marker if marker is not None else min(cursor_up, len(output))
+    for _ in range(remove_count):
+        output.pop()
+    job["last_log_line_blank"] = bool(output and output[-1] == "")
+    job.pop("last_log_line_value", None)
+    job.pop("last_log_line_repeats", None)
+
+
 def append_job_output_stream_locked(job: dict[str, Any], text: str) -> None:
     output = job.setdefault("output", deque(maxlen=1000))
     partial = str(job.get("partial_output", ""))
     live = bool(job.get("partial_live", False))
+    text = str(job.pop("terminal_escape", "")) + text
 
     def set_live(value: str) -> None:
         nonlocal live
         if live and output:
             output[-1] = value
-            job["last_log_line_blank"] = value == ""
         else:
-            live = append_log_line_locked(job, output, value)
+            output.append(value)
+            live = True
+        job["last_log_line_blank"] = value == ""
 
-    for char in text:
-        if char in "\r\n":
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\x1b" and index + 1 >= len(text):
+            job["terminal_escape"] = text[index:]
+            break
+        if char == "\x1b" and text[index + 1] == "[":
+            match = re.match(r"\x1b\[([0-?]*)([ -/]*)([@-~])", text[index:])
+            if match is None:
+                job["terminal_escape"] = text[index:]
+                break
+            params, _intermediate, final = match.groups()
+            if final == "A":
+                first_param = params.split(";", 1)[0]
+                job["terminal_cursor_up"] = int(first_param) if first_param.isdigit() else 1
+            elif final == "J":
+                clear_terminal_footer_locked(job, output)
+                partial = ""
+                live = False
+            index += match.end()
+            continue
+        if char == "\r":
             if partial:
                 set_live(sanitize_log_line(partial))
                 partial = ""
-            live = False
+            index += 1
+            continue
+        if char == "\n":
+            if partial:
+                set_live(sanitize_log_line(partial))
+                partial = ""
+            if live and output:
+                completed = output.pop()
+                live = False
+                append_log_line_locked(job, output, completed)
+            index += 1
             continue
         partial += char
         if len(partial) >= 120 or live:
             set_live(sanitize_log_line(partial))
+        index += 1
     if partial:
         set_live(sanitize_log_line(partial))
     job["partial_output"] = partial
     job["partial_live"] = live
+    if text:
+        job["output_revision"] = int(job.get("output_revision", 0)) + 1
     trim_output(output)
 
 

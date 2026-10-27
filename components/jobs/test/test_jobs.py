@@ -267,6 +267,59 @@ class JobsBehaviorTests(unittest.TestCase):
         self.assertEqual(job["partial_output"], "x" * 121)
         self.assertTrue(job["partial_live"])
 
+    def test_append_job_output_stream_replaces_carriage_return_status(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "Waiting for 2 tasks\r")
+        jobs.append_job_output_stream(job, "Waiting for 1 task\r")
+        jobs.append_job_output_stream(job, "Waiting for 0 tasks\nDone\n")
+
+        self.assertEqual(jobs.job_output_lines(job), ["Waiting for 0 tasks", "Done"])
+        self.assertEqual(job["partial_output"], "")
+        self.assertFalse(job["partial_live"])
+
+    def test_append_job_output_stream_collapses_consecutive_duplicate_lines(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, '"missing_property_type" does not exist\n' * 8)
+        jobs.append_job_output_stream(job, "next message\n")
+        jobs.append_job_output_stream(job, '"missing_property_type" does not exist\n')
+
+        self.assertEqual(
+            jobs.job_output_lines(job),
+            [
+                '"missing_property_type" does not exist [repeated 8 times]',
+                "next message",
+                '"missing_property_type" does not exist',
+            ],
+        )
+
+    def test_stream_chunk_growth_does_not_overwrite_previous_matching_line(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "warning\nwarn")
+        jobs.append_job_output_stream(job, "ing details\n")
+
+        self.assertEqual(jobs.job_output_lines(job), ["warning", "warning details"])
+
+    def test_append_job_output_stream_replaces_bitbake_terminal_footer(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(
+            job,
+            "Setscene tasks: 10 of 10\nCurrently  2 running tasks (20 of 30)\n",
+        )
+        jobs.append_job_output_stream(job, "\x1b[2")
+        jobs.append_job_output_stream(
+            job,
+            "A\x1b[JSetscene tasks: 10 of 10\nNo currently running tasks (30 of 30)\n",
+        )
+
+        self.assertEqual(
+            jobs.job_output_lines(job),
+            ["Setscene tasks: 10 of 10", "No currently running tasks (30 of 30)"],
+        )
+
     def test_read_process_output_stream_appends_chunks_and_marks_dirty(self) -> None:
         read_fd, write_fd = os.pipe()
         os.write(write_fd, b"abc\nnext")
@@ -331,6 +384,24 @@ class JobsBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(jobs.log_max_scroll(job, 2, width=16), 1)
         self.assertEqual(jobs.clamp_log_scroll(job, 2, follow=True, scroll=0, width=16), (1, True))
+
+    def test_wrapped_output_is_cached_until_output_changes(self) -> None:
+        job = jobs.create_command_job(
+            title="Build",
+            item_label="Run product build",
+            slot="build",
+            commands=[],
+            initial_output=["a line that wraps"],
+        )
+
+        first = jobs.wrapped_job_output_lines(job, 8)
+        second = jobs.wrapped_job_output_lines(job, 8)
+        self.assertIs(first, second)
+
+        jobs.append_job_output(job, "new output")
+        third = jobs.wrapped_job_output_lines(job, 8)
+        self.assertIsNot(first, third)
+        self.assertIn("new", third)
 
     def test_display_job_for_label_prefers_active_then_last_jobs(self) -> None:
         active = {"item_label": "Current"}
