@@ -125,13 +125,14 @@ def _serial_adb_resolver_command(console_device: str) -> str:
             return clean_console(bytes(transcript))[-1000:]
 
         try:
-            publish_log("opening exclusive serial console " + port)
-            connection = serial.Serial(
-                port=port,
+            exclusive = {} if "://" in port else {"exclusive": True}
+            publish_log("opening serial console " + port)
+            connection = serial.serial_for_url(
+                port,
                 baudrate=1843200,
                 timeout=0.1,
                 write_timeout=2,
-                exclusive=True,
+                **exclusive,
             )
             status["serial"] = True
             publish()
