@@ -31,6 +31,16 @@ def _split_group(group: str) -> tuple[str, str]:
     return parent.strip(), child.strip()
 
 
+def _ownership_status_role(state: str) -> str:
+    if state in {"free", "owned"}:
+        return "ok"
+    if state in {"busy", "checking"}:
+        return "warn"
+    if state == "error":
+        return "error"
+    return "disabled"
+
+
 def _details_context_lines(port: Any, item: Any) -> list[str]:
     parent, child = _split_group(str(getattr(item, "group", "")))
     if parent == "tftp/nfs":
@@ -85,15 +95,36 @@ class MainPanelsController:
         port.draw_box(0, 0, 10, width, config_accessor_api.ui_title(port.config))
         inner_width = max(1, width - 4)
         label_width = 14
+        board_host = f"{config_accessor_api.board_host_label_for_config(port.config)}  {config_accessor_api.board_host_spec_for_config(port.config)}"
+        ownership = getattr(port, "board_ownership_status", {})
+        if ownership.get("state") != "disabled":
+            board_host += f"  Ownership: {ownership.get('text') or 'unknown'}"
         entries = [
             ("Build host", f"{config_accessor_api.remote_label_for_config(port.config)}  {config_accessor_api.remote_spec_for_config(port.config)}:{config_accessor_api.remote_project_dir_for_config(port.config)}"),
-            ("Board host", f"{config_accessor_api.board_host_label_for_config(port.config)}  {config_accessor_api.board_host_spec_for_config(port.config)}"),
+            ("Board host", board_host),
             ("Local overlay", str(config_accessor_api.local_project_dir_for_config(port.config, app_dir))),
             ("Manifest", config_accessor_api.moulin_manifest_name_for_config(port.config)),
         ]
         for offset, (label, value) in enumerate(entries, start=1):
             port.add(offset, 2, f"{label}:".ljust(label_width), port.accent_attr())
-            port.add(offset, 2 + label_width, ui_text_api.fit_text(value, inner_width - label_width))
+            fitted_value = ui_text_api.fit_text(value, inner_width - label_width)
+            ownership_marker = "Ownership: "
+            if label == "Board host" and ownership_marker in fitted_value:
+                marker_end = fitted_value.index(ownership_marker) + len(ownership_marker)
+                port.add_segments(
+                    offset,
+                    2 + label_width,
+                    inner_width - label_width,
+                    [
+                        (fitted_value[:marker_end], 0),
+                        (
+                            fitted_value[marker_end:],
+                            port.role_attr(_ownership_status_role(str(ownership.get("state") or "unknown"))),
+                        ),
+                    ],
+                )
+            else:
+                port.add(offset, 2 + label_width, fitted_value)
 
         row = 5
         x = 2

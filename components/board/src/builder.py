@@ -34,21 +34,29 @@ class BoardCommandBuilder:
         return str(PurePosixPath(work_dir) / tool.name)
 
     def board_ssh_command(self, board_host: str, command: str, *, tty: bool = False) -> list[str]:
-        if tty:
-            command = f"bash -lic {shlex.quote(command)}"
+        shell_flags = "-lic" if tty else "-lc"
+        command = f"bash {shell_flags} {shlex.quote(command)}"
         return transport.ssh_command(board_host, command, tty="-tt" if tty else "")
 
     def board_interactive_shell_command(self, board_host: str) -> list[str]:
         return transport.ssh_command(board_host, tty="-t")
 
-    def board_deploy_tool_command(self, board_host: str, work_dir: str, tool: Path) -> list[str]:
-        remote_path = self.board_tool_remote_path(work_dir, tool)
+    def board_deploy_tool_command(
+        self,
+        board_host: str,
+        work_dir: str,
+        tool: Path,
+        *,
+        remote_name: str = "",
+    ) -> list[str]:
+        remote_path = str(PurePosixPath(work_dir) / (remote_name or tool.name))
+        remote_dir = str(PurePosixPath(remote_path).parent)
         script = (
             "set -euo pipefail\n"
             f"printf '%s\\n' 'Deploy board helper'\n"
             f"printf '%s\\n' {shlex.quote('from: ' + str(tool))}\n"
             f"printf '%s\\n' {shlex.quote('to:   ' + board_host + ':' + remote_path)}\n"
-            f"mkdir -p {self.quote_remote_shell_path(work_dir)} && "
+            f"mkdir -p {self.quote_remote_shell_path(remote_dir)} && "
             f"cat > {self.quote_remote_shell_path(remote_path)} && chmod +x {self.quote_remote_shell_path(remote_path)}"
         )
         return ["bash", "-lc", f"cat {shlex.quote(str(tool))} | {transport.ssh_command_string(board_host, script)}"]

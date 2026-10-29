@@ -185,7 +185,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         config = sample_config()
         config["board_hosts"][0]["commands"] = {
             "power_off": "relayctl off slot-2",
-            "power_on": "relayctl on slot-2",
+            "boot_mode": "relayctl normal slot-2",
         }
         config_profiles.normalize_board_host_profiles(config)
         service = self._service()
@@ -195,7 +195,31 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertEqual(len(power_off), 1)
         self.assertIn("relayctl off slot-2", power_off[0][-1])
-        self.assertTrue(any("relayctl on slot-2" in command[-1] for command in restart))
+        self.assertIn("relayctl normal slot-2", restart[-1][-1])
+
+    def test_board_ownership_actions_run_opaque_configured_commands(self) -> None:
+        config = sample_config()
+        config["board_hosts"][0]["commands"] = {
+            "ownership_acquire": ". /etc/profile.d/labgrid-native.sh; labgrid-client -p ironhide-2 acquire",
+            "ownership_release": ". /etc/profile.d/labgrid-native.sh; labgrid-client -p ironhide-2 release",
+            "ownership_status": "labctl --board ironhide-2 status",
+        }
+        config_profiles.normalize_board_host_profiles(config)
+        service = self._service()
+
+        actions = service.board_actions(config)
+        acquire = service.board_action_commands(config, "ownership_acquire")
+        release = service.board_action_commands(config, "ownership_release")
+        status = service.board_action_commands(config, "ownership_status")
+
+        self.assertEqual(
+            [action.action_id for action in actions[1:3]],
+            ["ownership_acquire", "ownership_release"],
+        )
+        self.assertNotIn("ownership_status", [action.action_id for action in actions])
+        self.assertIn("labgrid-client -p ironhide-2 acquire", acquire[0][-1])
+        self.assertIn("labgrid-client -p ironhide-2 release", release[0][-1])
+        self.assertIn("labctl --board ironhide-2 status", status[0][-1])
 
     def test_network_deploy_commands_use_project_tftp_nfs_paths(self) -> None:
         config = sample_copy_config()
@@ -265,9 +289,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertNotIn("cat >", android[0][-1])
         self.assertNotIn("pv not found", android[0][-1])
         invasive = service.board_action_commands(config, "inject_invasive_uboot_parameters")
-        self.assertIn("setenv serverip 192.0.2.10", invasive[0][-1])
-        self.assertIn("setenv ipaddr 192.0.2.20", invasive[0][-1])
-        self.assertNotIn("setenv ethaddr", invasive[0][-1])
+        self.assertIn("setenv serverip 192.0.2.10", invasive[-1][-1])
+        self.assertIn("setenv ipaddr 192.0.2.20", invasive[-1][-1])
+        self.assertNotIn("setenv ethaddr", invasive[-1][-1])
         self.assertIn("cat > /srv/tftp/demo/projects/prod/env/uboot.env", uboot[0][-1])
         self.assertIn("ln -sfn prod /srv/tftp/demo/projects/current", uboot[0][-1])
         self.assertNotIn("mkdir -p /srv/nfs/demo/projects", uboot[0][-1])
@@ -288,22 +312,22 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("run tftp_xen_load && run tftp_dtb_load && run tftp_kernel_load", uboot[0][-1])
         self.assertIn("run tftp_xenpolicy_load && run tftp_initramfs_load", uboot[0][-1])
         self.assertIn("bootm 0x54080000 0x50000000 0x54000000", uboot[0][-1])
-        self.assertIn("setenv user_demo", uboot[1][-1])
-        self.assertIn("env import -t ${loadaddr} ${filesize}; run bootcmd_moulin", uboot[1][-1])
-        self.assertNotIn("setenv bootcmd", uboot[1][-1])
-        self.assertIn("--power-off-command x5h_off", ufs[1][-1])
-        self.assertIn("x5h_off", ufs[1][-1])
-        self.assertIn("x5h_boot", ufs[1][-1])
-        self.assertIn("x5h_on", ufs[1][-1])
+        self.assertIn("setenv user_demo", uboot[-1][-1])
+        self.assertIn("env import -t ${loadaddr} ${filesize}; run bootcmd_moulin", uboot[-1][-1])
+        self.assertNotIn("setenv bootcmd", uboot[-1][-1])
+        self.assertIn("--boot-mode-command x5h_boot", ufs[-1][-1])
+        self.assertIn("--port", ufs[-1][-1])
+        self.assertNotIn("--power-off-command", ufs[-1][-1])
+        self.assertNotIn("--power-on-command", ufs[-1][-1])
         self.assertIn("ufs_dtb_load=", ufs[0][-1])
         self.assertIn("ufs_initramfs_load=", ufs[0][-1])
         self.assertIn("ufs_kernel_load=", ufs[0][-1])
         self.assertIn("ufs_xen_load=", ufs[0][-1])
         self.assertIn("ufs_xenpolicy_load=", ufs[0][-1])
         self.assertIn("bootcmd_moulin=", ufs[0][-1])
-        self.assertIn("setenv user_demo", ufs[1][-1])
-        self.assertIn("--verify-variable user_demo", ufs[1][-1])
-        self.assertIn("saveenv", ufs[1][-1])
+        self.assertIn("setenv user_demo", ufs[-1][-1])
+        self.assertIn("--verify-variable user_demo", ufs[-1][-1])
+        self.assertIn("saveenv", ufs[-1][-1])
         self.assertNotIn("The board must be stopped at the U-Boot prompt", ufs[0][-1])
 
     def test_android_unpack_uses_existing_board_archive_without_upload(self) -> None:
@@ -521,9 +545,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("board ALL=(root) NOPASSWD: /usr/local/sbin/moulin-deploy-rootfs", helper[0][-1])
         self.assertIn("visudo -cf /etc/sudoers.d/moulin-rootfs-deploy", helper[0][-1])
 
-    def test_open_board_serial_console_runs_picocom_without_restart(self) -> None:
+    def test_open_board_serial_console_runs_managed_bridge_without_restart(self) -> None:
         config = sample_copy_config()
-        config["board_hosts"][0]["console_device"] = "/dev/GEN5_CONSOLE_X5H"
+        config["board_hosts"][0]["console_device"] = "socket://127.0.0.1:36511"
         config_profiles.normalize_remote_profiles(config)
         config_profiles.normalize_board_host_profiles(config)
         config_profiles.normalize_project_profiles(config)
@@ -531,16 +555,37 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         commands = service.board_action_commands(config, "open_board_serial_console")
 
+        self.assertEqual(len(commands), 1)
+        self.assertIn("serial.serial_for_url", commands[0][-1])
+        self.assertEqual(commands[-1][0], "ssh")
+        self.assertIn("-tt", commands[-1])
+        self.assertIn("board@192.0.2.10", commands[-1])
+        self.assertNotIn("x5h_boot", commands[-1][-1])
+        self.assertIn("--device socket://127.0.0.1:36511", commands[-1][-1])
+        self.assertIn("managed serial endpoint socket://127.0.0.1:36511", commands[-1][-1])
+
+    def test_open_board_serial_console_runs_configured_command_without_bridge(self) -> None:
+        config = sample_copy_config()
+        console_command = (
+            "labgrid-client -c /etc/labgrid-native/users/$(id -u)/ironhide-1.yaml "
+            "-p ironhide-1 console main"
+        )
+        config["board_hosts"][0]["commands"] = {"console": console_command}
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_board_host_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        service = self._service()
+
+        commands = service.board_action_commands(config, "open_board_serial_console")
+
+        self.assertEqual(len(commands), 1)
         self.assertEqual(commands[0][0], "ssh")
         self.assertIn("-tt", commands[0])
-        self.assertIn("board@192.0.2.10", commands[0])
-        self.assertNotIn("x5h_off", commands[0][-1])
-        self.assertNotIn("x5h_boot", commands[0][-1])
-        self.assertNotIn("x5h_on", commands[0][-1])
-        self.assertIn("picocom -b 1843200", commands[0][-1])
-        self.assertIn("/dev/GEN5_CONSOLE_X5H", commands[0][-1])
+        self.assertIn(console_command, commands[0][-1])
+        self.assertNotIn("serial_console_bridge.py", commands[0][-1])
+        self.assertNotIn("serial-console-bridge-", commands[0][-1])
 
-    def test_open_uboot_console_power_cycles_and_runs_picocom(self) -> None:
+    def test_open_uboot_console_runs_mode_transition_and_managed_bridge(self) -> None:
         config = sample_copy_config()
         config["board_hosts"][0]["console_device"] = "/dev/GEN5_CONSOLE_X5H"
         config_profiles.normalize_remote_profiles(config)
@@ -550,14 +595,14 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         commands = service.board_action_commands(config, "open_uboot_console")
 
-        self.assertEqual(commands[0][0], "ssh")
-        self.assertIn("-tt", commands[0])
-        self.assertIn("board@192.0.2.10", commands[0])
-        self.assertIn("x5h_off", commands[0][-1])
-        self.assertIn("x5h_boot", commands[0][-1])
-        self.assertIn("x5h_on", commands[0][-1])
-        self.assertIn("picocom -b 1843200", commands[0][-1])
-        self.assertIn("/dev/GEN5_CONSOLE_X5H", commands[0][-1])
+        self.assertEqual(len(commands), 1)
+        self.assertIn("serial.serial_for_url", commands[0][-1])
+        self.assertEqual(commands[-1][0], "ssh")
+        self.assertIn("-tt", commands[-1])
+        self.assertIn("board@192.0.2.10", commands[-1])
+        self.assertIn("x5h_boot", commands[-1][-1])
+        self.assertIn("--device /dev/GEN5_CONSOLE_X5H", commands[-1][-1])
+        self.assertIn("managed serial endpoint /dev/GEN5_CONSOLE_X5H", commands[-1][-1])
 
     def test_network_workspace_commands_sync_local_workspace(self) -> None:
         config = sample_copy_config()
@@ -626,7 +671,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(reboot.capability, BoardCapability.REBOOT)
         self.assertEqual(reboot.build_targets, ())
         self.assertEqual(reboot.provision_commands, ())
-        self.assertEqual(reboot.execute_commands, (tuple(restart[0]),))
+        self.assertEqual(reboot.execute_commands, tuple(tuple(command) for command in restart))
         self.assertIsNotNone(reflash)
         self.assertEqual(reflash.capability, BoardCapability.REFLASH)
         self.assertEqual(reflash.build_targets, ("full_ufs.img.gz",))
@@ -646,17 +691,17 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("gen5_x5h_flash_ufs.py", ufs[2][-1])
         self.assertIn("x5h_boot", ufs[3][-1])
         self.assertIn("python3 /srv/tftp/demo/gen5_x5h_flash_ufs.py", ufs[3][-1])
-        self.assertEqual(restart[0][0], "ssh")
-        self.assertIn("-tt", restart[0])
-        self.assertIn("bash -lic", restart[0][-1])
-        self.assertIn("x5h_off", restart[0][-1])
-        self.assertIn("x5h_boot", restart[0][-1])
-        self.assertIn("x5h_on", restart[0][-1])
-        self.assertIn("Restart board and run Moulin U-Boot action", restart[0][-1])
-        self.assertIn("--require-variable user_default", restart[0][-1])
-        self.assertIn("user_default", restart[0][-1])
-        self.assertIn("run user_default", restart[0][-1])
-        self.assertIn("Apply U-Boot network env or Apply U-Boot UFS env first", restart[0][-1])
+        self.assertEqual(restart[-1][0], "ssh")
+        self.assertIn("-tt", restart[-1])
+        self.assertIn("bash -lic", restart[-1][-1])
+        self.assertIn("x5h_boot", restart[-1][-1])
+        self.assertIn("--port", restart[-1][-1])
+        self.assertNotIn("--console-command", restart[-1][-1])
+        self.assertIn("Restart board and run Moulin U-Boot action", restart[-1][-1])
+        self.assertIn("--require-variable user_default", restart[-1][-1])
+        self.assertIn("user_default", restart[-1][-1])
+        self.assertIn("run user_default", restart[-1][-1])
+        self.assertIn("Apply U-Boot network env or Apply U-Boot UFS env first", restart[-1][-1])
 
     def test_flash_bootloaders_uses_configured_console_device(self) -> None:
         config = sample_config()
@@ -690,13 +735,11 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("relayctl boot", bootloaders[5][-1])
         self.assertIn("gen5_x5h_flash_ufs.py", ufs[2][-1])
         self.assertIn("python3 /srv/tftp/demo/gen5_x5h_flash_ufs.py", ufs[3][-1])
-        self.assertIn("relayctl off", restart[0][-1])
-        self.assertIn("relayctl boot", restart[0][-1])
-        self.assertIn("relayctl on", restart[0][-1])
-        self.assertIn("--require-variable user_default", restart[0][-1])
-        self.assertIn("user_default", restart[0][-1])
+        self.assertIn("relayctl boot", restart[-1][-1])
+        self.assertIn("--require-variable user_default", restart[-1][-1])
+        self.assertIn("user_default", restart[-1][-1])
         self.assertNotIn("x5h_flash", bootloaders[2][-1])
-        self.assertNotIn("x5h_off", restart[0][-1])
+        self.assertNotIn("x5h_off", restart[-1][-1])
 
     def test_workflow_runs_flash_scenarios_with_titles(self) -> None:
         config = sample_config()

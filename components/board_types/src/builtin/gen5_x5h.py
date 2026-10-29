@@ -82,6 +82,7 @@ class _ProgressReader:
 
 _BOOTLOADER_PARTS_CACHE: dict[tuple[str, int, int], tuple[BoardArtifactPart, ...]] = {}
 _BOOTLOADER_PARTS_CACHE_LOCK = threading.Lock()
+_SERIAL_CONSOLE_PLACEHOLDER = "{mrc_serial_console}"
 
 
 def _bootloader_parts_from_archive(
@@ -186,6 +187,30 @@ class Gen5X5hBoardAdapter(BoardTypeAdapter):
                 "x5h_flash",
                 "Board-host command that switches the board to bootloader flash mode.",
             ),
+            BoardCommandDefault(
+                "console",
+                "Console command",
+                _SERIAL_CONSOLE_PLACEHOLDER,
+                "Bidirectional board-console command. The managed serial placeholder deploys the built-in serial bridge.",
+            ),
+            BoardCommandDefault(
+                "ownership_acquire",
+                "Acquire board command",
+                "",
+                "Complete board-host shell command that acquires exclusive ownership of the board.",
+            ),
+            BoardCommandDefault(
+                "ownership_release",
+                "Release board command",
+                "",
+                "Complete board-host shell command that releases ownership of the board.",
+            ),
+            BoardCommandDefault(
+                "ownership_status",
+                "Ownership status command",
+                "",
+                "Complete board-host shell command that reports the current board ownership status.",
+            ),
         ]
 
     def board_command(self, ctx: BoardActionContext, command_id: str) -> str:
@@ -194,6 +219,22 @@ class Gen5X5hBoardAdapter(BoardTypeAdapter):
     def board_command_script(self, ctx: BoardActionContext, command_id: str, label: str) -> str:
         command = self.board_command(ctx, command_id)
         return f"echo {shlex.quote(label + ': ' + command)}\n{command}\n"
+
+    def console_command_plan(self, ctx: BoardActionContext) -> tuple[list[list[str]], str]:
+        command = self.board_command(ctx, "console").strip()
+        if not command:
+            raise ValueError("Console command is not configured for this board")
+        if _SERIAL_CONSOLE_PLACEHOLDER not in command:
+            return [], command
+        tool = Path(__file__).resolve().parents[4] / "board_tools/serial_console_bridge.py"
+        device = config_accessors.board_console_device_for_config(ctx.config) or "auto"
+        replacement = shlex.join(
+            [
+                "python3", "-u", "-c", tool.read_text(),
+                "--device", device, "--baud", "1843200",
+            ]
+        )
+        return [], command.replace(_SERIAL_CONSOLE_PLACEHOLDER, replacement)
 
     def rsync_progress_args(self, *, sparse: bool = False, inplace: bool = False) -> list[str]:
         argv = ["rsync", "-az"]
@@ -253,8 +294,8 @@ sys.stdout.buffer.flush()
             f"python3 -c {shlex.quote(python_script)}\n"
         )
 
-    def actions(self, _config: dict[str, object]) -> list[BoardAction]:
-        return [
+    def actions(self, config: dict[str, object]) -> list[BoardAction]:
+        actions = [
             BoardAction(
                 "open_board_host_shell",
                 "Open board host shell",
@@ -307,19 +348,19 @@ sys.stdout.buffer.flush()
                 "Restart board",
                 "Power-cycle the GEN5 X5H board on the board host and leave it in boot mode.",
                 confirm=True,
-                required_commands=("power_off", "boot_mode", "power_on"),
+                required_commands=("boot_mode", "console"),
             ),
             BoardAction(
                 "open_board_serial_console",
                 "Open board serial console",
-                "Open picocom on the configured board serial console without changing board power state.",
+                "Open the configured board console command without changing board power state.",
                 interactive=True,
                 allow_during_job=True,
             ),
             BoardAction(
                 "open_uboot_console",
                 "Open U-Boot console",
-                "Power-cycle the board, enter boot mode, then open picocom so U-Boot autoboot can be stopped interactively.",
+                "Enter boot mode, then open the configured console so U-Boot can be used interactively.",
                 interactive=True,
                 allow_during_job=True,
             ),
@@ -432,6 +473,33 @@ sys.stdout.buffer.flush()
                 requires_project=True,
             ),
         ]
+        if self.ownership_commands_configured(config):
+            actions[1:1] = [
+                BoardAction(
+                    "ownership_acquire",
+                    "Acquire board",
+                    "Run the configured command that acquires exclusive ownership of the board.",
+                    confirm=False,
+                    required_commands=("ownership_acquire",),
+                ),
+                BoardAction(
+                    "ownership_release",
+                    "Release board",
+                    "Run the configured command that releases ownership of the board.",
+                    required_commands=("ownership_release",),
+                ),
+            ]
+        return actions
+
+    def ownership_commands_configured(self, config: dict[str, object]) -> bool:
+        target = config_profiles.board_target(config)
+        commands = target.get("commands")
+        if not isinstance(commands, dict):
+            return False
+        return all(
+            str(commands.get(command_id, "")).strip()
+            for command_id in ("ownership_acquire", "ownership_release")
+        )
 
     def local_artifact_parts(
         self,
@@ -535,6 +603,13 @@ sys.stdout.buffer.flush()
             return self.restart_board_command_plan(ctx)
         if action_id == "turn_off_board":
             return self.board_power_command_plan(ctx, command_id="power_off", title="Turn off board")
+        if action_id in {"ownership_acquire", "ownership_release", "ownership_status"}:
+            titles = {
+                "ownership_acquire": "Acquire board",
+                "ownership_release": "Release board",
+                "ownership_status": "Check ownership status",
+            }
+            return self.board_power_command_plan(ctx, command_id=action_id, title=titles[action_id])
         if action_id == "open_board_serial_console":
             return self.open_board_serial_console_command_plan(ctx)
         if action_id == "open_uboot_console":
@@ -1326,9 +1401,7 @@ echo "rootfs deploy: done" >&2
         source = (Path(__file__).resolve().parents[4] / "board_tools/gen5_x5h_uboot.py").read_text()
         args = ["python3", "-u", "-c", source,
                 "--port", config_accessors.board_console_device_for_config(ctx.config),
-                "--power-off-command", self.board_command(ctx, "power_off"),
-                "--boot-mode-command", self.board_command(ctx, "boot_mode"),
-                "--power-on-command", self.board_command(ctx, "power_on")]
+                "--boot-mode-command", self.board_command(ctx, "boot_mode")]
         for command in commands or []:
             args += ["--command", command]
         for flag, value in (("--require-variable", require_variable),
@@ -1357,13 +1430,16 @@ echo "rootfs deploy: done" >&2
             ctx, title="Inject invasive U-Boot parameters", commands=lines,
             require_variable="bootcmd", verify_command="printenv ipaddr serverip serveraddr ethaddr",
         )
-        return [ctx.command_builder.board_ssh_command(
-            config_accessors.board_host_spec_for_config(ctx.config), script, tty=True,
-        )]
+        return [
+            ctx.command_builder.board_ssh_command(
+                config_accessors.board_host_spec_for_config(ctx.config), script, tty=True,
+            ),
+        ]
 
     def apply_uboot_network_env_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
         script = self.uboot_action_script(
-            ctx, title="Apply U-Boot network env", commands=self.uboot_loader_env_lines(ctx),
+            ctx, title="Apply U-Boot network env",
+            commands=self.uboot_loader_env_lines(ctx),
             require_variable="bootcmd", verify_variable=self.uboot_user_command_name(ctx),
         )
         return [
@@ -1387,7 +1463,8 @@ echo "rootfs deploy: done" >&2
 
     def apply_uboot_ufs_env_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
         script = self.uboot_action_script(
-            ctx, title="Apply U-Boot UFS env", commands=self.uboot_loader_env_lines(ctx),
+            ctx, title="Apply U-Boot UFS env",
+            commands=self.uboot_loader_env_lines(ctx),
             require_variable="bootcmd", verify_variable=self.uboot_user_command_name(ctx),
         )
         return [
@@ -1403,9 +1480,11 @@ echo "rootfs deploy: done" >&2
             ctx, title="Restart board and run Moulin U-Boot action",
             require_variable=user_command, boot_command=f"run {user_command}",
         )
-        return [ctx.command_builder.board_ssh_command(
-            config_accessors.board_host_spec_for_config(ctx.config), script, tty=True,
-        )]
+        return [
+            ctx.command_builder.board_ssh_command(
+                config_accessors.board_host_spec_for_config(ctx.config), script, tty=True,
+            ),
+        ]
 
     def board_power_command_plan(
         self,
@@ -1415,6 +1494,8 @@ echo "rootfs deploy: done" >&2
         title: str,
     ) -> list[list[str]]:
         command = self.board_command(ctx, command_id)
+        if not command.strip():
+            raise ValueError(f"{title} command is not configured for this board")
         script = (
             "set -euo pipefail\n"
             f"echo {shlex.quote(title)}\n"
@@ -1426,7 +1507,7 @@ echo "rootfs deploy: done" >&2
             config_accessors.board_host_spec_for_config(ctx.config), script,
         )]
 
-    def board_picocom_command_plan(
+    def board_console_command_plan(
         self,
         ctx: BoardActionContext,
         *,
@@ -1434,39 +1515,43 @@ echo "rootfs deploy: done" >&2
         restart: bool,
     ) -> list[list[str]]:
         builder = ctx.command_builder
-        paths = self.network_paths(ctx)
-        board_host = paths["board_host"]
+        board_host = config_accessors.board_host_spec_for_config(ctx.config)
+        console_deploy, console_command = self.console_command_plan(ctx)
+        configured_console = self.board_command(ctx, "console").strip()
+        console_label = configured_console
+        if _SERIAL_CONSOLE_PLACEHOLDER in console_label:
+            endpoint = config_accessors.board_console_device_for_config(ctx.config) or "auto"
+            console_label = console_label.replace(
+                _SERIAL_CONSOLE_PLACEHOLDER, f"managed serial endpoint {endpoint}"
+            )
         restart_script = ""
-        sequence = "picocom"
+        sequence = console_label
         if restart:
-            power_off = self.board_command(ctx, "power_off")
             boot_mode = self.board_command(ctx, "boot_mode")
-            power_on = self.board_command(ctx, "power_on")
-            sequence = f"{power_off}, {boot_mode}, {power_on}, picocom"
-            restart_script = self.uboot_action_script(ctx, title="Open U-Boot console")
+            sequence = f"{boot_mode}, {console_label}"
+            restart_script = self.uboot_action_script(
+                ctx,
+                title="Open U-Boot console",
+            )
         script = (
             "set -euo pipefail\n"
             f"echo {shlex.quote(title)}\n"
             f"echo 'board host: {board_host}'\n"
-            f"echo 'sequence: {sequence}'\n"
-            f"console={shlex.quote(paths['console'])}\n"
-            "if [ -z \"$console\" ]; then console=$(ls -1 /dev/GEN5_CONSOLE* 2>/dev/null | head -n 1 || true); fi\n"
-            "if [ -z \"$console\" ]; then echo 'GEN5 console device not found under /dev/GEN5_CONSOLE*' >&2; exit 2; fi\n"
-            "command -v picocom >/dev/null 2>&1 || { echo 'picocom not found on board host' >&2; exit 2; }\n"
+            f"echo {shlex.quote('sequence: ' + sequence)}\n"
             f"{restart_script}"
-            "echo 'opening serial console: '\"$console\"\n"
-            "echo 'Exit picocom with Ctrl-A Ctrl-X.'\n"
-            "exec picocom -b 1843200 \"$console\"\n"
+            f"echo {shlex.quote('opening console: ' + console_label)}\n"
+            f"exec {console_command}\n"
         )
         return [
+            *console_deploy,
             builder.board_ssh_command(board_host, script, tty=True),
         ]
 
     def open_board_serial_console_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
-        return self.board_picocom_command_plan(ctx, title="Open board serial console", restart=False)
+        return self.board_console_command_plan(ctx, title="Open board serial console", restart=False)
 
     def open_uboot_console_command_plan(self, ctx: BoardActionContext) -> list[list[str]]:
-        return self.board_picocom_command_plan(ctx, title="Open U-Boot console", restart=True)
+        return self.board_console_command_plan(ctx, title="Open U-Boot console", restart=True)
 
     def ipl_helper_script(self, ctx: BoardActionContext, *, prepare: bool = False) -> str:
         source = (Path(__file__).resolve().parents[4] / "board_tools/gen5_x5h_flash_ipl.py").read_text()
@@ -1520,7 +1605,11 @@ echo "rootfs deploy: done" >&2
                 args += ["--name", name]
         prepare_script = (
             "set -euo pipefail\n" + shlex.join(args + ["--check"]) + "\n"
-            + self.uboot_action_script(ctx, title="Prepare board for IPL reflash", network=True)
+            + self.uboot_action_script(
+                ctx,
+                title="Prepare board for IPL reflash",
+                network=True,
+            )
         )
         commands = [
             builder.board_prepare_work_dir_command(host, work_dir),
@@ -1698,7 +1787,7 @@ echo "rootfs deploy: done" >&2
             "import time\n"
             "\n"
             "deadline = time.monotonic() + 1.0\n"
-            "conn = serial.Serial(port=sys.argv[1], baudrate=1843200, timeout=0.05)\n"
+            "conn = serial.serial_for_url(sys.argv[1], baudrate=1843200, timeout=0.05)\n"
             "try:\n"
             "    while time.monotonic() < deadline:\n"
             "        conn.read(4096)\n"

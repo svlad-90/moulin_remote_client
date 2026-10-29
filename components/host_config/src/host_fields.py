@@ -49,7 +49,8 @@ class BoardHostFieldService:
         command_id = self.command_id_for_field(key)
         for command in self.command_defaults_for_host(host):
             if command["command_id"] == command_id:
-                return f"<default: {command['default']}>"
+                default = command["default"]
+                return f"<default: {default}>" if default else ""
         return ""
 
     def normalize_value(self, key: str, value: str) -> str:
@@ -132,7 +133,11 @@ class BoardHostFieldService:
             "user": "SSH user for the board access host.",
             "host": "SSH host name or IP address for board access.",
             "work_dir": "Working directory on the board host for copied artifacts and deployed helper scripts.",
-            "console_device": "Serial console device. Leave empty to auto-detect the first /dev/GEN5_CONSOLE* on the board host.",
+            "console_device": (
+                "Serial console endpoint: a /dev path or pyserial URL such as "
+                "socket://127.0.0.1:36511. Leave empty to auto-detect the first "
+                "/dev/GEN5_CONSOLE* on the board host."
+            ),
             "ufs_loadaddr": "Optional xt-imager --loadaddr override. Leave empty to use xt-imager default.",
             "ufs_buffersize": "Optional xt-imager --buffersize override. Leave empty to use xt-imager default.",
             "tftp_root": "Board-host TFTP server root directory.",
@@ -141,6 +146,7 @@ class BoardHostFieldService:
             "server_ip": "TFTP/NFS server IP address visible from U-Boot.",
             "board_ip": "Board IP address used by U-Boot network boot commands.",
             "direct_copy": "Enter/Space toggles yes when the build host can SSH to this board host directly.",
+            "board_commands": "Enter opens board command overrides. Empty overrides use board-type defaults.",
         }
         return hints.get(key, "")
 

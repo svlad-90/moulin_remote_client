@@ -64,6 +64,11 @@ class AppStateController:
         port.board_job = None
         port.last_board_job = None
         port.last_board_jobs_by_label = {}
+        port.board_ownership_status = {"state": "unknown", "text": "unknown", "owner": ""}
+        port.board_ownership_identity = ""
+        port.board_ownership_task = None
+        port.board_ownership_next_poll = 0.0
+        port.board_ownership_last_job = None
         port.preflight_values = {}
         port.status = "Disconnected"
         reset_preflight(port)

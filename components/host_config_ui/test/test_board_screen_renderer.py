@@ -79,13 +79,14 @@ class BoardScreenRendererTests(unittest.TestCase):
             board_host_fields_factory=lambda: [
                 ("Profile name", "name"),
                 ("SSH user", "user"),
-                ("Console device", "console_device"),
+                ("Console endpoint", "console_device"),
                 ("TFTP root", "tftp_root"),
                 ("Board IP", "board_ip"),
+                ("Acquire board command", "command_ownership_acquire"),
             ],
         )
 
-        renderer.render(port, height=30, width=120, screen_state=state)
+        renderer.render(port, height=36, width=120, screen_state=state)
 
         rendered = [row[2].strip() for row in port.rows]
         self.assertIn("HOST PROFILE", rendered)
@@ -93,6 +94,7 @@ class BoardScreenRendererTests(unittest.TestCase):
         self.assertIn("FLASHING", rendered)
         self.assertIn("NETWORK BOOT", rendered)
         self.assertIn("INVASIVE U-BOOT PARAMETERS", rendered)
+        self.assertIn("OWNERSHIP", rendered)
         self.assertTrue(any("Board IP" in row[2] for row in port.rows))
 
     def test_render_reports_inline_edit_cursor_position(self) -> None:
@@ -143,7 +145,7 @@ class BoardScreenRendererTests(unittest.TestCase):
             ("SSH user", "user"),
             ("SSH host", "host"),
             ("Working dir", "work_dir"),
-            ("Console device", "console_device"),
+            ("Console endpoint", "console_device"),
             ("UFS load addr", "ufs_loadaddr"),
             ("UFS buffer size", "ufs_buffersize"),
             ("TFTP root", "tftp_root"),

@@ -101,10 +101,58 @@ class BoardTypeRegistryTests(unittest.TestCase):
                 ("power_on", "x5h_on"),
                 ("boot_mode", "x5h_boot"),
                 ("flash_mode", "x5h_flash"),
+                ("console", "{mrc_serial_console}"),
+                ("ownership_acquire", ""),
+                ("ownership_release", ""),
+                ("ownership_status", ""),
             ],
         )
         self.assertEqual(adapter.command_value_for_host({"commands": {"power_off": "lab-off"}}, "power_off"), "lab-off")
         self.assertEqual(adapter.command_value_for_host({"commands": {"power_off": ""}}, "power_off"), "x5h_off")
+
+    def test_gen5_x5h_adapter_exposes_ownership_only_for_configured_board(self) -> None:
+        adapter = registry.board_type_registry().adapter_for_type("gen5_x5h")
+        config = {
+            "active_board_host": "lab",
+            "board_hosts": [
+                {
+                    "name": "lab",
+                    "boards": [
+                        {
+                            "name": "ironhide-2",
+                            "type": "gen5_x5h",
+                            "commands": {
+                                "ownership_acquire": "labgrid-client -p ironhide-2 acquire",
+                                "ownership_release": "labgrid-client -p ironhide-2 release",
+                                "ownership_status": "labctl --board ironhide-2 status",
+                            },
+                        }
+                    ],
+                }
+            ],
+            "active_board": "ironhide-2",
+        }
+
+        action_ids = [action.action_id for action in adapter.actions(config)]
+
+        self.assertEqual(
+            action_ids[1:3],
+            ["ownership_acquire", "ownership_release"],
+        )
+        self.assertNotIn("ownership_status", action_ids)
+        incomplete_config = {
+            "active_board_host": "lab",
+            "board_hosts": [
+                {
+                    "name": "lab",
+                    "commands": {"ownership_acquire": "acquire", "ownership_release": ""},
+                }
+            ],
+        }
+        self.assertNotIn(
+            "ownership_acquire",
+            [action.action_id for action in adapter.actions(incomplete_config)],
+        )
 
 
 if __name__ == "__main__":

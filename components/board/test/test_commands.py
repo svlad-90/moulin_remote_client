@@ -73,6 +73,10 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             builder.board_ssh_command(board_host, command, tty=True),
             transport.ssh_command("board@192.0.2.10", "bash -lic 'cd /srv/tftp/demo && ls'", tty="-tt"),
         )
+        self.assertEqual(
+            builder.board_ssh_command(board_host, command),
+            transport.ssh_command("board@192.0.2.10", "bash -lc 'cd /srv/tftp/demo && ls'"),
+        )
 
     def test_run_board_interactive_shell_for_config_delegates_to_runner(self) -> None:
         config = sample_config()
@@ -123,7 +127,7 @@ class BoardCommandBehaviorTests(unittest.TestCase):
             builder.board_prepare_work_dir_command(board_host, artifacts_dir),
             transport.ssh_command(
                 "board@192.0.2.10",
-                "printf '%s\\n' 'Prepare board artifacts directory'\nprintf '%s\\n' 'path: /srv/tftp/demo/artifacts'\nmkdir -p /srv/tftp/demo/artifacts",
+                "bash -lc 'printf '\"'\"'%s\\n'\"'\"' '\"'\"'Prepare board artifacts directory'\"'\"'\nprintf '\"'\"'%s\\n'\"'\"' '\"'\"'path: /srv/tftp/demo/artifacts'\"'\"'\nmkdir -p /srv/tftp/demo/artifacts'",
             ),
         )
 
