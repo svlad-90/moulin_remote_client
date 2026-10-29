@@ -390,7 +390,8 @@ stored in `active_board_host`.
 | `user` | SSH user. |
 | `host` | SSH host name or IP address. |
 | `work_dir` | Board-host working directory for artifacts and deployed helpers. |
-| `console_device` | Serial console path. Empty means auto-detect `/dev/GEN5_CONSOLE*`. |
+| `console_device` | Serial console endpoint: a device path or pyserial URL such as `socket://127.0.0.1:36511`. Empty means auto-detect `/dev/GEN5_CONSOLE*`. |
+| Board commands | Complete shell commands for power, mode, console, and optional ownership operations. Edit them from the **Board commands** submenu. |
 | `ufs_loadaddr` | Optional `xt-imager.py --loadaddr` override. |
 | `ufs_buffersize` | Optional `xt-imager.py --buffersize` override. |
 | `tftp_root` | Board-host TFTP server root. Defaults to `/srv/tftp`. |
@@ -613,6 +614,55 @@ user home.
 Board support is intentionally type-based. A board host profile selects a
 `type`; the type provides the list of board commands and command plans.
 
+The built-in board configuration also exposes three optional ownership
+commands: acquire, release, and status. They are complete shell commands run
+unchanged on the board host; the client does not substitute board names,
+accounts, profile paths, or lab-management-specific arguments. When both
+acquire and release are configured, the Board tab adds an **OWNERSHIP** section.
+The status command is polled in the background while the board host is
+connected. Its result is shown on the `Board host` header line: a free board
+shows only **Acquire board**, a board acquired by the current user shows only
+**Release board**, and a board owned by someone else exposes neither action.
+The status command may return JSON with `owner` and `user` fields, or one of the
+plain states `free`, `owned`, or `busy`.
+For example, a labgrid-managed board can use commands shaped like:
+
+```sh
+labgrid-client -p ironhide-2 acquire
+labgrid-client -p ironhide-2 release
+labctl --board ironhide-2 status
+```
+
+Board commands run through a Bash login shell on the board host, so environment
+setup from its login profile is available without sourcing host-specific files
+in every configured command.
+
+The `console` command is the bidirectional transport used by interactive
+console actions. The default `{mrc_serial_console}` placeholder asks the client
+to deploy its content-addressed serial bridge under the board work directory
+and open `console_device`. The same bridge accepts a local `/dev/...` path or a
+pyserial URL, so a labgrid board can expose its owner-checked raw broker as
+`socket://127.0.0.1:36511` without teaching the client about labgrid. A complete
+host-specific interactive command remains supported when a board cannot expose
+a byte-stream endpoint. Exit the managed interactive bridge with **Ctrl-A**
+followed by **Ctrl-X**, matching the previous picocom workflow.
+
+Noninteractive U-Boot actions open `console_device` directly before running the
+configured boot-mode transition. This avoids routing binary serial traffic
+through an interactive terminal frontend and still catches the short autoboot
+window.
+
+The `boot_mode` command is one complete transition into normal boot mode. It
+must include any required power-off, mode-pin selection, and power-on steps.
+The labgrid equivalent can use the noninteractive
+`labgrid-client -c ... -p ironhide-2 -s normal power on` command. The strategy
+transition happens before the final, idempotent power-on operation and does not
+claim a second console frontend. A legacy host can use `x5h_boot`.
+
+Boards without acquire and release commands retain the existing direct-board
+workflow and show no ownership actions. The client does not acquire or release
+a board automatically.
+
 The built-in `gen5_x5h` workflow is:
 
 1. **Copy build artifacts**
@@ -717,8 +767,9 @@ Board commands run in the separate board command slot. A build command does not
 lock board commands, and a board command does not lock build commands.
 
 **Turn off board** executes the active board's configured `power_off` command.
-**Restart board** uses the configured `power_off`, `boot_mode`, and `power_on`
-commands to start the board in normal boot mode.
+**Restart board** opens the configured serial endpoint, runs the complete
+`boot_mode` transition, interrupts U-Boot and starts the saved Moulin boot
+command.
 
 ## Adding a Board Type
 

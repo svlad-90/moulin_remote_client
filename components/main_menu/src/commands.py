@@ -1850,7 +1850,12 @@ done
             allow_remote_manifest=False,
         )
         items: list[MenuItem] = []
+        ownership_state = str(getattr(app, "board_ownership_status", {}).get("state") or "unknown")
         for action in actions:
+            if action.action_id == "ownership_acquire" and ownership_state != "free":
+                continue
+            if action.action_id == "ownership_release" and ownership_state != "owned":
+                continue
             if action.local_artifact is not None:
                 items.append(self.artifact_source_flash_item(action))
                 continue
@@ -1870,8 +1875,32 @@ done
                 requires_remote=action.requires_remote,
                 requires_project=action.requires_project,
                 allow_during_job=action.allow_during_job,
+                availability=(
+                    lambda app, action_id=action.action_id: self.ownership_action_availability(app, action_id)
+                ) if action.action_id in {"ownership_acquire", "ownership_release"} else None,
             ))
         return items
+
+    def ownership_action_availability(self, app: Any, action_id: str) -> tuple[bool, str]:
+        status = getattr(app, "board_ownership_status", {})
+        state = str(status.get("state") or "unknown")
+        if action_id == "ownership_acquire":
+            if state == "free":
+                return True, ""
+            if state == "owned":
+                return False, "board is already acquired by you"
+            if state == "busy":
+                return False, str(status.get("text") or "board is acquired by another user")
+            return False, str(status.get("text") or "ownership status is unknown")
+        if action_id == "ownership_release":
+            if state == "owned":
+                return True, ""
+            if state == "free":
+                return False, "board is not acquired"
+            if state == "busy":
+                return False, str(status.get("text") or "board is acquired by another user")
+            return False, str(status.get("text") or "ownership status is unknown")
+        return True, ""
 
     def artifact_source_flash_item(self, action: Any) -> MenuItem:
         label = action.label.removesuffix(" from build host")
@@ -2119,6 +2148,8 @@ done
         return app.command_workflow_service().run_commands(app, label, commands)
 
     def board_action_group(self, action_id: str) -> str:
+        if action_id in {"ownership_acquire", "ownership_release", "ownership_status"}:
+            return "flashing / ownership"
         if action_id in {
             "deploy_network_boot",
             "deploy_network_domd_rootfs",

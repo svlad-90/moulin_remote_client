@@ -9,6 +9,7 @@ from typing import Any, Callable
 from components.app.src import jobs as app_jobs
 from components.app.src import ui as app_ui
 from components.app.src import workflows as app_workflows
+from components.board.api import ownership as board_ownership_api
 from components.jobs.api import connection_workflow as job_connection_workflow
 from components.jobs.api import session as job_session
 from components.jobs.api import workflow as job_workflow
@@ -56,6 +57,9 @@ class AppServicesController:
         self.write_line = write_line
         self.subprocess_call = subprocess_call
         self.process_execution = process_execution_api.process_execution_service()
+        self.board_ownership = board_ownership_api.board_ownership_monitor(
+            capture_command=self.process_execution.capture_command,
+        )
         self.ui = app_ui.app_ui_controller(
             app_dir=app_dir,
             default_config_path=default_config_path,
@@ -125,6 +129,7 @@ class AppServicesController:
 
     def poll_background_tasks(self, port: Any) -> None:
         self.workflows.poll_project_source_reload(port)
+        self.board_ownership.poll(port)
         self.ui.poll_plugin_view(port)
 
     def plugin_runtime(self) -> Any:

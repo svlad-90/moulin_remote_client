@@ -265,7 +265,13 @@ class BoardScreenRenderer:
             return "NETWORK BOOT"
         if key in {"board_ip", "mac_address"}:
             return "INVASIVE U-BOOT PARAMETERS"
-        if key.startswith("command_"):
+        if key in {
+            "command_ownership_acquire",
+            "command_ownership_release",
+            "command_ownership_status",
+        }:
+            return "OWNERSHIP"
+        if key == "board_commands" or key.startswith("command_"):
             return "COMMANDS"
         return "OTHER"
 
@@ -301,6 +307,13 @@ class BoardScreenRenderer:
             is_editing = state.focus == "fields" and key == state.editing_key
             if is_editing:
                 raw_value = state.editing_value
+            elif key == "board_commands":
+                commands = self.board_field_service.command_defaults_for_host(selected_host)
+                overrides = sum(
+                    bool(self.board_field_service.command_override_value(selected_host, command["key"]).strip())
+                    for command in commands
+                )
+                raw_value = f"{len(commands)} available, {overrides} customized"
             elif key.startswith("command_"):
                 raw_value = self.board_field_service.command_display_value(selected_host, key)
             else:

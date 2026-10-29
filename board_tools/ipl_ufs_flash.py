@@ -129,7 +129,7 @@ def main():
 
     if args.check:
         return
-    conn = serial.Serial(args.port, args.baud, timeout=TIMEOUT)
+    conn = serial.serial_for_url(args.port, args.baud, timeout=TIMEOUT)
     try:
         print('[Waiting for U-Boot prompt...]')
         conn.write(b'\r')

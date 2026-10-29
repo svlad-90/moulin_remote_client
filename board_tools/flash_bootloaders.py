@@ -81,14 +81,18 @@ class SerialTap:
 
 def open_port(port: str, baud: int, rtscts: bool, xonxoff: bool, timeout: float = 0.2) -> serial.Serial:
     print(f"[INFO] Opening serial port {port} at {baud} baud (RTS/CTS={'on' if rtscts else 'off'}, XON/XOFF={'on' if xonxoff else 'off'})")
-    ser = serial.Serial(
-        port=port,
+    # A raw TCP broker applies backpressure while draining data to the physical
+    # UART.  That is normal flow control, not a failed write, so allow the
+    # broker substantially longer than the short read timeout used for prompts.
+    write_timeout = 30.0 if "://" in port else timeout
+    ser = serial.serial_for_url(
+        port,
         baudrate=baud,
         bytesize=serial.EIGHTBITS,
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
         timeout=timeout,
-        write_timeout=timeout,
+        write_timeout=write_timeout,
         rtscts=rtscts,
         xonxoff=xonxoff,
     )

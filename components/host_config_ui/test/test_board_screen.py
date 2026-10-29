@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import curses
 import unittest
 from typing import Any
 
+from components.host_config.api import fields
 from components.host_config_ui.api import board_screen
 from components.host_config_ui.src import board_screen as board_screen_src
 from components.ui.api import input as ui_input_api
@@ -62,6 +64,10 @@ class FakeBoardConfigPort:
 
     def draw_box(self, top: int, left: int, height: int, width: int, title: str) -> None:
         self.boxes.append((top, left, height, width, title))
+
+    def draw_wrapped(self, row: int, col: int, _width: int, text: str, *, max_lines: int) -> int:
+        self.rows.append((row, col, text, None))
+        return min(max_lines, 1)
 
     def set_cursor(self, value: bool) -> None:
         self.cursor_states.append(value)
@@ -155,6 +161,14 @@ class FakeFieldActionController:
 
     def apply_board_inline_value(self, _port: Any, board: dict[str, Any], key: str, value: str) -> None:
         self.inline_calls.append((str(board.get("name", "")), key, value))
+        if key.startswith("command_"):
+            command_id = key.removeprefix("command_")
+            commands = board.setdefault("commands", {})
+            if value:
+                commands[command_id] = value
+            else:
+                commands.pop(command_id, None)
+            return
         board[key] = value
 
 
@@ -371,6 +385,50 @@ class BoardHostConfigurationScreenControllerTests(unittest.TestCase):
         )
 
         self.assertGreaterEqual(port.screen.refresh_count, 5)
+
+    def test_board_commands_row_opens_and_returns_from_submenu(self) -> None:
+        port = FakeBoardConfigPort([10, 10, *[ord("j")] * 8, 10, 27, ord("q")])
+
+        board_screen.run_board_host_configurations_screen(
+            port,
+            config_with_board_hosts(),
+            field_action_controller=FakeFieldActionController(),
+        )
+
+        self.assertTrue(any(box[4] == "Command overrides" for box in port.boxes))
+
+    def test_board_commands_open_in_submenu_and_save_override(self) -> None:
+        port = FakeBoardConfigPort([10, curses.KEY_F2, 27])
+        port.screen.width = 70
+        controller = FakeFieldActionController()
+        board = config_with_board_hosts()["board_hosts"][0]["boards"][0]
+        command = "labgrid-client -c /a/very/long/profile/path/ironhide-1.yaml -p ironhide-1 power off"
+        board["commands"]["power_off"] = command
+
+        board_screen_src.run_board_commands_screen(
+            port,
+            board,
+            board_field_service=fields.board_host_field_service(),
+            field_action_controller=controller,
+        )
+
+        self.assertEqual(
+            controller.inline_calls,
+            [("board-a", "command_power_off", command)],
+        )
+        self.assertTrue(any("..." in row[2] and "Power off" in row[2] for row in port.rows))
+        self.assertTrue(any(row[2].strip() == "Edit board command" for row in port.rows))
+        self.assertTrue(any("Effective command:" in row[2] for row in port.rows))
+
+    def test_multiline_command_editor_wraps_text_and_supports_newlines(self) -> None:
+        rows = board_screen_src._command_editor_rows("abcdef\ngh", 3)
+
+        self.assertEqual(
+            rows,
+            [("abc", 0, 3), ("def", 3, 6), ("", 6, 6), ("gh", 7, 9)],
+        )
+        self.assertEqual(board_screen_src._command_editor_cursor(rows, 7), (3, 0))
+        self.assertEqual(board_screen_src._move_command_editor_cursor(rows, 3, 1, -1), 6)
 
 
 if __name__ == "__main__":

@@ -29,17 +29,14 @@ def board_fields(board: dict[str, Any] | None = None) -> list[tuple[str, str]]:
         ("Board name", "name"),
         ("Display label", "label"),
         ("Board type", "type"),
-        ("Console device", "console_device"),
+        ("Console endpoint", "console_device"),
         ("UFS load addr", "ufs_loadaddr"),
         ("UFS buffer size", "ufs_buffersize"),
         ("Board IP", "board_ip"),
         ("MAC address", "mac_address"),
     ]
-    if board is not None:
-        fields.extend(
-            (command["label"], command["key"])
-            for command in host_fields.board_host_field_service().command_defaults_for_host(board)
-        )
+    if board is not None and host_fields.board_host_field_service().command_defaults_for_host(board):
+        fields.append(("Board commands", "board_commands"))
     return fields
 
 

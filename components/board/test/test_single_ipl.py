@@ -4,6 +4,7 @@ import curses
 import importlib.util
 import io
 import json
+import os
 import shlex
 from pathlib import Path
 import sys
@@ -51,11 +52,16 @@ class SingleIplTests(unittest.TestCase):
             old = root / 'old-boot-artifacts.tar'
             old.touch()
             path = self.make_archive(root)
+            old_time = 1_700_000_000_000_000_000
+            archive_time = old_time + 1_000_000_000
+            os.utime(old, ns=(old_time, old_time))
+            os.utime(path, ns=(archive_time, archive_time))
             with tarfile.open(path) as archive:
                 _, images = self.helper.archive_images(archive)
             self.assertEqual(images, [{'name': 'test.srec', 'flash_addr': '0x1000'}])
             self.assertEqual(self.helper.find_archive(root), path)
-            old.touch()
+            newer_time = archive_time + 1_000_000_000
+            os.utime(old, ns=(newer_time, newer_time))
             self.assertEqual(self.helper.find_archive(root), old)
 
     def test_archive_reports_when_no_boot_artifacts_exist(self):
@@ -194,7 +200,7 @@ class SingleIplTests(unittest.TestCase):
         discovery = service.board_action_commands(config, 'flash_single_ipl')
         self.assertEqual(len(discovery), 1)
         self.assertIn('--artifacts', discovery[-1][-1])
-        discovery_script = shlex.split(discovery[-1][-1])
+        discovery_script = shlex.split(shlex.split(discovery[-1][-1])[-1])
         self.assertEqual(discovery_script[-2], '--artifacts')
         commands = service.board_action_commands(config, 'flash_single_ipl', build_params={
             '_ipl_name': 'test.srec', '_ipl_snapshot': '/tmp/ipls',
@@ -202,18 +208,17 @@ class SingleIplTests(unittest.TestCase):
         self.assertIn('--name test.srec', commands[-1][-1])
         self.assertIn('--ipls-dir /tmp/ipls', commands[-1][-1])
         self.assertEqual(len(commands), 5)
-        self.assertIn('--power-off-command x5h_off', commands[-2][-1])
+        self.assertIn('--port', commands[-2][-1])
         self.assertIn('--boot-mode-command x5h_boot', commands[-2][-1])
-        self.assertIn('--power-on-command x5h_on', commands[-2][-1])
         self.assertIn('--ipaddr', commands[-2][-1])
         self.assertIn('--serverip', commands[-2][-1])
-        self.assertNotIn('--power-off-command', commands[-1][-1])
+        self.assertNotIn('--boot-mode-command', commands[-1][-1])
         subset = service.board_action_commands(config, 'flash_single_ipl', build_params={
             '_ipl_names': json.dumps(['test.srec', 'second.srec']), '_ipl_snapshot': '/tmp/ipls',
         })
         self.assertIn('--name test.srec --name second.srec', subset[-1][-1])
-        self.assertEqual(sum('--power-off-command' in command[-1] for command in subset), 1)
-        self.assertLess(subset[-2][-1].index('--check'), subset[-2][-1].index('--power-off-command'))
+        self.assertEqual(sum('--boot-mode-command' in command[-1] for command in subset), 1)
+        self.assertLess(subset[-2][-1].index('--check'), subset[-2][-1].index('--boot-mode-command'))
         all_images = service.board_action_commands(config, 'flash_single_ipl', build_params={
             '_ipl_all': 'true',
         })
@@ -333,8 +338,8 @@ class SingleIplTests(unittest.TestCase):
 
 
     def preparation_args(self):
-        return SimpleNamespace(port='/dev/test', ipaddr='10.0.0.2', serverip='10.0.0.1',
-                               power_off_command='off', boot_mode_command='boot', power_on_command='on')
+        return SimpleNamespace(port='socket://127.0.0.1:36511', ipaddr='10.0.0.2', serverip='10.0.0.1',
+                               boot_mode_command='boot')
 
     def test_board_actions_use_the_same_uboot_helper_source(self):
         config = sample_config()
@@ -363,9 +368,10 @@ class SingleIplTests(unittest.TestCase):
         args.require_variable = args.verify_variable = 'user_test'
         args.command = ["setenv user_test 'run bootcmd_moulin'", 'saveenv']
         args.boot_command = 'run user_test'
-        with patch.object(self.uboot.serial, 'Serial') as serial, \
-                patch.object(self.uboot.subprocess, 'run'), patch.object(self.uboot.time, 'sleep'):
-            conn = serial.return_value.__enter__.return_value
+        with patch.object(self.uboot.serial, 'serial_for_url') as serial_open, \
+                patch.object(self.uboot.subprocess, 'run'), \
+                patch.object(self.uboot.time, 'sleep') as sleep:
+            conn = serial_open.return_value.__enter__.return_value
             conn.read.side_effect = [b'=> ', b'user_test=old\r\n=> ', b'=> ', b'=> ',
                                      b'user_test=run bootcmd_moulin\r\n=> ']
             self.uboot.prepare_uboot(args)
@@ -373,13 +379,14 @@ class SingleIplTests(unittest.TestCase):
             b'printenv user_test\r', b"setenv user_test 'run bootcmd_moulin'\r",
             b'saveenv\r', b'printenv user_test\r', b'run user_test\r',
         ])
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1])
 
     def test_network_preparation_preserves_uboot_environment_when_ips_are_empty(self):
         args = self.preparation_args()
         args.ipaddr = args.serverip = ''
-        with patch.object(self.uboot.serial, 'Serial') as serial, \
+        with patch.object(self.uboot.serial, 'serial_for_url') as serial_open, \
                 patch.object(self.uboot.subprocess, 'run'), patch.object(self.uboot.time, 'sleep'):
-            conn = serial.return_value.__enter__.return_value
+            conn = serial_open.return_value.__enter__.return_value
             conn.read.return_value = b'=> '
             self.uboot.prepare_uboot(args)
         conn.write.assert_not_called()
@@ -387,47 +394,50 @@ class SingleIplTests(unittest.TestCase):
     def test_network_preparation_overrides_only_the_explicit_ip(self):
         args = self.preparation_args()
         args.ipaddr = ''
-        with patch.object(self.uboot.serial, 'Serial') as serial, \
+        with patch.object(self.uboot.serial, 'serial_for_url') as serial_open, \
                 patch.object(self.uboot.subprocess, 'run'), patch.object(self.uboot.time, 'sleep'):
-            conn = serial.return_value.__enter__.return_value
+            conn = serial_open.return_value.__enter__.return_value
             conn.read.side_effect = [b'=> ', b'=> ', b'serverip=10.0.0.1\r\n=> ']
             self.uboot.prepare_uboot(args)
         self.assertEqual([call.args[0] for call in conn.write.call_args_list],
                          [b'setenv serverip 10.0.0.1\r', b'printenv serverip\r'])
 
-    def test_preparation_power_cycles_and_verifies_temporary_network_settings(self):
-        with patch.object(self.uboot.serial, 'Serial') as serial, \
+    def test_preparation_runs_mode_transition_and_verifies_temporary_network_settings(self):
+        with patch.object(self.uboot.serial, 'serial_for_url') as serial_open, \
                 patch.object(self.uboot.subprocess, 'run') as run, \
-                patch.object(self.uboot.time, 'sleep'):
-            conn = serial.return_value.__enter__.return_value
+                patch.object(self.uboot.time, 'sleep') as sleep:
+            conn = serial_open.return_value.__enter__.return_value
             conn.read.side_effect = [b'Hit any key to stop autoboot: 1', b'\r\n=> ',
                                      b'\r\n=> ', b'ipaddr=10.0.0.2\r\n=> ',
                                      b'\r\n=> ', b'serverip=10.0.0.1\r\n=> ']
             self.uboot.prepare_uboot(self.preparation_args())
-        serial.assert_called_once_with('/dev/test', 1843200, timeout=0.1, exclusive=True)
-        self.assertEqual([call.args[0][-1].splitlines()[-1] for call in run.call_args_list], ['off', 'boot', 'on'])
+        serial_open.assert_called_once_with(
+            'socket://127.0.0.1:36511', 1843200, timeout=0.1, write_timeout=30.0,
+        )
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1])
+        self.assertEqual([call.args[0][-1].splitlines()[-1] for call in run.call_args_list], ['boot'])
         writes = [call.args[0] for call in conn.write.call_args_list]
         self.assertEqual(writes, [b'\r', b'setenv ipaddr 10.0.0.2\r', b'printenv ipaddr\r',
                                   b'setenv serverip 10.0.0.1\r', b'printenv serverip\r'])
         self.assertFalse(any(b'saveenv' in command for command in writes))
-        serial.return_value.__exit__.assert_called_once()
+        serial_open.return_value.__exit__.assert_called_once()
 
     def test_preparation_rejects_invalid_ips_before_board_access(self):
         args = self.preparation_args()
         args.ipaddr = '10.0.0.2; reset'
-        with patch.object(self.uboot.serial, 'Serial') as serial:
+        with patch.object(self.uboot.serial, 'serial_for_url') as serial_open:
             with self.assertRaises(ValueError):
                 self.uboot.prepare_uboot(args)
-            serial.assert_not_called()
+            serial_open.assert_not_called()
 
     def test_preparation_rejects_unverified_network_settings(self):
-        with patch.object(self.uboot.serial, 'Serial') as serial, \
+        with patch.object(self.uboot.serial, 'serial_for_url') as serial_open, \
                 patch.object(self.uboot.subprocess, 'run'), patch.object(self.uboot.time, 'sleep'):
-            conn = serial.return_value.__enter__.return_value
+            conn = serial_open.return_value.__enter__.return_value
             conn.read.side_effect = [b'=> ', b'=> ', b'ipaddr=10.0.0.99\r\n=> ']
             with self.assertRaisesRegex(RuntimeError, 'did not accept ipaddr'):
                 self.uboot.prepare_uboot(self.preparation_args())
-        serial.return_value.__exit__.assert_called_once()
+        serial_open.return_value.__exit__.assert_called_once()
 
     def test_autoboot_wait_has_total_timeout(self):
         conn = Mock()
@@ -437,15 +447,26 @@ class SingleIplTests(unittest.TestCase):
                 self.uboot.wait_uboot_prompt(conn, interrupt=True)
         conn.write.assert_called_once_with(b'\r')
 
+    def test_uboot_output_hides_carriage_returns_only_in_job_log(self):
+        conn = Mock()
+        conn.read.return_value = b'boot line\r\n=> '
+        stdout = io.StringIO()
+
+        with patch.object(self.uboot.sys, 'stdout', stdout):
+            output = self.uboot.wait_uboot_prompt(conn)
+
+        self.assertEqual(output, 'boot line\r\n=> ')
+        self.assertEqual(stdout.getvalue(), 'boot line\n=> ')
+
     def test_power_failure_stops_preparation_before_uboot_commands(self):
-        error = self.uboot.subprocess.CalledProcessError(1, ['off'])
-        with patch.object(self.uboot.serial, 'Serial') as serial, \
+        error = self.uboot.subprocess.CalledProcessError(1, ['boot'])
+        with patch.object(self.uboot.serial, 'serial_for_url') as serial_open, \
                 patch.object(self.uboot.subprocess, 'run', side_effect=error) as run:
             with self.assertRaises(self.uboot.subprocess.CalledProcessError):
                 self.uboot.prepare_uboot(self.preparation_args())
         run.assert_called_once()
-        serial.return_value.__enter__.return_value.write.assert_not_called()
-        serial.return_value.__exit__.assert_called_once()
+        serial_open.return_value.__enter__.return_value.write.assert_not_called()
+        serial_open.return_value.__exit__.assert_called_once()
 
 
 class SingleIplMenuTests(unittest.TestCase):

@@ -28,7 +28,7 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
                 ("Board name", "name"),
                 ("Display label", "label"),
                 ("Board type", "type"),
-                ("Console device", "console_device"),
+                ("Console endpoint", "console_device"),
                 ("UFS load addr", "ufs_loadaddr"),
                 ("UFS buffer size", "ufs_buffersize"),
                 ("Board IP", "board_ip"),
@@ -36,13 +36,8 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            fields.board_fields({"type": "gen5_x5h"})[-4:],
-            [
-                ("Power off command", "command_power_off"),
-                ("Power on command", "command_power_on"),
-                ("Boot mode command", "command_boot_mode"),
-                ("Flash mode command", "command_flash_mode"),
-            ],
+            fields.board_fields({"type": "gen5_x5h"})[-1],
+            ("Board commands", "board_commands"),
         )
         self.assertEqual(
             fields.remote_fields(),
@@ -283,6 +278,7 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
         self.assertIn("board host profile", fields.board_host_field_hint("name"))
         self.assertIn("gen5_x5h", fields.board_host_field_hint("type"))
         self.assertIn("auto-detect", fields.board_host_field_hint("console_device"))
+        self.assertIn("socket://", fields.board_host_field_hint("console_device"))
         self.assertIn("Enter/Space toggles yes", fields.board_host_field_hint("direct_copy"))
         self.assertIn("x5h_off", fields.board_host_field_hint("command_power_off"))
         self.assertEqual(fields.board_host_field_hint("unknown"), "")

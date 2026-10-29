@@ -53,7 +53,14 @@ def find_archive(artifacts):
                    and p.name.endswith(('.tar.bz2', '.tar.gz', '.tar')))
     if not paths:
         raise ValueError('No boot-artifacts archive found in artifacts')
-    selected = max(paths, key=lambda path: (path.stat().st_ctime_ns, str(path)))
+    selected = max(
+        paths,
+        key=lambda path: (
+            path.stat().st_ctime_ns,
+            path.stat().st_mtime_ns,
+            str(path),
+        ),
+    )
     if len(paths) > 1:
         print(f'Using most recently copied boot-artifacts archive: {selected}', file=sys.stderr)
         print(f'Keeping {len(paths) - 1} older boot-artifacts archive(s)', file=sys.stderr)

@@ -20,7 +20,9 @@ def wait_uboot_prompt(conn, *, interrupt=False, timeout=45.0):
         data = conn.read(4096)
         if data:
             text = data.decode('utf-8', errors='replace')
-            print(text, end='', flush=True)
+            # Preserve carriage returns for prompt parsing, but do not leak
+            # them into captured job logs where they are rendered as "^M".
+            print(text.replace('\r', ''), end='', flush=True)
             output = (output + text)[-16384:]
             if re.search(r'(?:^|[\r\n])(?:=>|U-Boot>)\s*$', output):
                 return output
@@ -56,17 +58,22 @@ def prepare_uboot(args):
     if not port:
         devices = sorted(glob.glob('/dev/GEN5_CONSOLE*'))
         if not devices:
-            raise RuntimeError('GEN5 console device not found')
+            raise RuntimeError('GEN5 console endpoint is not configured and no /dev/GEN5_CONSOLE* device was found')
         port = devices[0]
-    # Own the console before power-on so even a short autoboot window is caught.
-    with serial.Serial(port, 1843200, timeout=0.1, exclusive=True) as conn:
-        for command in (args.power_off_command, args.boot_mode_command):
-            print(f'Board preparation: {command}', flush=True)
-            subprocess.run(['bash', '-lic', 'set -euo pipefail\n' + command], check=True)
-            time.sleep(1)
+    serial_options = {} if '://' in port else {'exclusive': True}
+    write_timeout = 30.0 if '://' in port else None
+    # Own the endpoint before the mode transition so even a short autoboot window is caught.
+    with serial.serial_for_url(
+        port,
+        1843200,
+        timeout=0.1,
+        write_timeout=write_timeout,
+        **serial_options,
+    ) as conn:
         conn.reset_input_buffer()
-        print(f'Board preparation: {args.power_on_command}', flush=True)
-        subprocess.run(['bash', '-lic', 'set -euo pipefail\n' + args.power_on_command], check=True)
+        print(f'Board preparation: {args.boot_mode_command}', flush=True)
+        subprocess.run(['bash', '-lic', 'set -euo pipefail\n' + args.boot_mode_command], check=True)
+        time.sleep(1)
         wait_uboot_prompt(conn, interrupt=True)
         for name, value in environment:
             send_command(conn, f'setenv {name} {value}')
@@ -88,9 +95,7 @@ def prepare_uboot(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', default='')
-    parser.add_argument('--power-off-command', required=True)
     parser.add_argument('--boot-mode-command', required=True)
-    parser.add_argument('--power-on-command', required=True)
     parser.add_argument('--ipaddr')
     parser.add_argument('--serverip')
     parser.add_argument('--command', action='append', default=[])

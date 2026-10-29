@@ -482,7 +482,7 @@ def do_flash_image(
     # Open the board console. The timeout is also used by response waits so a
     # silent or disconnected board produces an error instead of hanging.
 
-    conn = serial.Serial(port=args.serial, baudrate=args.baud, timeout=20)
+    conn = serial.serial_for_url(args.serial, baudrate=args.baud, timeout=20)
     # Use the binary stdin stream; text decoding would corrupt image bytes.
 
     input_stream = sys.stdin.buffer

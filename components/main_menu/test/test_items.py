@@ -2370,6 +2370,41 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(app.workflow.command_calls[0][0], "Copy build artifacts")
             self.assertIn("Copy build artifacts", app.workflow.command_calls[0][1][1][2])
 
+    def test_board_ownership_commands_add_the_ownership_menu_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            config = _config(app_dir)
+            config["board_hosts"][0]["boards"][0]["commands"] = {
+                "ownership_acquire": "labgrid-client -p ironhide-2 acquire",
+                "ownership_release": "labgrid-client -p ironhide-2 release",
+                "ownership_status": "labctl --board ironhide-2 status",
+            }
+            app = FakeApp(config)
+            app.board_ownership_status = {"state": "free", "text": "free", "owner": ""}
+            command_items = builder.command_items.build_items(app)
+            ownership_items = [item for item in command_items if item.group == "flashing / ownership"]
+
+            self.assertEqual(
+                [item.label for item in ownership_items],
+                ["Acquire board"],
+            )
+            self.assertEqual(ownership_items[0].availability(app), (True, ""))
+            app.board_ownership_status = {"state": "owned", "text": "acquired by you", "owner": "lab/user"}
+            command_items = builder.command_items.build_items(app)
+            ownership_items = [item for item in command_items if item.group == "flashing / ownership"]
+            self.assertEqual([item.label for item in ownership_items], ["Release board"])
+            self.assertEqual(ownership_items[0].availability(app), (True, ""))
+
     def test_setup_items_service_adds_preflight_action_handlers(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
@@ -2757,10 +2792,13 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(app.terminal_session.commands[1][0], "ssh")
             self.assertIn("-tt", app.terminal_session.commands[1])
             self.assertIn("tester@10.0.0.2", app.terminal_session.commands[1])
-            self.assertIn("picocom -b 1843200", app.terminal_session.commands[1][-1])
+            self.assertIn("serial.serial_for_url", app.terminal_session.commands[1][-1])
+            self.assertIn("managed serial endpoint auto", app.terminal_session.commands[1][-1])
+            self.assertIn("--device auto --baud 1843200", app.terminal_session.commands[1][-1])
             self.assertNotIn("x5h_off", app.terminal_session.commands[1][-1])
-            self.assertIn("x5h_off", app.terminal_session.commands[2][-1])
-            self.assertIn("picocom -b 1843200", app.terminal_session.commands[2][-1])
+            self.assertIn("x5h_boot", app.terminal_session.commands[2][-1])
+            self.assertIn("serial.serial_for_url", app.terminal_session.commands[2][-1])
+            self.assertIn("managed serial endpoint auto", app.terminal_session.commands[2][-1])
 
     def test_docker_menu_items_follow_preflight_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

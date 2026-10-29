@@ -63,6 +63,7 @@ class FakePanelPort:
         self.focus_panel = "logs"
         self.connection_state = "connected"
         self.board_connection_state = "connected"
+        self.board_ownership_status = {"state": "owned", "text": "acquired by you", "owner": "host/tester"}
         self.build_params = {"ENABLE_ANDROID": "yes"}
         self.docker_image = "image"
         self.build_targets = "full_ufs.img.gz"
@@ -70,12 +71,14 @@ class FakePanelPort:
         self.mapping_selection_cache = ["meta"]
         self.last_exit: int | None = 0
         self.rows: list[tuple[int, int, str, int | None]] = []
+        self.segment_calls: list[list[tuple[str, int]]] = []
         self.boxes: list[tuple[int, int, int, int, str, int | None]] = []
 
     def add(self, row: int, col: int, text: str, attr: int | None = None) -> None:
         self.rows.append((row, col, text, attr))
 
     def add_segments(self, row: int, col: int, _width: int, segments: list[tuple[str, int]]) -> None:
+        self.segment_calls.append(segments)
         self.rows.append((row, col, "".join(text for text, _attr in segments), None))
 
     def draw_box(self, top: int, left: int, height: int, width: int, title: str, attr: int | None = None) -> None:
@@ -111,8 +114,8 @@ class FakePanelPort:
     def connection_attr_for(self, _state: str) -> int:
         return 7
 
-    def role_attr(self, _role: str) -> int:
-        return 5
+    def role_attr(self, role: str) -> int:
+        return {"ok": 10, "warn": 11, "error": 12, "disabled": 13}.get(role, 5)
 
     def item_enabled(self, _item: Any) -> bool:
         return True
@@ -271,8 +274,39 @@ class MainPanelsControllerTests(unittest.TestCase):
         rendered = [row[2] for row in port.rows]
         self.assertTrue(any("Build host:" in text for text in rendered))
         self.assertTrue(any("Board host:" in text for text in rendered))
+        self.assertTrue(any("Ownership: acquired by you" in text for text in rendered))
+        ownership_segments = next(
+            segments
+            for segments in port.segment_calls
+            if any("Ownership:" in text for text, _attr in segments)
+        )
+        self.assertEqual(ownership_segments[-1], ("acquired by you", 10))
         self.assertTrue(any("full_ufs.img.gz" in text for text in rendered))
         self.assertTrue(any("Preflight: ssh ok" in text for text in rendered))
+
+    def test_draw_header_colors_ownership_by_state(self) -> None:
+        expected = {
+            "free": 10,
+            "owned": 10,
+            "busy": 11,
+            "checking": 11,
+            "error": 12,
+            "unknown": 13,
+        }
+
+        for state, attr in expected.items():
+            with self.subTest(state=state):
+                port = FakePanelPort()
+                port.board_ownership_status = {"state": state, "text": state, "owner": ""}
+
+                panels.main_panels_controller().draw_header(port, 120, app_dir=Path("/tmp"))
+
+                ownership_segments = next(
+                    segments
+                    for segments in port.segment_calls
+                    if any("Ownership:" in text for text, _segment_attr in segments)
+                )
+                self.assertEqual(ownership_segments[-1], (state, attr))
 
     def test_draw_actions_panel_renders_selected_item(self) -> None:
         port = FakePanelPort()
