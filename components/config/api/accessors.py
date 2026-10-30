@@ -5,6 +5,8 @@ from __future__ import annotations
 from components.config.src.accessors import (
     board_artifacts_dir,
     board_artifacts_dir_for_config,
+    board_camera_stream_url,
+    board_camera_stream_url_for_config,
     board_console_device,
     board_console_device_for_config,
     board_deploy_subdir,
@@ -88,6 +90,8 @@ from components.config.src.accessors import (
 __all__ = [
     "board_artifacts_dir",
     "board_artifacts_dir_for_config",
+    "board_camera_stream_url",
+    "board_camera_stream_url_for_config",
     "board_console_device",
     "board_console_device_for_config",
     "board_deploy_subdir",

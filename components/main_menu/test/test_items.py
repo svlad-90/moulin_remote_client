@@ -249,6 +249,61 @@ def _config(app_dir: Path) -> dict[str, Any]:
 
 
 class MainMenuBuilderTests(unittest.TestCase):
+    def test_camera_stream_action_opens_configured_url_in_default_browser(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            config = _config(app_dir)
+            config["board_hosts"][0]["boards"][0]["camera_stream_url"] = (
+                "https://camera.example/ironhide-1"
+            )
+            app = FakeApp(config)
+
+            camera_item = next(
+                item
+                for item in builder.command_items.board_action_items(app)
+                if item.label == "Open camera stream"
+            )
+            with patch("components.main_menu.src.commands.webbrowser.open", return_value=True) as opener:
+                result = camera_item.handler(app)
+
+            self.assertTrue(result)
+            opener.assert_called_once_with("https://camera.example/ironhide-1")
+            self.assertEqual(
+                app.status,
+                "Opened camera stream: https://camera.example/ironhide-1",
+            )
+            self.assertEqual(camera_item.group, "flashing / board")
+            self.assertFalse(camera_item.confirm)
+
+    def test_camera_stream_action_is_hidden_without_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+
+            labels = [item.label for item in builder.command_items.board_action_items(app)]
+
+            self.assertNotIn("Open camera stream", labels)
+
     def test_build_items_includes_main_workflow_groups(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)

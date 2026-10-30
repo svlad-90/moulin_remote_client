@@ -135,6 +135,11 @@ class CoreProfileContributorTests(unittest.TestCase):
             (EntityRef("build_host", "host-a"), {"unknown": "value"}, "unsupported"),
             (EntityRef("board_host", "board-host-a"), {"direct_copy": "maybe"}, "yes or no"),
             (EntityRef("board", "board-a"), {"type": "missing-board-type"}, "unknown board type"),
+            (
+                EntityRef("board", "board-a"),
+                {"camera_stream_url": "file:///tmp/camera.html"},
+                "HTTP or HTTPS URL",
+            ),
             (EntityRef("project", "project-a"), {"product_type": "missing-product-type"}, "unknown product type"),
         )
         for reference, changes, message in invalid_updates:

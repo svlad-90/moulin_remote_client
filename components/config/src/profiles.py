@@ -85,6 +85,7 @@ def empty_board(name: str = "") -> dict[str, Any]:
         "console_device": "",
         "ufs_loadaddr": "",
         "ufs_buffersize": "",
+        "camera_stream_url": "",
         "board_ip": "",
         "mac_address": "",
         "commands": {},
@@ -573,7 +574,7 @@ def normalize_board_host_profiles(config: dict[str, Any]) -> None:
         grouped: list[dict[str, Any]] = []
         group_keys: dict[tuple[str, ...], dict[str, Any]] = {}
         host_fields = ("user", "host", "work_dir", "direct_copy", "tftp_root", "nfs_root", "deploy_subdir", "server_ip")
-        board_fields = ("name", "label", "type", "console_device", "ufs_loadaddr", "ufs_buffersize", "board_ip", "mac_address", "commands")
+        board_fields = ("name", "label", "type", "console_device", "ufs_loadaddr", "ufs_buffersize", "camera_stream_url", "board_ip", "mac_address", "commands")
         used_names: set[str] = set()
         active_host = ""
         for legacy in hosts:
@@ -631,6 +632,7 @@ def normalize_board_host_profiles(config: dict[str, Any]) -> None:
             board.setdefault("console_device", "")
             board.setdefault("ufs_loadaddr", "")
             board.setdefault("ufs_buffersize", "")
+            board.setdefault("camera_stream_url", "")
             board.setdefault("board_ip", "")
             board.setdefault("mac_address", "")
             if not isinstance(board.get("commands"), dict):

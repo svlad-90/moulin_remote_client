@@ -8,6 +8,14 @@ from components.config.api import profiles
 
 
 class ConfigAccessorBehaviorTests(unittest.TestCase):
+    def test_board_camera_stream_url_strips_whitespace(self) -> None:
+        board = {"camera_stream_url": "  https://camera.example/ironhide-1  "}
+
+        self.assertEqual(
+            accessors.board_camera_stream_url(board),
+            "https://camera.example/ironhide-1",
+        )
+
     def test_remote_project_dir_uses_projects_dir_and_project_name(self) -> None:
         remote = {"projects_dir": "/mnt/storage/user/projects"}
         project = {"project_dir": "meta-product"}

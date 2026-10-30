@@ -19,6 +19,7 @@
     "host": "",
     "work_dir": "~/moulin-board-work",
     "console_device": "",
+    "camera_stream_url": "",
     "ufs_loadaddr": "",
     "ufs_buffersize": "",
     "tftp_root": "/srv/tftp",

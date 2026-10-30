@@ -29,6 +29,7 @@ class HostConfigFieldBehaviorTests(unittest.TestCase):
                 ("Display label", "label"),
                 ("Board type", "type"),
                 ("Console endpoint", "console_device"),
+                ("Camera streaming URL", "camera_stream_url"),
                 ("UFS load addr", "ufs_loadaddr"),
                 ("UFS buffer size", "ufs_buffersize"),
                 ("Board IP", "board_ip"),
