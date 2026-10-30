@@ -259,6 +259,8 @@ class BoardScreenRenderer:
             return "SSH"
         if key in {"console_device", "ufs_loadaddr", "ufs_buffersize"}:
             return "FLASHING"
+        if key == "camera_stream_url":
+            return "CAMERA"
         if key in {"tftp_root", "nfs_root", "deploy_subdir"}:
             return "NETWORK BOOT"
         if key == "server_ip":

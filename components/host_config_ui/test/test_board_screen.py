@@ -387,7 +387,7 @@ class BoardHostConfigurationScreenControllerTests(unittest.TestCase):
         self.assertGreaterEqual(port.screen.refresh_count, 5)
 
     def test_board_commands_row_opens_and_returns_from_submenu(self) -> None:
-        port = FakeBoardConfigPort([10, 10, *[ord("j")] * 8, 10, 27, ord("q")])
+        port = FakeBoardConfigPort([10, 10, *[ord("j")] * 9, 10, 27, ord("q")])
 
         board_screen.run_board_host_configurations_screen(
             port,

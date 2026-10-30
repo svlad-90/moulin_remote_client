@@ -8,6 +8,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 import shlex
 from typing import Any, Callable
+import webbrowser
 
 from components.board.api import workflow as board_workflow_api
 from components.board_types.api import base as board_type_base_api
@@ -1850,6 +1851,17 @@ done
             allow_remote_manifest=False,
         )
         items: list[MenuItem] = []
+        camera_stream_url = config_accessors.board_camera_stream_url_for_config(app.config)
+        if camera_stream_url:
+            items.append(MenuItem(
+                "Open camera stream",
+                "flashing / board",
+                "Open the active board camera stream in the local default browser.",
+                lambda _app, url=camera_stream_url: url,
+                lambda app, url=camera_stream_url: self.open_camera_stream(app, url),
+                confirm=False,
+                allow_during_job=True,
+            ))
         ownership_state = str(getattr(app, "board_ownership_status", {}).get("state") or "unknown")
         for action in actions:
             if action.action_id == "ownership_acquire" and ownership_state != "free":
@@ -1880,6 +1892,18 @@ done
                 ) if action.action_id in {"ownership_acquire", "ownership_release"} else None,
             ))
         return items
+
+    def open_camera_stream(self, app: Any, url: str) -> bool:
+        try:
+            opened = webbrowser.open(url)
+        except (OSError, webbrowser.Error) as exc:
+            app.status = f"Unable to open camera stream: {exc}"
+            return False
+        if not opened:
+            app.status = "Unable to open camera stream: no default browser is available"
+            return False
+        app.status = f"Opened camera stream: {url}"
+        return True
 
     def ownership_action_availability(self, app: Any, action_id: str) -> tuple[bool, str]:
         status = getattr(app, "board_ownership_status", {})

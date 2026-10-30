@@ -97,6 +97,7 @@ class BoardHostFieldService:
             "user",
             "work_dir",
             "console_device",
+            "camera_stream_url",
             "ufs_loadaddr",
             "ufs_buffersize",
             "tftp_root",
@@ -137,6 +138,9 @@ class BoardHostFieldService:
                 "Serial console endpoint: a /dev path or pyserial URL such as "
                 "socket://127.0.0.1:36511. Leave empty to auto-detect the first "
                 "/dev/GEN5_CONSOLE* on the board host."
+            ),
+            "camera_stream_url": (
+                "Optional HTTP or HTTPS camera stream page opened in the local default browser."
             ),
             "ufs_loadaddr": "Optional xt-imager --loadaddr override. Leave empty to use xt-imager default.",
             "ufs_buffersize": "Optional xt-imager --buffersize override. Leave empty to use xt-imager default.",

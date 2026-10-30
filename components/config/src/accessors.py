@@ -104,6 +104,10 @@ def board_console_device(board_host: dict[str, Any]) -> str:
     return str(board_host.get("console_device", "")).strip()
 
 
+def board_camera_stream_url(board: dict[str, Any]) -> str:
+    return str(board.get("camera_stream_url", "")).strip()
+
+
 def board_tftp_root(board_host: dict[str, Any]) -> str:
     return str(board_host.get("tftp_root", "/srv/tftp")).strip().rstrip("/") or "/srv/tftp"
 
@@ -292,6 +296,10 @@ def board_ufs_buffersize_for_config(config: dict[str, Any]) -> str:
 
 def board_console_device_for_config(config: dict[str, Any]) -> str:
     return board_console_device(config_profiles.active_board(config))
+
+
+def board_camera_stream_url_for_config(config: dict[str, Any]) -> str:
+    return board_camera_stream_url(config_profiles.active_board(config))
 
 
 def board_tftp_root_for_config(config: dict[str, Any]) -> str:

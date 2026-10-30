@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from ipaddress import ip_address
 import re
 from typing import Any, Iterable
+from urllib.parse import urlsplit
 
 from components.config.src import profiles
 from components.config.src.store import (
@@ -33,7 +34,7 @@ _CORE_FIELDS = {
     },
     "board": {
         "name", "label", "type", "console_device", "ufs_loadaddr", "ufs_buffersize",
-        "board_ip", "mac_address", "commands",
+        "camera_stream_url", "board_ip", "mac_address", "commands",
     },
     "project": {
         "name", "label", "product_type", "project_dir", "local_project_dir", "git_url",
@@ -114,6 +115,10 @@ def _validate_core_fields(
             r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}", clean
         ):
             raise ValueError("mac_address must use six colon-separated octets")
+        if field == "camera_stream_url" and clean:
+            parsed = urlsplit(clean)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError("camera_stream_url must be an HTTP or HTTPS URL")
         if field == "type" and clean:
             from components.board_types.api import registry as board_type_registry_api
 
