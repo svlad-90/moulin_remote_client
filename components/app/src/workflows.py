@@ -77,6 +77,7 @@ class AppWorkflowController:
             confirm_action=port.confirm_sync_action,
             reload_runtime=port.load_active_project_runtime,
             reload_project_source_runtime=lambda: self.start_project_source_reload(port),
+            refresh_preflight=lambda target: target.connection_workflow_service().start_build_host_connect(target),
             restore_project_menu_input=lambda: port.screen.timeout(-1),
             reset_preflight=lambda: ui_session.reset_preflight(port),
         )

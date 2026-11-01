@@ -23,6 +23,7 @@ class FieldActionController:
         config_store: config_store_api.ConfigStore,
         reload_runtime: Callable[[], None],
         reload_project_source_runtime: Callable[[], None] | None = None,
+        refresh_preflight: Callable[[Any], None] | None = None,
         board_field_service: host_field_api.BoardHostFieldService | None = None,
         build_field_service: host_field_api.BuildHostFieldService | None = None,
         project_field_service: project_field_api.ProjectFieldService | None = None,
@@ -31,6 +32,7 @@ class FieldActionController:
         self.config_store = config_store
         self.reload_runtime = reload_runtime
         self.reload_project_source_runtime = reload_project_source_runtime
+        self.refresh_preflight = refresh_preflight
         self.board_field_service = board_field_service or host_field_api.board_host_field_service()
         self.build_field_service = build_field_service or host_field_api.build_host_field_service()
         self.project_field_service = project_field_service or project_field_api.project_field_service()
@@ -215,6 +217,8 @@ class FieldActionController:
         port.status = str(plan["status"])
         if reload_project_source:
             self.reload_project_source_runtime()
+        if plan["preflight_reset"]:
+            self._refresh_preflight_if_idle(port)
 
     def apply_project_values(
         self,
@@ -238,11 +242,26 @@ class FieldActionController:
         keys = set(changes)
         if active and any(self.project_field_service.preflight_reset_needed(key) for key in keys):
             ui_session_api.reset_preflight(port)
+            refresh_preflight = True
+        else:
+            refresh_preflight = False
         if active and getattr(port, "connection_state", "disconnected") == "connected":
             if any(self.project_field_service.runtime_reload_needed(key) for key in keys):
                 self.reload_runtime()
         port.status = status
+        if refresh_preflight:
+            self._refresh_preflight_if_idle(port)
         return True
+
+    def _refresh_preflight_if_idle(self, port: Any) -> None:
+        if self.refresh_preflight is None:
+            return
+        if getattr(port, "connection_state", "disconnected") != "connected":
+            return
+        if getattr(port, "active_job", None) is not None or getattr(port, "action_running", False):
+            port.status = f"{port.status}; preflight refresh waits for the active build action"
+            return
+        self.refresh_preflight(port)
 
 
 def field_action_controller(
@@ -251,10 +270,12 @@ def field_action_controller(
     config_store: config_store_api.ConfigStore,
     reload_runtime: Callable[[], None],
     reload_project_source_runtime: Callable[[], None] | None = None,
+    refresh_preflight: Callable[[Any], None] | None = None,
 ) -> FieldActionController:
     return FieldActionController(
         config,
         config_store=config_store,
         reload_runtime=reload_runtime,
         reload_project_source_runtime=reload_project_source_runtime,
+        refresh_preflight=refresh_preflight,
     )

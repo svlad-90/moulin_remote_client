@@ -46,6 +46,7 @@ class ConfigWorkflowController:
         restore_project_menu_input: Callable[[], Any],
         reset_preflight: Callable[[], Any],
         reload_project_source_runtime: Callable[[], Any] | None = None,
+        refresh_preflight: Callable[[Any], None] | None = None,
     ) -> None:
         self.config = config
         self.app_dir = app_dir
@@ -61,6 +62,7 @@ class ConfigWorkflowController:
         self.restore_project_menu_input = restore_project_menu_input
         self.reset_preflight = reset_preflight
         self.reload_project_source_runtime = reload_project_source_runtime
+        self.refresh_preflight = refresh_preflight
 
     def run_board_host_configurations_screen(self, port: Any) -> None:
         config_board_screen_api.run_board_host_configurations_screen(
@@ -239,6 +241,7 @@ class ConfigWorkflowController:
             config_store=self.config_store,
             reload_runtime=self.reload_runtime,
             reload_project_source_runtime=self.reload_project_source_runtime,
+            refresh_preflight=self.refresh_preflight,
         )
 
     def _remote_file_selection_controller(self) -> Any:
@@ -336,6 +339,7 @@ def config_workflow_controller(
     restore_project_menu_input: Callable[[], Any],
     reset_preflight: Callable[[], Any],
     reload_project_source_runtime: Callable[[], Any] | None = None,
+    refresh_preflight: Callable[[Any], None] | None = None,
 ) -> ConfigWorkflowController:
     return ConfigWorkflowController(
         config,
@@ -352,4 +356,5 @@ def config_workflow_controller(
         restore_project_menu_input=restore_project_menu_input,
         reset_preflight=reset_preflight,
         reload_project_source_runtime=reload_project_source_runtime,
+        refresh_preflight=refresh_preflight,
     )

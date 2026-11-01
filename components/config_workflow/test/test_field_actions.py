@@ -30,6 +30,7 @@ class Harness:
         self.save_count = 0
         self.reload_count = 0
         self.project_source_reload_count = 0
+        self.preflight_refresh_count = 0
         self.store = config_store(config, save=self.save_config)
         self.store.initialize([core_profile_contributor()])
         self.controller = field_actions.FieldActionController(
@@ -37,6 +38,7 @@ class Harness:
             config_store=self.store,
             reload_runtime=self.reload_runtime,
             reload_project_source_runtime=self.reload_project_source_runtime,
+            refresh_preflight=self.refresh_preflight,
         )
 
     def save_config(self, _config: dict[str, Any]) -> None:
@@ -47,6 +49,9 @@ class Harness:
 
     def reload_project_source_runtime(self) -> None:
         self.project_source_reload_count += 1
+
+    def refresh_preflight(self, _port: Any) -> None:
+        self.preflight_refresh_count += 1
 
 
 def config() -> dict[str, Any]:
@@ -213,6 +218,7 @@ class FieldActionControllerTests(unittest.TestCase):
         self.assertEqual(cfg["projects"][0]["project_dir"], "meta-prod")
         self.assertEqual(harness.reload_count, 1)
         self.assertEqual(port.preflight, "not run")
+        self.assertEqual(harness.preflight_refresh_count, 1)
         self.assertEqual(port.status, "project_dir updated")
         self.assertEqual(harness.save_count, 1)
 
@@ -227,6 +233,7 @@ class FieldActionControllerTests(unittest.TestCase):
         self.assertEqual(cfg["projects"][0]["project_dir"], "meta-prod")
         self.assertEqual(harness.reload_count, 0)
         self.assertEqual(port.preflight, "not run")
+        self.assertEqual(harness.preflight_refresh_count, 0)
         self.assertEqual(port.status, "project_dir updated")
         self.assertEqual(harness.save_count, 1)
 
