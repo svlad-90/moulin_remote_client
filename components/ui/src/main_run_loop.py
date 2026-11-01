@@ -32,7 +32,6 @@ class MainRunLoopController:
         port.configure_mouse()
         port.set_cursor(False)
         port.screen.keypad(True)
-        port.screen.timeout(250)
         started = self.monotonic()
         port.draw()
         port.ui_profile_slow("draw-initial", started)
@@ -41,9 +40,8 @@ class MainRunLoopController:
             while not port.done:
                 self._poll_jobs(port)
                 input_timeout = 0.05 if job_api.has_active_job(port.active_job, port.board_job) else 0.25
-                port.screen.timeout(max(0, int(input_timeout * 1000)))
                 wait_started = self.monotonic()
-                ch = port.read_key()
+                ch = port.wait_for_key_or_job_event(input_timeout)
                 if auto_connect_pending and ch == -1:
                     auto_connect_pending = False
                     self._start_auto_connect(port)
@@ -67,6 +65,7 @@ class MainRunLoopController:
                     self._start_auto_connect(port)
         finally:
             port.flush_ui_profile()
+            port.close_job_event_channel()
 
     def _start_auto_connect(self, port: Any) -> None:
         started = self.monotonic()
@@ -86,7 +85,10 @@ class MainRunLoopController:
         keys = 0
         while True:
             key_started = self.monotonic()
-            port.handle_main_key(ch)
+            if ch == job_api.JOB_STATE_WAKE_KEY:
+                port.poll_active_jobs()
+            else:
+                port.handle_main_key(ch)
             keys += 1
             port.ui_profile_slow(
                 "key-handler-slow",

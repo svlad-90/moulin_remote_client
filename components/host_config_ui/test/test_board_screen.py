@@ -48,11 +48,19 @@ class FakeBoardConfigPort:
         self.delete_calls: list[str] = []
         self.toggle_calls: list[str] = []
         self.updated_fields: list[tuple[str, str, str]] = []
+        self.active_job: dict[str, Any] | None = None
+        self.board_job: dict[str, Any] | None = None
 
     def read_key(self) -> int:
         if not self.screen.keys:
             raise AssertionError("fake key queue is empty")
         return self.screen.keys.pop(0)
+
+    def wait_for_key_or_job_event(self, _timeout: float | None) -> int:
+        return self.read_key()
+
+    def poll_active_jobs(self) -> None:
+        return None
 
     def read_queued_text(self, _first_char: int) -> str:
         if 32 <= _first_char < 127:

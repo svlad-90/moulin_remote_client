@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import patch
 
 from components.host_config_ui.api import remote_screen
+from components.jobs.api import jobs
 
 
 class FakeScreen:
@@ -50,11 +51,24 @@ class FakeRemoteConfigPort:
         self.set_active_calls: list[str] = []
         self.delete_calls: list[str] = []
         self.updated_fields: list[tuple[str, str, str]] = []
+        self.active_job: dict[str, Any] | None = None
+        self.board_job: dict[str, Any] | None = None
+        self.complete_connection_on_poll = False
+        self.poll_calls = 0
 
     def read_key(self) -> int:
         if not self.screen.keys:
             raise AssertionError("fake key queue is empty")
         return self.screen.keys.pop(0)
+
+    def wait_for_key_or_job_event(self, _timeout: float | None) -> int:
+        return self.read_key()
+
+    def poll_active_jobs(self) -> None:
+        self.poll_calls += 1
+        if self.complete_connection_on_poll and self.active_job is not None:
+            self.active_job = None
+            self.connection_state = "connected"
 
     def read_queued_text(self, _first_char: int) -> str:
         if 32 <= _first_char < 127:
@@ -216,6 +230,25 @@ class RemoteConfigurationScreenControllerTests(unittest.TestCase):
 
         self.assertEqual(controller.calls, [("set-active", "build-b")])
         self.assertEqual(port.set_active_calls, [])
+
+    def test_connect_completion_redraws_once_without_idle_polling(self) -> None:
+        class AsyncProfileActionController(FakeProfileActionController):
+            def set_active_remote(self, port: Any, remote: dict[str, Any]) -> None:
+                super().set_active_remote(port, remote)
+                port.connection_state = "connecting"
+                port.active_job = {"kind": "connect"}
+                port.complete_connection_on_poll = True
+
+        port = FakeRemoteConfigPort([ord("j"), ord("s"), jobs.JOB_STATE_WAKE_KEY, ord("q")])
+
+        remote_screen.run_remote_configurations_screen(
+            port,
+            config_with_remotes(),
+            profile_action_controller=AsyncProfileActionController(),
+        )
+
+        self.assertEqual(port.poll_calls, 1)
+        self.assertTrue(any("Build connection: connected" in row[2] for row in port.rows))
 
     def test_run_remote_configurations_screen_uses_profile_action_controller_for_add(self) -> None:
         port = FakeRemoteConfigPort([ord("a"), ord("q")])

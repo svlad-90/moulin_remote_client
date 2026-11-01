@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import curses
 import os
+import select
+import sys
 from typing import Any
 
+from components.jobs.api import jobs as job_api
 from components.ui.api import input as ui_input
 from components.ui.api import layout as ui_layout
 from components.ui.api import text as ui_text
@@ -13,6 +16,15 @@ from components.ui.api import text as ui_text
 
 class TerminalPortController:
     """Provide the curses-backed UI port used by higher-level controllers."""
+
+    def __init__(self) -> None:
+        self._event_read_fd, self._event_write_fd = os.pipe()
+        os.set_blocking(self._event_read_fd, False)
+        os.set_blocking(self._event_write_fd, False)
+        try:
+            self._input_fd: int | None = sys.stdin.fileno()
+        except (AttributeError, OSError, ValueError):
+            self._input_fd = None
 
     def setup_colors(self) -> None:
         if not curses.has_colors():
@@ -74,6 +86,58 @@ class TerminalPortController:
                 curses.ungetch(ch)
         except (curses.error, ValueError, OverflowError):
             pass
+
+    def notify_job_state_changed(self) -> None:
+        """Wake a UI wait after a background job changes state."""
+        try:
+            os.write(self._event_write_fd, b"\0")
+        except (BlockingIOError, OSError):
+            pass
+
+    def wait_for_key_or_job_event(self, port: Any, timeout: float | None) -> int:
+        """Wait for terminal input or a background-job notification."""
+        port.screen.timeout(0)
+        ch = self.read_key(port)
+        if ch != -1:
+            return ch
+
+        readers = [self._event_read_fd]
+        if self._input_fd is not None:
+            readers.append(self._input_fd)
+        try:
+            ready, _, _ = select.select(readers, [], [], timeout)
+        except InterruptedError:
+            return -1
+
+        if self._event_read_fd in ready:
+            self._drain_job_events()
+            return job_api.JOB_STATE_WAKE_KEY
+        if self._input_fd is not None and self._input_fd in ready:
+            port.screen.timeout(-1)
+            return self.read_key(port)
+        return -1
+
+    def close_job_event_channel(self) -> None:
+        """Close the wakeup pipe owned by this terminal controller."""
+        for name in ("_event_read_fd", "_event_write_fd"):
+            fd = getattr(self, name, -1)
+            if fd < 0:
+                continue
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            setattr(self, name, -1)
+
+    def _drain_job_events(self) -> None:
+        while True:
+            try:
+                if not os.read(self._event_read_fd, 4096):
+                    return
+            except BlockingIOError:
+                return
+            except OSError:
+                return
 
     def read_queued_text(self, port: Any, first_ch: int) -> str:
         text = ui_input.key_code_to_text(first_ch)

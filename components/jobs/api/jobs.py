@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from components.jobs.src.jobs import (
+    JOB_STATE_WAKE_KEY,
     active_job_for_slot,
     advance_completed_command_step,
     append_job_output,
@@ -11,6 +12,7 @@ from components.jobs.src.jobs import (
     append_log_line_locked,
     any_job_running,
     build_command_start_plan,
+    cancel_connect_timeout_wakeup,
     clamp_log_scroll,
     board_connect_completed_state,
     command_failed_state,
@@ -43,6 +45,7 @@ from components.jobs.src.jobs import (
     record_command_step_start,
     request_stop_plan,
     running_job_list,
+    schedule_connect_timeout_wakeup,
     sanitize_log_line,
     selected_or_first_running_job,
     selected_or_first_running_job_for_label,
@@ -55,6 +58,7 @@ from components.jobs.src.jobs import (
 )
 
 __all__ = [
+    "JOB_STATE_WAKE_KEY",
     "active_job_for_slot",
     "advance_completed_command_step",
     "append_job_output",
@@ -63,6 +67,7 @@ __all__ = [
     "append_log_line_locked",
     "any_job_running",
     "build_command_start_plan",
+    "cancel_connect_timeout_wakeup",
     "board_connect_completed_state",
     "clamp_log_scroll",
     "command_failed_state",
@@ -95,6 +100,7 @@ __all__ = [
     "record_command_step_start",
     "request_stop_plan",
     "running_job_list",
+    "schedule_connect_timeout_wakeup",
     "sanitize_log_line",
     "selected_or_first_running_job",
     "selected_or_first_running_job_for_label",

@@ -4,6 +4,7 @@ import curses
 import unittest
 from typing import Any
 
+from components.jobs.api import jobs
 from components.ui.api import main_run_loop
 
 
@@ -48,6 +49,8 @@ class FakePort:
         self.unread_keys: list[int] = []
         self.profile_events: list[str] = []
         self.flush_calls = 0
+        self.close_event_channel_calls = 0
+        self.wait_timeouts: list[float | None] = []
 
     def configure_escape_delay(self) -> None:
         self.configure_calls += 1
@@ -73,6 +76,10 @@ class FakePort:
             raise AssertionError("fake key queue is empty")
         return self.screen.keys.pop(0)
 
+    def wait_for_key_or_job_event(self, timeout: float | None) -> int:
+        self.wait_timeouts.append(timeout)
+        return self.read_key()
+
     def handle_main_key(self, ch: int) -> None:
         self.key_calls.append(ch)
         self.done = ch == ord("q")
@@ -87,6 +94,9 @@ class FakePort:
 
     def flush_ui_profile(self) -> None:
         self.flush_calls += 1
+
+    def close_job_event_channel(self) -> None:
+        self.close_event_channel_calls += 1
 
 
 class MainRunLoopControllerTests(unittest.TestCase):
@@ -110,6 +120,7 @@ class MainRunLoopControllerTests(unittest.TestCase):
         self.assertEqual(port.draw_calls, 3)
         self.assertEqual(port.poll_calls, 2)
         self.assertEqual(port.flush_calls, 1)
+        self.assertEqual(port.close_event_channel_calls, 1)
         self.assertIn("draw-initial", port.profile_events)
         self.assertIn("draw-auto-connect-slow", port.profile_events)
         self.assertIn("draw-after-input-slow", port.profile_events)
@@ -128,6 +139,19 @@ class MainRunLoopControllerTests(unittest.TestCase):
         self.assertEqual(port.events, ["draw", "draw"])
         self.assertEqual(port.key_calls, [ord("q")])
 
+    def test_job_state_wake_polls_without_dispatching_menu_key(self) -> None:
+        port = FakePort([jobs.JOB_STATE_WAKE_KEY, ord("q")])
+        controller = main_run_loop.main_run_loop_controller(
+            auto_connect_enabled=False,
+            sleep=lambda _seconds: None,
+            monotonic=lambda: 1.0,
+        )
+
+        controller.run(port)
+
+        self.assertEqual(port.poll_calls, 3)
+        self.assertEqual(port.key_calls, [ord("q")])
+
     def test_idle_timeout_redraws_and_sleeps_before_next_key(self) -> None:
         sleeps: list[float] = []
         port = FakePort([-1, ord("q")])
@@ -142,7 +166,7 @@ class MainRunLoopControllerTests(unittest.TestCase):
         self.assertEqual(sleeps, [0.05])
         self.assertEqual(port.draw_calls, 3)
         self.assertEqual(port.poll_calls, 2)
-        self.assertEqual(port.screen.timeouts, [250, 250, 250])
+        self.assertEqual(port.wait_timeouts, [0.25, 0.25])
         self.assertIn("draw-idle-slow", port.profile_events)
 
     def test_active_job_uses_short_input_timeout(self) -> None:
@@ -156,7 +180,7 @@ class MainRunLoopControllerTests(unittest.TestCase):
 
         controller.run(port)
 
-        self.assertEqual(port.screen.timeouts, [250, 50])
+        self.assertEqual(port.wait_timeouts, [0.05])
 
     def test_mouse_events_are_drained_before_single_draw_without_consuming_keyboard_input(self) -> None:
         port = FakePort([curses.KEY_MOUSE, curses.KEY_MOUSE, ord("q")])
