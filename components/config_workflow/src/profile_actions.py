@@ -134,9 +134,15 @@ class ProfileActionController:
         port.status = f"Board deleted: {name}"
         return True
 
-    def _host_switch_blocked(self, port: Any) -> bool:
-        if port.active_job is not None or port.board_job is not None:
-            port.status = "Wait for the running action before switching hosts"
+    def _host_switch_blocked(self, port: Any, *, slot: str, connect_kind: str) -> bool:
+        port.poll_active_jobs()
+        job = port.board_job if slot == "board" else port.active_job
+        if job is not None and job.get("kind") == connect_kind:
+            port.cancel_connection_job(slot)
+            job = port.board_job if slot == "board" else port.active_job
+        if job is not None:
+            target = "board" if slot == "board" else "build"
+            port.status = f"Stop the running {target} action before switching hosts"
             return True
         if port.action_running:
             port.status = "Close the interactive action before switching hosts"
@@ -147,7 +153,7 @@ class ProfileActionController:
         host_id = config_profile_api.ensure_profile_id(host)
         changed = host_id != str(self.config.get("active_board_host", ""))
         if changed:
-            if self._host_switch_blocked(port):
+            if self._host_switch_blocked(port, slot="board", connect_kind="board-connect"):
                 return
             self._config_store(port).replace_references(
                 "core.active_board_host",
@@ -169,7 +175,11 @@ class ProfileActionController:
         previous_host = str(self.config.get("active_board_host") or "")
         if str(current_host.get("name") or ""):
             previous_host = config_profile_api.ensure_profile_id(current_host)
-        if target_host_id != previous_host and self._host_switch_blocked(port):
+        if target_host_id != previous_host and self._host_switch_blocked(
+            port,
+            slot="board",
+            connect_kind="board-connect",
+        ):
             return
         try:
             changed = board_id != str(self.config.get("active_board") or "")
@@ -247,7 +257,7 @@ class ProfileActionController:
         remote_id = config_profile_api.ensure_profile_id(remote)
         changed = remote_id != str(self.config.get("active_remote", ""))
         if changed:
-            if self._host_switch_blocked(port):
+            if self._host_switch_blocked(port, slot="build", connect_kind="connect"):
                 return
             self._config_store(port).replace_references(
                 "core.active_build_host",

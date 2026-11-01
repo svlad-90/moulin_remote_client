@@ -47,6 +47,31 @@ class CommandControlService:
         )
         self.stop_job(port, job, slot)
 
+    def cancel_connection_job(self, port: Any, slot: str) -> bool:
+        job = port.board_job if slot == "board" else port.active_job
+        expected_kind = "board-connect" if slot == "board" else "connect"
+        if job is None or job.get("kind") != expected_kind:
+            return False
+
+        process = job.get("process")
+        process_pid = job_api.process_pid(process)
+        job["process_finished"] = None
+        job_api.cancel_connect_timeout_wakeup(job)
+        if job_api.process_running(process) and process_pid is not None:
+            self.terminate_process_group(process_pid, signal.SIGTERM)
+        job["rc"] = 130
+        job_api.append_job_output(job, "cancelled: host selection changed")
+        port.logs_dirty = True
+        ui_session_api.apply_state(
+            port,
+            job_api.finish_job_state(
+                job,
+                active_job=port.active_job,
+                board_job=port.board_job,
+            ),
+        )
+        return True
+
     def stop_job(self, port: Any, job: dict[str, Any] | None, slot: str | None = None) -> None:
         process = job.get("process") if job is not None else None
         process_running = job_api.process_running(process)

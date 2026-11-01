@@ -293,6 +293,9 @@ class ClientApp:
     def stop_running_command(self, slot: str | None = None) -> None:
         self.services.stop_running_command(self, slot)
 
+    def cancel_connection_job(self, slot: str) -> bool:
+        return self.services.cancel_connection_job(self, slot)
+
     def finish_active_job(self, job: dict[str, Any] | None = None) -> None:
         self.services.finish_active_job(self, job)
 

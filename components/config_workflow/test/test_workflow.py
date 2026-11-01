@@ -44,6 +44,8 @@ class FakePort:
         self.board_job = None
         self.action_running = False
         self.connection_workflow_service = Mock()
+        self.poll_active_jobs = Mock()
+        self.cancel_connection_job = Mock(return_value=False)
 
     def prompt(self, label: str, current: str = "") -> str:
         return self.prompt_values.get(label, current)
