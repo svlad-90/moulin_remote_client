@@ -397,19 +397,35 @@ def sync_menu_selection(
     previous_items: list[MenuItem],
     previous_selected: int,
     next_items: list[MenuItem],
-    next_enabled: list[bool],
+    active_tab: str = "",
 ) -> int:
     selected = previous_selected
     if previous_items:
         selected = min(max(0, selected), len(previous_items) - 1)
     selected_label = previous_items[selected].label if previous_items else ""
+    selected_tab = item_tab(previous_items[selected]) if previous_items else active_tab
     if not next_items:
         return 0
-    selected = next(
-        (index for index, item in enumerate(next_items) if item.label == selected_label),
-        min(selected, len(next_items) - 1),
+    matching = next(
+        (
+            index
+            for index, item in enumerate(next_items)
+            if item.label == selected_label and item_tab(item) == selected_tab
+        ),
+        None,
     )
-    return normalize_selection(selected, next_enabled)
+    if matching is not None:
+        return matching
+
+    tab = active_tab or selected_tab
+    previous_visible = visible_item_indices(previous_items, tab)
+    next_visible = visible_item_indices(next_items, tab)
+    if previous_visible and selected in previous_visible and next_visible:
+        position = previous_visible.index(selected)
+        selected = next_visible[min(position, len(next_visible) - 1)]
+    else:
+        selected = min(selected, len(next_items) - 1)
+    return selected
 
 
 def active_job_for_slot(

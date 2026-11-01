@@ -158,6 +158,7 @@ class AppServicesControllerTests(unittest.TestCase):
             app_dir = Path(tmpdir)
             controller = self.make_controller(app_dir)
             port = FakePort()
+            port.items = ["old-item"]
             config_controller = Mock()
             config_controller.remote_project_config_ready.return_value = True
             sync_controller = Mock()
@@ -189,7 +190,8 @@ class AppServicesControllerTests(unittest.TestCase):
             self.assertEqual(controller.workflows.manifest_cache, {})
             port.load_active_project_runtime.assert_called_once()
             self.assertEqual(port.project_config_source, "Git remote")
-            self.assertEqual(port.items, ["updated-item"])
+            self.assertEqual(port.items, ["old-item"])
+            port.build_items.assert_not_called()
             self.assertEqual(
                 (port.focus_panel, port.active_menu_tab, port.selected, port.menu_scroll),
                 ("details", "board", 7, 3),
@@ -208,6 +210,7 @@ class AppServicesControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             controller = self.make_controller(Path(tmpdir))
             port = FakePort()
+            port.items = ["old-item"]
             port.config = {
                 "active_project": "prod",
                 "projects": [
@@ -244,6 +247,8 @@ class AppServicesControllerTests(unittest.TestCase):
             controller.poll_background_tasks(port)
 
             self.assertEqual(port.status, "Parameters loaded from selected Git ref")
+            self.assertEqual(port.items, ["old-item"])
+            port.build_items.assert_not_called()
             self.assertEqual(
                 (port.focus_panel, port.active_menu_tab, port.selected, port.menu_scroll),
                 ("details", "board", 7, 3),

@@ -60,7 +60,7 @@ class MainDrawController:
                 previous_items,
                 port.selected,
                 port.items,
-                [port.item_enabled(item) for item in port.items],
+                getattr(port, "active_menu_tab", ""),
             )
             port.menu_dirty = False
             port.render_cache.pop("actions", None)

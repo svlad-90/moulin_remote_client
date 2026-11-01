@@ -144,7 +144,6 @@ class AppWorkflowController:
             self.manifest_cache.clear()
             port.load_active_project_runtime(lambda _config, _path: str(value))
             port.project_config_source = "Git remote"
-            port.items = port.build_items()
             port.project_source_reload_completed = int(getattr(port, "project_source_reload_completed", 0)) + 1
             port.status = "Parameters loaded from selected Git ref"
         except Exception as exc:

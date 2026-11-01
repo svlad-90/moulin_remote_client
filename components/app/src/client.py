@@ -140,7 +140,6 @@ class ClientApp:
         self.rebuild_config_store()
         self.load_active_project_runtime()
         self.refresh_mapping_selection_cache()
-        self.items = self.build_items()
         self.menu_dirty = True
         self.main_full_redraw = True
         self.logs_dirty = True
