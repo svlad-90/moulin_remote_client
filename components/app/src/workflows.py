@@ -77,6 +77,7 @@ class AppWorkflowController:
             confirm_action=port.confirm_sync_action,
             reload_runtime=port.load_active_project_runtime,
             reload_project_source_runtime=lambda: self.start_project_source_reload(port),
+            refresh_preflight=lambda target: target.connection_workflow_service().start_build_host_connect(target),
             restore_project_menu_input=lambda: port.screen.timeout(-1),
             reset_preflight=lambda: ui_session.reset_preflight(port),
         )
@@ -143,7 +144,6 @@ class AppWorkflowController:
             self.manifest_cache.clear()
             port.load_active_project_runtime(lambda _config, _path: str(value))
             port.project_config_source = "Git remote"
-            port.items = port.build_items()
             port.project_source_reload_completed = int(getattr(port, "project_source_reload_completed", 0)) + 1
             port.status = "Parameters loaded from selected Git ref"
         except Exception as exc:

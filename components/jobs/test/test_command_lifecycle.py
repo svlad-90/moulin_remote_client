@@ -36,6 +36,7 @@ class FakePort:
         self.board_auto_connect_count = 0
         self.config_reload_count = 0
         self.render_cache: dict[str, Any] = {"header": "cached"}
+        self.job_state_notifications = 0
 
     def start_pending_auto_board_connect(self) -> bool:
         self.board_auto_connect_count += 1
@@ -43,6 +44,9 @@ class FakePort:
 
     def reload_config_from_disk(self) -> None:
         self.config_reload_count += 1
+
+    def notify_job_state_changed(self) -> None:
+        self.job_state_notifications += 1
 
 
 def _service(
@@ -94,6 +98,8 @@ class CommandLifecycleServiceTests(unittest.TestCase):
         _service(started=started).start_next_command(port, job)
 
         self.assertEqual(started, [(job, ["ninja", "full_ufs.img.gz"])])
+        job["process_finished"]()
+        self.assertEqual(port.job_state_notifications, 1)
         self.assertTrue(port.logs_dirty)
         self.assertEqual(
             jobs.job_output_lines(job),

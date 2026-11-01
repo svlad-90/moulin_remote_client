@@ -42,6 +42,15 @@ class AppTerminalPortAdapter:
     def unread_key(self, ch: int) -> None:
         self.terminal_port.unread_key(ch)
 
+    def notify_job_state_changed(self) -> None:
+        self.terminal_port.notify_job_state_changed()
+
+    def wait_for_key_or_job_event(self, port: Any, timeout: float | None) -> int:
+        return self.terminal_port.wait_for_key_or_job_event(port, timeout)
+
+    def close_job_event_channel(self) -> None:
+        self.terminal_port.close_job_event_channel()
+
     def read_queued_text(self, port: Any, first_ch: int) -> str:
         return self.terminal_port.read_queued_text(port, first_ch)
 

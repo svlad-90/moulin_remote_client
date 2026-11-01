@@ -117,6 +117,9 @@ class AppServicesController:
     def stop_running_command(self, port: Any, slot: str | None = None) -> None:
         self.jobs.stop_running_command(port, slot)
 
+    def cancel_connection_job(self, port: Any, slot: str) -> bool:
+        return self.jobs.cancel_connection_job(port, slot)
+
     def finish_active_job(self, port: Any, job: dict[str, Any] | None = None) -> None:
         self.jobs.finish_active_job(port, job)
 

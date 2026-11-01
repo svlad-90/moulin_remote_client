@@ -8,9 +8,18 @@ from typing import Any
 from components.host_config_ui.api import board_screen_renderer as config_board_screen_renderer_api
 from components.host_config_ui.api import board_screen_state as config_board_screen_state_api
 from components.host_config.api import fields as config_field_api
+from components.jobs.api import jobs as job_api
 from components.ui.api import input as ui_input_api
 from components.ui.api import menu as ui_menu_api
 from components.ui.api import text as ui_text_api
+
+
+def _read_key_or_board_job_event(port: Any) -> int:
+    ch = port.wait_for_key_or_job_event(None)
+    if ch == job_api.JOB_STATE_WAKE_KEY:
+        port.poll_active_jobs()
+        return -1
+    return ch
 
 
 def run_board_host_configurations_screen(
@@ -64,9 +73,8 @@ def run_board_host_configurations_screen(
                 pass
         else:
             port.set_cursor(False)
-        port.screen.timeout(-1)
         port.screen.refresh()
-        ch = port.read_key()
+        ch = _read_key_or_board_job_event(port)
         if ch == -1:
             continue
         if state.editing_key:

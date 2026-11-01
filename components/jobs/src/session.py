@@ -41,6 +41,9 @@ class JobSessionController:
     def stop_running_command(self, port: Any, slot: str | None = None) -> None:
         self.command_control_service().stop_running_command(port, slot)
 
+    def cancel_connection_job(self, port: Any, slot: str) -> bool:
+        return self.command_control_service().cancel_connection_job(port, slot)
+
     def finish_active_job(self, port: Any, job: dict[str, Any] | None = None) -> None:
         self.command_workflow_service(port).finish_job(port, job)
 

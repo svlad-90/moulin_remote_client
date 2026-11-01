@@ -108,6 +108,43 @@ class CommandControlServiceTests(unittest.TestCase):
 
         self.assertEqual(port.status, "No board command is running")
 
+    def test_cancel_connection_job_terminates_and_releases_build_slot(self) -> None:
+        port = FakeControlPort()
+        port.active_job = jobs.create_build_connect_job(
+            item_label="Connect build host",
+            command=["ssh", "old-host"],
+            started_at=1.0,
+        )
+        old_job = port.active_job
+        old_job["process"] = FakeProcess(None, pid=4321)
+        terminations: list[tuple[int, int]] = []
+        service = command_control.CommandControlService(
+            terminate_process_group=lambda pid, sig: terminations.append((pid, sig)),
+        )
+
+        cancelled = service.cancel_connection_job(port, "build")
+
+        self.assertTrue(cancelled)
+        self.assertEqual(terminations, [(4321, signal.SIGTERM)])
+        self.assertIsNone(port.active_job)
+        self.assertIs(port.last_job, old_job)
+        self.assertIn("cancelled: host selection changed", jobs.job_output_lines(old_job))
+
+    def test_cancel_connection_job_preserves_non_connection_build(self) -> None:
+        port = FakeControlPort()
+        port.active_job = jobs.create_command_job(
+            title="Build",
+            item_label="Build",
+            slot="build",
+            commands=[],
+        )
+        service = command_control.CommandControlService(
+            terminate_process_group=lambda _pid, _sig: None,
+        )
+
+        self.assertFalse(service.cancel_connection_job(port, "build"))
+        self.assertIsNotNone(port.active_job)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -140,7 +140,6 @@ class ClientApp:
         self.rebuild_config_store()
         self.load_active_project_runtime()
         self.refresh_mapping_selection_cache()
-        self.items = self.build_items()
         self.menu_dirty = True
         self.main_full_redraw = True
         self.logs_dirty = True
@@ -193,6 +192,15 @@ class ClientApp:
 
     def unread_key(self, ch: int) -> None:
         self.terminal.unread_key(ch)
+
+    def notify_job_state_changed(self) -> None:
+        self.terminal.notify_job_state_changed()
+
+    def wait_for_key_or_job_event(self, timeout: float | None) -> int:
+        return self.terminal.wait_for_key_or_job_event(self, timeout)
+
+    def close_job_event_channel(self) -> None:
+        self.terminal.close_job_event_channel()
 
     def read_queued_text(self, first_ch: int) -> str:
         return self.terminal.read_queued_text(self, first_ch)
@@ -283,6 +291,9 @@ class ClientApp:
 
     def stop_running_command(self, slot: str | None = None) -> None:
         self.services.stop_running_command(self, slot)
+
+    def cancel_connection_job(self, slot: str) -> bool:
+        return self.services.cancel_connection_job(self, slot)
 
     def finish_active_job(self, job: dict[str, Any] | None = None) -> None:
         self.services.finish_active_job(self, job)

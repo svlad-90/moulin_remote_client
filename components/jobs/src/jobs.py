@@ -11,6 +11,9 @@ from collections import deque
 from typing import Any, Callable
 
 
+JOB_STATE_WAKE_KEY = 0
+
+
 def create_command_job(
     *,
     title: str,
@@ -551,6 +554,25 @@ def join_output_reader(job: dict[str, Any], *, timeout: float = 0.2) -> None:
         join(timeout=timeout)
 
 
+def schedule_connect_timeout_wakeup(job: dict[str, Any], wake: Callable[[], None]) -> None:
+    if job.get("kind") not in {"connect", "board-connect"}:
+        return
+    timeout = float(job.get("timeout") or 0.0)
+    if timeout <= 0:
+        return
+    timer = threading.Timer(timeout + 0.05, wake)
+    timer.daemon = True
+    job["timeout_wakeup_timer"] = timer
+    timer.start()
+
+
+def cancel_connect_timeout_wakeup(job: dict[str, Any] | None) -> None:
+    timer = job.get("timeout_wakeup_timer") if job is not None else None
+    cancel = getattr(timer, "cancel", None)
+    if callable(cancel):
+        cancel()
+
+
 def completed_command_sequence_state(job: dict[str, Any]) -> dict[str, Any]:
     rc = int(job.get("rc") or 0)
     title = str(job.get("title", "Command"))
@@ -886,6 +908,12 @@ def read_process_output_stream(
             stdout.close()
         except Exception:
             pass
+        wait = getattr(process, "wait", None)
+        if callable(wait):
+            wait()
+        process_finished = job.get("process_finished")
+        if callable(process_finished):
+            process_finished()
 
 
 def start_command_process(

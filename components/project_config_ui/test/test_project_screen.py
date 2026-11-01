@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
 
+from components.jobs.api import jobs
 from components.project_config_ui.api import project_screen
 from components.project_config_ui.src import project_screen as project_screen_src
 
@@ -50,11 +51,20 @@ class FakeProjectConfigPort:
         self.add_calls = 0
         self.set_active_calls: list[str] = []
         self.delete_calls: list[str] = []
+        self.poll_active_job_calls = 0
+        self.wait_timeouts: list[float | None] = []
 
     def read_key(self) -> int:
         if not self.screen.keys:
             raise AssertionError("fake key queue is empty")
         return self.screen.keys.pop(0)
+
+    def wait_for_key_or_job_event(self, timeout: float | None) -> int:
+        self.wait_timeouts.append(timeout)
+        return self.read_key()
+
+    def poll_active_jobs(self) -> None:
+        self.poll_active_job_calls += 1
 
     def read_queued_text(self, _first_char: int) -> str:
         if 32 <= _first_char < 127:
@@ -243,6 +253,13 @@ def config_with_projects() -> dict[str, Any]:
 
 
 class ProjectConfigurationScreenControllerTests(unittest.TestCase):
+    def test_job_event_polls_preflight_without_dispatching_a_key(self) -> None:
+        port = FakeProjectConfigPort([jobs.JOB_STATE_WAKE_KEY])
+
+        self.assertEqual(project_screen_src.read_key_while_polling(port), -1)
+        self.assertEqual(port.poll_active_job_calls, 1)
+        self.assertEqual(port.wait_timeouts, [None])
+
     def test_select_product_type_uses_list_navigation(self) -> None:
         port = FakeProjectConfigPort([ord("j"), 10])
         service = FakeProductTypeService([

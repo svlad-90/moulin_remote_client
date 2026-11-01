@@ -440,15 +440,22 @@ class JobsBehaviorTests(unittest.TestCase):
         os.close(write_fd)
         job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
         dirty_count = 0
+        finished_count = 0
 
         def mark_dirty() -> None:
             nonlocal dirty_count
             dirty_count += 1
 
+        def process_finished() -> None:
+            nonlocal finished_count
+            finished_count += 1
+
+        job["process_finished"] = process_finished
         jobs.read_process_output_stream(FakeStreamProcess(read_fd), job, mark_dirty)
 
         self.assertEqual(jobs.job_output_lines(job), ["abc", "next"])
         self.assertGreaterEqual(dirty_count, 1)
+        self.assertEqual(finished_count, 1)
 
     def test_start_command_process_attaches_process_and_reader(self) -> None:
         job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])

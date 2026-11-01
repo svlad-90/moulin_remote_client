@@ -473,10 +473,42 @@ class MenuModelBehaviorTests(unittest.TestCase):
             MenuItem("Stop running command", "build commands", "", lambda app: "", lambda app: None),
         ]
 
-        self.assertEqual(menu.sync_menu_selection(old_items, 1, new_items, [True, True, True]), 1)
-        self.assertEqual(menu.sync_menu_selection(old_items, 99, new_items, [True, True, True]), 1)
-        self.assertEqual(menu.sync_menu_selection(old_items, 0, [], []), 0)
-        self.assertEqual(menu.sync_menu_selection(old_items, 1, new_items, [True, False, True]), 2)
+        self.assertEqual(menu.sync_menu_selection(old_items, 1, new_items), 1)
+        self.assertEqual(menu.sync_menu_selection(old_items, 99, new_items), 1)
+        self.assertEqual(menu.sync_menu_selection(old_items, 0, []), 0)
+
+    def test_sync_menu_selection_uses_same_tab_position_when_selected_item_disappears(self) -> None:
+        old_items = [
+            MenuItem("Select build host", "sessions / build host", "", lambda app: "", lambda app: None),
+            MenuItem("Open shell", "sessions / build host", "", lambda app: "", lambda app: None),
+            MenuItem("Checkout project Git ref", "build", "", lambda app: "", lambda app: None),
+            MenuItem("Run product build", "build", "", lambda app: "", lambda app: None),
+            MenuItem("Incremental rebuild", "build", "", lambda app: "", lambda app: None),
+        ]
+        new_items = [
+            MenuItem("Select build host", "sessions / build host", "", lambda app: "", lambda app: None),
+            MenuItem("Open shell", "sessions / build host", "", lambda app: "", lambda app: None),
+            MenuItem("Run product build", "build", "", lambda app: "", lambda app: None),
+            MenuItem("Incremental rebuild", "build", "", lambda app: "", lambda app: None),
+        ]
+
+        self.assertEqual(
+            menu.sync_menu_selection(old_items, 2, new_items, "build"),
+            2,
+        )
+
+    def test_sync_menu_selection_clamps_disappeared_last_item_to_last_tab_position(self) -> None:
+        old_items = [
+            MenuItem("Run product build", "build", "", lambda app: "", lambda app: None),
+            MenuItem("Incremental rebuild", "build", "", lambda app: "", lambda app: None),
+            MenuItem("Clean incremental build", "build", "", lambda app: "", lambda app: None),
+        ]
+        new_items = old_items[:2]
+
+        self.assertEqual(
+            menu.sync_menu_selection(old_items, 2, new_items, "build"),
+            1,
+        )
 
     def test_item_enabled_preserves_command_gating_order(self) -> None:
         copy_item = MenuItem("Copy build artifacts", "board commands", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True)

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from components.host_config.api import fields as host_field_api
+from components.jobs.api import jobs as job_api
 from components.project_config.api import fields as project_field_api
 from components.project_config.api import project_field_action_service as config_project_field_action_api
 from components.project_config.api import project_profile_screen_service as config_project_profile_screen_api
@@ -47,7 +48,11 @@ def project_fields(params: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def read_key_while_polling(port: Any) -> int:
     while True:
         task = getattr(port, "project_source_reload_task", None)
-        ch = port.read_key()
+        timeout = 0.1 if task is not None else None
+        ch = port.wait_for_key_or_job_event(timeout)
+        if ch == job_api.JOB_STATE_WAKE_KEY:
+            port.poll_active_jobs()
+            return -1
         if ch != -1 or task is None:
             return ch
         poll_background_tasks = getattr(port, "poll_background_tasks", None)
@@ -210,8 +215,6 @@ def run_project_configurations_screen(
                 pass
         else:
             port.set_cursor(False)
-        timeout = 100 if getattr(port, "project_source_reload_task", None) is not None else -1
-        port.screen.timeout(timeout)
         if connected and not params_loaded:
             port.add(height - 1, 0, "Loading Moulin parameters...".ljust(width), curses.A_REVERSE)
         port.screen.refresh()

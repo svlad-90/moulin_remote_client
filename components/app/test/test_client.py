@@ -176,6 +176,7 @@ class ClientAppFactoryTests(unittest.TestCase):
 
             app.load_active_project_runtime()
             app.refresh_mapping_selection_cache()
+            app.items = ["old-item"]
             app.reload_config_from_disk()
             app.ui_profile("event", value="x")
             self.assertEqual(app.ui_profile_slow("slow", 1.0), 12.5)
@@ -191,6 +192,7 @@ class ClientAppFactoryTests(unittest.TestCase):
             app.quit()
 
             self.assertEqual(app.config, {"reloaded": True})
+            self.assertEqual(app.items, ["old-item"])
             self.assertEqual(dependencies.manifest_cache, {})
             self.assertEqual(fake_state.runtime_calls, [app, app])
             self.assertEqual(fake_state.refresh_calls, [app, app])

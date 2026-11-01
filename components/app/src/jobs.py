@@ -48,6 +48,9 @@ class AppJobController:
     def stop_running_command(self, port: Any, slot: str | None = None) -> None:
         self.job_session_controller(port).stop_running_command(port, slot)
 
+    def cancel_connection_job(self, port: Any, slot: str) -> bool:
+        return self.job_session_controller(port).cancel_connection_job(port, slot)
+
     def finish_active_job(self, port: Any, job: dict[str, Any] | None = None) -> None:
         self.job_session_controller(port).finish_active_job(port, job)
 

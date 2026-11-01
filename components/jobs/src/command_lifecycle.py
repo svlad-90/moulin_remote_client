@@ -39,6 +39,7 @@ class CommandLifecycleService:
     def finish_job(self, port: Any, job: dict[str, Any] | None = None) -> None:
         if job is None:
             job = port.active_job
+        job_api.cancel_connect_timeout_wakeup(job)
         if job is not None:
             label = str(job.get("item_label", ""))
             if label:
@@ -83,7 +84,13 @@ class CommandLifecycleService:
         for line in start["log_lines"]:
             job_api.append_job_output(job, line)
         port.logs_dirty = True
+
+        def wake() -> None:
+            port.notify_job_state_changed()
+
+        job["process_finished"] = wake
         self.start_command_process(job, start["command"], lambda: setattr(port, "logs_dirty", True))
+        job_api.schedule_connect_timeout_wakeup(job, wake)
 
     def poll_jobs(self, port: Any) -> None:
         for job in list(job_api.running_job_list(port.active_job, port.board_job)):

@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from components.ui.api import input as ui_input
 from components.ui.api import terminal_port
+from components.jobs.api import jobs
 
 
 class FakeCursesError(Exception):
@@ -112,6 +113,20 @@ class FakePort:
 
 
 class TerminalPortControllerTests(unittest.TestCase):
+    def test_job_notification_wakes_event_wait(self) -> None:
+        port = FakePort()
+        controller = terminal_port.terminal_port_controller()
+        try:
+            controller.notify_job_state_changed()
+
+            with patch("components.ui.src.terminal_port.curses", FakeCurses()):
+                self.assertEqual(
+                    controller.wait_for_key_or_job_event(port, 0.1),
+                    jobs.JOB_STATE_WAKE_KEY,
+                )
+        finally:
+            controller.close_job_event_channel()
+
     def test_setup_colors_initializes_current_pairs(self) -> None:
         fake_curses = FakeCurses()
 
