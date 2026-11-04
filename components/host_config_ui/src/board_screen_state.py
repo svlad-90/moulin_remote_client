@@ -51,7 +51,14 @@ class BoardScreenStateController:
 
     @staticmethod
     def boards(host: dict[str, Any] | None) -> list[dict[str, Any]]:
-        return [item for item in (host or {}).get("boards", []) if isinstance(item, dict)]
+        boards = [item for item in (host or {}).get("boards", []) if isinstance(item, dict)]
+        return sorted(
+            boards,
+            key=lambda item: (
+                str(item.get("name") or "").casefold(),
+                str(item.get("id") or "").casefold(),
+            ),
+        )
 
     def selected_board(self, boards: list[dict[str, Any]]) -> dict[str, Any] | None:
         if not self.state.board_index_initialized:
