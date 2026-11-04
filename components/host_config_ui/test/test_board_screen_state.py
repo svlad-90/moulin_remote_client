@@ -55,6 +55,33 @@ class BoardScreenStateControllerTests(unittest.TestCase):
         self.assertEqual(controller.state.board_index, 1)
         self.assertEqual(board, {"name": "board-b"})
 
+    def test_boards_are_sorted_by_name_without_mutating_config(self) -> None:
+        cfg = {
+            "board_hosts": [
+                {
+                    "name": "carla",
+                    "boards": [
+                        {"name": "carla.ih2"},
+                        {"name": "Carla.ih1"},
+                        {"name": "carla.ih3"},
+                    ],
+                }
+            ],
+        }
+        controller = board_screen_state.BoardScreenStateController(cfg)
+        configured_boards = cfg["board_hosts"][0]["boards"]  # type: ignore[index]
+
+        boards = controller.boards(cfg["board_hosts"][0])  # type: ignore[index]
+
+        self.assertEqual(
+            [board["name"] for board in boards],
+            ["Carla.ih1", "carla.ih2", "carla.ih3"],
+        )
+        self.assertEqual(
+            [board["name"] for board in configured_boards],
+            ["carla.ih2", "Carla.ih1", "carla.ih3"],
+        )
+
     def test_navigation_action_moves_focus_and_indexes(self) -> None:
         controller = board_screen_state.BoardScreenStateController(config())
         port = FakePort()
