@@ -312,8 +312,8 @@ sys.stdout.buffer.flush()
             ),
             BoardAction(
                 "flash_bootloaders",
-                "Flash bootloaders (flash mode) from build host",
-                "Use boot artifacts copied from the build host, enter flash mode, flash x5h_bootloaders.yaml, then switch the board to boot mode.",
+                "Flash bootloaders (flash mode) from board host",
+                "Use boot artifacts from the board host staging directory, enter flash mode, flash x5h_bootloaders.yaml, then switch the board to boot mode.",
                 local_artifact=BoardLocalArtifactSpec(
                     "Select boot-artifacts archive",
                     "Expected: .tar, .tar.gz, or .tar.bz2",
@@ -322,8 +322,8 @@ sys.stdout.buffer.flush()
             ),
             BoardAction(
                 "flash_single_ipl",
-                "Flash bootloaders from build host",
-                "Select all or a subset of YAML UFS images copied from the build host. Enter U-Boot once and flash in YAML order; stop on the first error.",
+                "Flash bootloaders from board host",
+                "Select all or a subset of YAML UFS images from the board host staging directory. Enter U-Boot once and flash in YAML order; stop on the first error.",
                 confirm=False,
                 local_artifact=BoardLocalArtifactSpec(
                     "Select boot-artifacts archive",
@@ -334,8 +334,8 @@ sys.stdout.buffer.flush()
             ),
             BoardAction(
                 "flash_ufs_image",
-                "Flash UFS image from build host",
-                "Flash artifacts/full_ufs.img.gz copied from the build host to UFS over /dev/GEN5_CONSOLE.",
+                "Flash UFS image from board host",
+                "Flash artifacts/full_ufs.img.gz from the board host staging directory to UFS over /dev/GEN5_CONSOLE.",
                 target_patterns=("full_ufs.img.gz",),
                 local_artifact=BoardLocalArtifactSpec(
                     "Select full UFS image",
