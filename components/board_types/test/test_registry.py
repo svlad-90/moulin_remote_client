@@ -67,9 +67,9 @@ class BoardTypeRegistryTests(unittest.TestCase):
             [
                 ("open_board_host_shell", "Open board host shell"),
                 ("copy_build_artifacts", "Copy build artifacts"),
-                ("flash_bootloaders", "Flash bootloaders (flash mode) from build host"),
-                ("flash_single_ipl", "Flash bootloaders from build host"),
-                ("flash_ufs_image", "Flash UFS image from build host"),
+                ("flash_bootloaders", "Flash bootloaders (flash mode) from board host"),
+                ("flash_single_ipl", "Flash bootloaders from board host"),
+                ("flash_ufs_image", "Flash UFS image from board host"),
                 ("restart_board", "Restart board"),
                 ("open_board_serial_console", "Open board serial console"),
                 ("open_uboot_console", "Open U-Boot console"),

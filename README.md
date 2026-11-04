@@ -749,11 +749,12 @@ for a complete release update.
    - Auto-detect `/dev/GEN5_CONSOLE*` when no console device is configured.
    - Flash `full_ufs.img.gz` through the vendored imager helper.
 
-Each of the three flash actions opens a source submenu. **Build host** uses the
-artifact previously copied from the configured build host. **Local file** opens
-a local filesystem browser, starting in `~/Downloads` when that directory
-exists. The browser remembers its last selected directory and reuses it for all
-three actions.
+Each of the three flash actions opens a source submenu. **Board host artifact**
+uses the configured artifact already present in the active board host staging
+directory. It does not open a remote file browser or require a build-host
+connection. **Local file** opens a local filesystem browser, starting in
+`~/Downloads` when that directory exists. The browser remembers its last
+selected directory and reuses it for all three actions.
 Directories can be traversed with Enter and Left/Backspace. The selected file
 is streamed directly to the active board host, without using a build host or
 project checkout. Normal bootloader flashing prepares the archive and writes

@@ -1927,12 +1927,12 @@ done
         return True, ""
 
     def artifact_source_flash_item(self, action: Any) -> MenuItem:
-        label = action.label.removesuffix(" from build host")
+        label = action.label.removesuffix(" from board host")
         return MenuItem(
             label,
             self.board_action_group(action.action_id),
-            f"Select whether the target artifact comes from the build host or a local file. {action.description}",
-            lambda _app, label=label: f"{label}: select Build host or Local file as the artifact source.",
+            f"Select whether the target artifact is already on the board host or comes from a local file. {action.description}",
+            lambda _app, label=label: f"{label}: select Board host artifact or Local file as the artifact source.",
             lambda app, action_id=action.action_id, label=label: self.run_artifact_source_flash(
                 app, action_id, label
             ),
@@ -1975,7 +1975,11 @@ done
 
     def select_artifact_source(self, app: Any, *, title: str) -> str | None:
         choices = [
-            ("build_host", "Build host", "Use artifacts previously copied from the configured build host."),
+            (
+                "board_host",
+                "Board host artifact",
+                "Use the configured artifact file already present on the board host.",
+            ),
             ("local_file", "Local file", "Browse the local filesystem and upload the selected artifact."),
         ]
         index = self.artifact_source_index
@@ -2014,10 +2018,10 @@ done
                         app.add(row, detail_x, line)
                         row += 1
                     row += 1
-                    if source_id == "build_host":
+                    if source_id == "board_host":
                         detail_lines = [
-                            ("Build host", config_accessors.remote_label_for_config(app.config)),
-                            ("SSH", config_accessors.remote_spec_for_config(app.config)),
+                            ("Board host", config_accessors.board_host_label_for_config(app.config)),
+                            ("SSH", config_accessors.board_host_spec_for_config(app.config)),
                             ("Board staging", config_accessors.board_artifacts_dir_for_config(app.config)),
                         ]
                     else:

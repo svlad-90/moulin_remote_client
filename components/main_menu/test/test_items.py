@@ -645,6 +645,9 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             self.assertEqual(source, "local_file")
             self.assertEqual(app.screen.timeouts, [-1, 1000])
+            rendered_text = "\n".join(call[2].strip() for call in app.add_calls)
+            self.assertIn("1. Board host artifact", rendered_text)
+            self.assertNotIn("1. Build host", rendered_text)
 
     def test_cancelling_file_picker_returns_to_source_menu(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -671,7 +674,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(app.status, "Flash UFS image: source selection cancelled")
             self.assertEqual(app.screen.timeouts, [-1, 1000, -1, 1000])
 
-    def test_build_host_part_selection_escape_returns_to_source_menu(self) -> None:
+    def test_board_host_part_selection_escape_returns_to_source_menu(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
             builder = items.main_menu_builder(
@@ -689,7 +692,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             with patch.object(
                 builder.command_items,
                 "select_artifact_source",
-                side_effect=["build_host", None],
+                side_effect=["board_host", None],
             ) as source_menu, patch.object(
                 builder.command_items,
                 "run_board_action",

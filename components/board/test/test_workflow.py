@@ -169,9 +169,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
             [
                 "Open board host shell",
                 "Copy build artifacts",
-                "Flash bootloaders (flash mode) from build host",
-                "Flash bootloaders from build host",
-                "Flash UFS image from build host",
+                "Flash bootloaders (flash mode) from board host",
+                "Flash bootloaders from board host",
+                "Flash UFS image from board host",
                 "Restart board",
             ],
         )
@@ -752,7 +752,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
 
         self.assertEqual(
             [title for title, _commands in calls],
-            ["Flash bootloaders (flash mode) from build host", "Flash UFS image from build host"],
+            ["Flash bootloaders (flash mode) from board host", "Flash UFS image from board host"],
         )
         self.assertEqual(calls[0][1], service.flash_bootloaders_commands(config))
         self.assertEqual(calls[1][1], service.flash_ufs_image_commands(config))
