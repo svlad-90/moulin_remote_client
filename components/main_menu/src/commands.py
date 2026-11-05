@@ -59,6 +59,10 @@ class MainMenuCommandItemsService:
         self.component_clean_dry_run = True
         self.moulin_target_clean_index = 0
         self.artifact_source_index = 0
+        self.product_update_index = 0
+        self.product_update_steps = {"checkout", "regenerate"}
+        self.product_update_checkout_mode = "safe"
+        self.product_update_force_sync = False
 
     def build_items(self, app: Any) -> list[MenuItem]:
         items = [
@@ -92,8 +96,17 @@ class MainMenuCommandItemsService:
                 requires_project=True,
             ),
             MenuItem(
-                "Copy mapped files to build host",
+                "Update product",
                 "build / commands",
+                "Choose and run explicit product update stages: checkout, Moulin regeneration, and Repo source synchronization.",
+                lambda app: self.product_update_preview(app),
+                lambda app: self.run_product_update_menu(app),
+                requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Copy mapped files to build host",
+                "build / files mapping",
                 "Push selected local mapped files to the configured build host.",
                 lambda app: ui_menu_api.command_preview(
                     self.sync_command_workflow.mapped_files_push_sequence(app.config)
@@ -476,6 +489,20 @@ class MainMenuCommandItemsService:
         )
 
     def order_items(self, items: list[MenuItem]) -> list[MenuItem]:
+        build_group_order = {
+            "build host": 0,
+            "docker": 1,
+            "configuration": 2,
+            "commands": 3,
+            "files mapping": 4,
+        }
+        flashing_group_order = {
+            "hosts": 0,
+            "ownership": 1,
+            "board": 2,
+            "commands": 3,
+            "board setup": 4,
+        }
         tftp_group_order = {
             "deploy artifacts": 0,
             "tftp/nfs workspace": 1,
@@ -484,28 +511,41 @@ class MainMenuCommandItemsService:
             "board control": 4,
             "open remote roots": 5,
         }
-        tftp_items = [(index, item) for index, item in enumerate(items) if self.item_parent_group(item) == "tftp/nfs"]
-        if not tftp_items:
-            return items
+        items = self.order_parent_items(items, "build", build_group_order)
+        items = self.order_parent_items(items, "flashing", flashing_group_order)
+        return self.order_parent_items(items, "tftp/nfs", tftp_group_order)
 
-        ordered_tftp_items = [
+    def order_parent_items(
+        self,
+        items: list[MenuItem],
+        parent: str,
+        child_order: dict[str, int],
+    ) -> list[MenuItem]:
+        parent_items = [
+            (index, item)
+            for index, item in enumerate(items)
+            if self.item_parent_group(item) == parent
+        ]
+        if not parent_items:
+            return items
+        ordered_parent_items = [
             item
             for _index, item in sorted(
-                tftp_items,
+                parent_items,
                 key=lambda pair: (
-                    tftp_group_order.get(self.item_child_group(pair[1]), len(tftp_group_order)),
+                    child_order.get(self.item_child_group(pair[1]), len(child_order)),
                     pair[0],
                 ),
             )
         ]
-        tftp_item_ids = {id(item) for _index, item in tftp_items}
+        parent_item_ids = {id(item) for _index, item in parent_items}
         ordered_items: list[MenuItem] = []
-        inserted_tftp_items = False
+        inserted_parent_items = False
         for item in items:
-            if id(item) in tftp_item_ids:
-                if not inserted_tftp_items:
-                    ordered_items.extend(ordered_tftp_items)
-                    inserted_tftp_items = True
+            if id(item) in parent_item_ids:
+                if not inserted_parent_items:
+                    ordered_items.extend(ordered_parent_items)
+                    inserted_parent_items = True
                 continue
             ordered_items.append(item)
         return ordered_items
@@ -513,12 +553,186 @@ class MainMenuCommandItemsService:
     def configure_copied_artifacts_item(self) -> MenuItem:
         return MenuItem(
             "Configure copied artifacts",
-            "flashing / configuration",
+            "flashing / commands",
             "Choose which build artifacts are copied to the board host artifacts directory.",
             lambda app: f"Current copied artifacts: {getattr(app, 'board_artifacts', '') or app.build_targets or '<not set>'}",
             lambda app: app.config_workflow_controller().select_board_artifacts(app),
             requires_project=True,
         )
+
+    def product_update_preview(self, app: Any) -> str:
+        selected_ref = config_accessors.project_git_ref_for_config(app.config) or "<not configured>"
+        values = getattr(app, "preflight_values", {})
+        remote_ref = values.get("remote_ref", "not-fetched")
+        synced_ref = values.get("synced_ref", "unknown")
+        enabled = [
+            label
+            for step, label in (
+                ("checkout", "checkout"),
+                ("regenerate", "regenerate"),
+                ("sync", "force-sync" if self.product_update_force_sync else "sync"),
+            )
+            if step in self.product_update_steps
+        ]
+        return (
+            f"Selected: {selected_ref}\nRemote: {remote_ref}\nSynced: {synced_ref}\n"
+            f"Update stages: {', '.join(enabled) or '<none>'}\n"
+            f"Checkout mode: {self.product_update_checkout_mode}"
+        )
+
+    def select_product_update_steps(self, app: Any) -> tuple[set[str], bool, str] | None:
+        options = [
+            (
+                "checkout",
+                "Fetch and checkout selected product ref",
+                "Fetch origin and switch the product checkout to the ref selected in Project configuration.",
+            ),
+            (
+                "regenerate",
+                "Regenerate Moulin/Ninja",
+                "Regenerate build.ninja from the product manifest and current build parameters.",
+            ),
+            (
+                "sync",
+                "Synchronize Repo source workspaces",
+                "Synchronize Android and other Repo workspaces after checking that they contain no local changes.",
+            ),
+            (
+                "force_sync",
+                "Repair Repo metadata links (--force-sync)",
+                "Allow Repo to replace incompatible Git object-directory links after the local-change check passes.",
+            ),
+        ]
+        selected = set(self.product_update_steps)
+        checkout_modes = ("safe", "stash", "repair")
+        checkout_mode_descriptions = {
+            "safe": "Safe: refuse checkout when tracked local changes are present.",
+            "stash": "Stash: back up local changes before checkout.",
+            "repair": "Repair: remove a stale lock, back up changes, then reset/clean only if needed.",
+        }
+        checkout_mode = self.product_update_checkout_mode
+        force_sync = self.product_update_force_sync
+        index = self.product_update_index
+        app.screen.timeout(-1)
+        try:
+            while True:
+                app.screen.erase()
+                height, width = app.screen.getmaxyx()
+                if height < 16 or width < 72:
+                    app.add(0, 0, "Terminal is too small. Need at least 72x16.", app.warn_attr())
+                    app.screen.refresh()
+                    ch = app.read_key()
+                    if ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                        return None
+                    continue
+
+                index = ui_menu_api.clamp_index(index, len(options))
+                app.draw_box(0, 0, height - 2, width, "Update Product")
+                values = getattr(app, "preflight_values", {})
+                status_lines = [
+                    ("Selected", config_accessors.project_git_ref_for_config(app.config) or "<not configured>"),
+                    ("Remote", values.get("remote_ref", "not-fetched")),
+                    ("Synced", values.get("synced_ref", "unknown")),
+                ]
+                for row, (label, value) in enumerate(status_lines, start=1):
+                    app.add(row, 2, f"{label}:".ljust(11), app.accent_attr())
+                    app.add(row, 13, ui_text_api.fit_text(value, width - 15))
+
+                app.add(5, 2, "Select update stages and Repo options. Space toggles the selected row.", app.accent_attr())
+                for offset, (step, label, _description) in enumerate(options):
+                    enabled = force_sync if step == "force_sync" else step in selected
+                    mark = "[x]" if enabled else "[ ]"
+                    row = 7 + offset
+                    attr = app.selected_attr() if offset == index else 0
+                    app.add(row, 2, ui_text_api.fit_text(f"{mark} {label}", width - 4).ljust(width - 4), attr)
+
+                sync_mode = "force" if force_sync else "normal"
+                checkout_attr = app.warn_attr() if checkout_mode == "repair" else app.accent_attr()
+                app.add(
+                    11,
+                    2,
+                    ui_text_api.fit_text(
+                        f"Modes: checkout={checkout_mode} | repo-sync={sync_mode}",
+                        width - 4,
+                    ),
+                    checkout_attr,
+                )
+                description = options[index][2]
+                if options[index][0] == "checkout":
+                    description = checkout_mode_descriptions[checkout_mode]
+                app.add(height - 4, 2, ui_text_api.fit_text(description, width - 4))
+                footer = "Up/Down: select | Space: toggle | c: checkout mode | f: sync mode | Enter: run | q/Esc: back"
+                app.add(height - 2, 0, footer[:width], app.accent_attr())
+                app.add(height - 1, 0, app.status[:width].ljust(width), curses.A_REVERSE)
+                app.screen.refresh()
+                ch = app.read_key()
+                if ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
+                    index = ui_menu_api.move_index(index, len(options), -1)
+                elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j"):
+                    index = ui_menu_api.move_index(index, len(options), 1)
+                elif ch == ord(" "):
+                    step = options[index][0]
+                    if step == "force_sync":
+                        force_sync = not force_sync
+                    elif step in selected:
+                        selected.remove(step)
+                    else:
+                        selected.add(step)
+                elif ui_input_api.key_code_matches(ch, "f"):
+                    force_sync = not force_sync
+                elif ui_input_api.key_code_matches(ch, "c"):
+                    checkout_mode = checkout_modes[
+                        (checkout_modes.index(checkout_mode) + 1) % len(checkout_modes)
+                    ]
+                elif ch in (10, 13):
+                    if not selected:
+                        app.status = "Select at least one product update stage"
+                        continue
+                    self.product_update_index = index
+                    self.product_update_steps = set(selected)
+                    self.product_update_checkout_mode = checkout_mode
+                    self.product_update_force_sync = force_sync
+                    return selected, force_sync, checkout_mode
+                elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
+                    self.product_update_index = index
+                    self.product_update_steps = set(selected)
+                    self.product_update_checkout_mode = checkout_mode
+                    self.product_update_force_sync = force_sync
+                    return None
+        finally:
+            app.screen.timeout(250)
+
+    def run_product_update_menu(self, app: Any) -> int | None:
+        app.reload_config_from_disk()
+        selection = self.select_product_update_steps(app)
+        if selection is None:
+            return None
+        selected, force_sync, checkout_mode = selection
+        commands: list[list[str]] = []
+        if "checkout" in selected:
+            checkout_commands = {
+                "safe": self.remote_command_workflow.checkout_git_ref_command,
+                "stash": self.remote_command_workflow.stash_and_checkout_git_ref_command,
+                "repair": self.remote_command_workflow.repair_and_checkout_git_ref_command,
+            }
+            commands.append(checkout_commands[checkout_mode](app.config))
+        if "regenerate" in selected:
+            commands.append(
+                self.remote_command_workflow.moulin_regen_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                    build_params=app.build_params,
+                )
+            )
+        if "sync" in selected:
+            commands.append(
+                self.remote_command_workflow.repo_source_sync_command(
+                    app.config,
+                    docker_image=app.docker_image,
+                    force=force_sync,
+                )
+            )
+        return app.command_workflow_service().run_commands(app, "Update product", commands)
 
     def item_parent_group(self, item: MenuItem) -> str:
         return item.group.split(" / ", 1)[0]
@@ -1852,8 +2066,8 @@ done
         )
         items: list[MenuItem] = []
         camera_stream_url = config_accessors.board_camera_stream_url_for_config(app.config)
-        if camera_stream_url:
-            items.append(MenuItem(
+        camera_item = (
+            MenuItem(
                 "Open camera stream",
                 "flashing / board",
                 "Open the active board camera stream in the local default browser.",
@@ -1861,10 +2075,13 @@ done
                 lambda app, url=camera_stream_url: self.open_camera_stream(app, url),
                 confirm=False,
                 allow_during_job=True,
-            ))
+            )
+            if camera_stream_url
+            else None
+        )
         ownership_state = str(getattr(app, "board_ownership_status", {}).get("state") or "unknown")
         for action in actions:
-            if action.action_id == "ownership_acquire" and ownership_state != "free":
+            if action.action_id == "ownership_acquire" and ownership_state == "owned":
                 continue
             if action.action_id == "ownership_release" and ownership_state != "owned":
                 continue
@@ -1891,6 +2108,11 @@ done
                     lambda app, action_id=action.action_id: self.ownership_action_availability(app, action_id)
                 ) if action.action_id in {"ownership_acquire", "ownership_release"} else None,
             ))
+            if action.action_id == "open_uboot_console" and camera_item is not None:
+                items.append(camera_item)
+                camera_item = None
+        if camera_item is not None:
+            items.append(camera_item)
         return items
 
     def open_camera_stream(self, app: Any, url: str) -> bool:
@@ -1914,7 +2136,7 @@ done
             if state == "owned":
                 return False, "board is already acquired by you"
             if state == "busy":
-                return False, str(status.get("text") or "board is acquired by another user")
+                return True, ""
             return False, str(status.get("text") or "ownership status is unknown")
         if action_id == "ownership_release":
             if state == "owned":
@@ -2199,11 +2421,14 @@ done
             return "tftp/nfs / dom0 initramfs workspace"
         if action_id in {
             "apply_uboot_network_env",
-            "apply_uboot_ufs_env",
-            "inject_invasive_uboot_parameters",
             "install_nfs_deploy_helper",
         }:
             return "tftp/nfs / board setup"
+        if action_id in {
+            "apply_uboot_ufs_env",
+            "inject_invasive_uboot_parameters",
+        }:
+            return "flashing / board setup"
         if action_id in {"copy_build_artifacts", "flash_bootloaders", "flash_single_ipl", "flash_ufs_image"}:
             return "flashing / commands"
         if action_id == "open_board_host_shell":
@@ -2214,7 +2439,7 @@ done
             "open_board_serial_console",
             "open_uboot_console",
         }:
-            return "flashing / board host"
+            return "flashing / board"
         return "build"
 
     def board_action_commands(self, app: Any, action_id: str) -> list[list[str]]:

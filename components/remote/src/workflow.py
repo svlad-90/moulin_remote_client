@@ -151,6 +151,19 @@ class RemoteCommandWorkflowService:
             build_params=build_params,
         )
 
+    def repo_source_sync_command(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        force: bool,
+    ) -> list[str]:
+        return self.build_service.repo_source_sync_command_for_config(
+            config,
+            docker_image=docker_image,
+            force=force,
+        )
+
     def product_build_command(
         self,
         config: dict[str, Any],

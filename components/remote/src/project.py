@@ -89,8 +89,14 @@ class RemoteProjectMaintenanceService:
             "if [ ! -d .git ]; then printf 'target is not a git checkout\\n' >&2; exit 2; fi; "
             "if [ -n \"$(git status --porcelain --untracked-files=no)\" ]; then "
             "printf 'tracked local changes present; refusing to switch ref\\n' >&2; exit 2; fi; "
-            "git fetch origin --prune && "
-            f"git checkout {quoted_ref} && "
+            f"selected_ref={quoted_ref}; "
+            "git fetch origin --prune || exit $?; "
+            "if git show-ref --verify --quiet \"refs/remotes/origin/$selected_ref\"; then "
+            "if git show-ref --verify --quiet \"refs/heads/$selected_ref\"; then "
+            "git checkout \"$selected_ref\" || exit $?; "
+            "else git checkout --track -b \"$selected_ref\" \"origin/$selected_ref\" || exit $?; fi; "
+            "git merge --ff-only \"origin/$selected_ref\" || exit $?; "
+            "else git checkout \"$selected_ref\" || exit $?; fi; "
             "git status --short --branch"
         )
         return transport.ssh_command(remote, script)
@@ -108,8 +114,14 @@ class RemoteProjectMaintenanceService:
             "if ! git diff --cached --quiet; then "
             f"git stash push -m {stash_message} -- .; "
             "else printf 'no local changes to stash\\n'; fi; "
-            "git fetch origin --prune && "
-            f"git checkout {quoted_ref} && "
+            f"selected_ref={quoted_ref}; "
+            "git fetch origin --prune || exit $?; "
+            "if git show-ref --verify --quiet \"refs/remotes/origin/$selected_ref\"; then "
+            "if git show-ref --verify --quiet \"refs/heads/$selected_ref\"; then "
+            "git checkout \"$selected_ref\" || exit $?; "
+            "else git checkout --track -b \"$selected_ref\" \"origin/$selected_ref\" || exit $?; fi; "
+            "git merge --ff-only \"origin/$selected_ref\" || exit $?; "
+            "else git checkout \"$selected_ref\" || exit $?; fi; "
             "git status --short --branch"
         )
         return transport.ssh_command(remote, script)
@@ -149,8 +161,14 @@ class RemoteProjectMaintenanceService:
             "git clean -fd || exit $?; "
             "fi; "
             "else printf 'no local changes to stash\\n'; fi; "
-            "git fetch origin --prune && "
-            f"git checkout {quoted_ref} && "
+            f"selected_ref={quoted_ref}; "
+            "git fetch origin --prune || exit $?; "
+            "if git show-ref --verify --quiet \"refs/remotes/origin/$selected_ref\"; then "
+            "if git show-ref --verify --quiet \"refs/heads/$selected_ref\"; then "
+            "git checkout \"$selected_ref\" || exit $?; "
+            "else git checkout --track -b \"$selected_ref\" \"origin/$selected_ref\" || exit $?; fi; "
+            "git merge --ff-only \"origin/$selected_ref\" || exit $?; "
+            "else git checkout \"$selected_ref\" || exit $?; fi; "
             "git status --short --branch"
         )
         return transport.ssh_command(remote, script)
@@ -225,19 +243,54 @@ class RemoteProjectMaintenanceService:
             else "origin=$(git config --get remote.origin.url 2>/dev/null || true); "
             "if [ -n \"$origin\" ]; then printf 'origin=%s\\n' \"$origin\"; else printf 'origin=missing\\n'; fi; "
         )
-        ref_check = (
+        current_ref_state = (
             "current_ref=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true); "
             "current_head=$(git rev-parse --verify HEAD 2>/dev/null || true); "
+            "current_short=$(git rev-parse --short HEAD 2>/dev/null || true); "
+            "synced_name=${current_ref:-detached}; "
+            "if [ -n \"$current_short\" ]; then printf 'synced_ref=%s@%s\\n' \"$synced_name\" \"$current_short\"; "
+            "else printf 'synced_ref=missing\\n'; fi; "
+        )
+        ref_check = (
+            f"selected_ref={shlex.quote(expected_ref)}; "
+            "remote_head=$(git rev-parse --verify --short \"refs/remotes/origin/$selected_ref\" 2>/dev/null || true); "
+            "if [ -n \"$remote_head\" ]; then printf 'remote_ref=%s@%s\\n' \"$selected_ref\" \"$remote_head\"; "
+            "else printf 'remote_ref=not-fetched\\n'; fi; "
             f"if [ \"$current_ref\" = {shlex.quote(expected_ref)} ] || [ \"$current_head\" = {shlex.quote(expected_ref)} ]; then printf 'ref=ok\\n'; "
             "elif [ -n \"$current_ref\" ]; then printf 'ref=mismatch:%s\\n' \"$current_ref\"; "
             "elif [ -n \"$current_head\" ]; then printf 'ref=mismatch:%s\\n' \"$current_head\"; "
             "else printf 'ref=missing\\n'; fi; "
             if expected_ref
-            else "current_ref=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true); "
+            else "printf 'remote_ref=not-configured\\n'; "
             "if [ -n \"$current_ref\" ]; then printf 'ref=%s\\n' \"$current_ref\"; "
-            "else git rev-parse --short HEAD 2>/dev/null | sed 's/^/ref=/'; fi; "
+            "elif [ -n \"$current_short\" ]; then printf 'ref=%s\\n' \"$current_short\"; "
+            "else printf 'ref=missing\\n'; fi; "
         )
         quoted_project_dir = shlex.quote(project_dir)
+        git_status_check = (
+            "git_status=$(git status --short --branch 2>&1); git_status_rc=$?; "
+            "if [ \"$git_status_rc\" -ne 0 ]; then "
+            "git_error=$(printf '%s' \"$git_status\" | tr '\\n' ' '); "
+            "printf 'git=error:%s\\n' \"${git_error:-unknown failure}\"; "
+            "else "
+            "git_header=$(printf '%s\\n' \"$git_status\" | sed -n '1p'); "
+            "git_dirty=$(printf '%s\\n' \"$git_status\" | sed '1d;/^$/d' | wc -l | tr -d ' '); "
+            "git_ahead=$(printf '%s\\n' \"$git_header\" | sed -n 's/.*ahead \\([0-9][0-9]*\\).*/\\1/p'); "
+            "git_behind=$(printf '%s\\n' \"$git_header\" | sed -n 's/.*behind \\([0-9][0-9]*\\).*/\\1/p'); "
+            "git_summary=; "
+            "if [ \"${git_dirty:-0}\" -gt 0 ]; then git_summary=\"dirty $git_dirty\"; fi; "
+            "git_relation=; "
+            "if [ -n \"$git_ahead\" ] && [ -n \"$git_behind\" ]; then "
+            "git_relation=\"diverged +$git_ahead/-$git_behind\"; "
+            "elif [ -n \"$git_ahead\" ]; then git_relation=\"ahead $git_ahead\"; "
+            "elif [ -n \"$git_behind\" ]; then git_relation=\"behind $git_behind\"; fi; "
+            "if [ -n \"$git_relation\" ]; then "
+            "if [ -n \"$git_summary\" ]; then git_summary=\"$git_summary, $git_relation\"; "
+            "else git_summary=$git_relation; fi; fi; "
+            "if [ -z \"$git_summary\" ]; then git_summary=clean; fi; "
+            "printf 'git=%s\\n' \"$git_summary\"; "
+            "fi; "
+        )
         script = (
             f"project_dir={quoted_project_dir}; "
             "if [ ! -e \"$project_dir\" ]; then printf 'project=missing\\n'; exit 0; fi; "
@@ -247,10 +300,12 @@ class RemoteProjectMaintenanceService:
             + docker_check
             + "if [ -d .git ]; then "
             "printf 'project=ok\\n'; "
-            "git status --short --branch | sed -n '1s/^/git=/p'; "
+            + git_status_check
             + origin_check
+            + current_ref_state
             + ref_check
-            + "else printf 'project=not-git\\n'; printf 'git=not-git\\n'; printf 'origin=missing\\n'; printf 'ref=missing\\n'; fi"
+            + "else printf 'project=not-git\\n'; printf 'git=not-git\\n'; printf 'origin=missing\\n'; "
+            "printf 'synced_ref=missing\\n'; printf 'remote_ref=missing\\n'; printf 'ref=missing\\n'; fi"
         )
         return transport.ssh_command(remote, script)
 

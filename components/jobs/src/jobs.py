@@ -497,6 +497,8 @@ def command_step_label(command: list[str]) -> str:
         return "Rebuild impacted Yocto recipes"
     if 'ACTION = "analyze"' in text:
         return "Analyze changed Yocto recipes"
+    if "repo sync " in text:
+        return "Synchronize Repo source workspaces"
     if " moulin " in text or "moulin " in text:
         return "Regenerate Moulin/Ninja"
     if " ninja " in text or "ninja " in text:
@@ -580,7 +582,7 @@ def completed_command_sequence_state(job: dict[str, Any]) -> dict[str, Any]:
         "last_exit": rc,
         "status": f"{title}: exit {rc}",
     }
-    if title in {"Prepare remote project", "Checkout project Git ref"} and rc == 0:
+    if title in {"Prepare remote project", "Checkout project Git ref", "Update product"} and rc == 0:
         state["needs_preflight_reset"] = True
         state["needs_preflight_refresh"] = True
         state["needs_config_reload"] = True

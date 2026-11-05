@@ -384,7 +384,9 @@ class PluginRuntimeTests(unittest.TestCase):
 
         self.assertIn("git clone git@example:gen5.git product", prepare[-1])
         self.assertIsNotNone(checkout)
-        self.assertIn("git checkout main", checkout[-1])
+        self.assertIn("selected_ref=main", checkout[-1])
+        self.assertIn('git checkout "$selected_ref"', checkout[-1])
+        self.assertIn('git merge --ff-only "origin/$selected_ref"', checkout[-1])
         self.assertIn("/work/product", build[-1])
         self.assertIn("docker run", build[-1])
         self.assertIn("gen5-builder", build[-1])

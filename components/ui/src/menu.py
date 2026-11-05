@@ -104,6 +104,7 @@ def is_open_item(item: MenuItem) -> bool:
 def is_project_recovery_item(item: MenuItem) -> bool:
     return item.label in {
         "Prepare remote project",
+        "Update product",
         "Checkout project Git ref",
         "Stash changes and checkout project Git ref",
         "Clear stale Git index lock",

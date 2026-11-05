@@ -162,26 +162,6 @@ class MainMenuSetupItemsService:
                     requires_project=True,
                 )
             )
-        if preflight_actions["checkout_git_ref"] and not preflight_actions["prepare_remote_project"]:
-            items.append(
-                MenuItem(
-                    "Checkout project Git ref",
-                    "build",
-                    (
-                        "Switch the remote checkout to the configured project Git branch/ref. If needed, remove a stale Git index lock "
-                        "when no running process owns it, stage and stash local changes, fetch origin, then checkout the ref."
-                    ),
-                    lambda app: shlex.join(self.remote_command_workflow.repair_and_checkout_git_ref_command(app.config)),
-                    lambda app: app.command_workflow_service().run_commands(
-                        app,
-                        "Checkout project Git ref",
-                        [self.remote_command_workflow.repair_and_checkout_git_ref_command(app.config)],
-                    ),
-                    confirm=True,
-                    requires_remote=True,
-                    requires_project=True,
-                )
-            )
         return items
 
 

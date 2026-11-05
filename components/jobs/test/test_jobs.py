@@ -941,6 +941,16 @@ class JobsBehaviorTests(unittest.TestCase):
             },
         )
         self.assertEqual(
+            jobs.completed_command_sequence_state({"title": "Update product", "rc": 0}),
+            {
+                "last_exit": 0,
+                "status": "Update product: done; refreshing preflight",
+                "needs_preflight_reset": True,
+                "needs_preflight_refresh": True,
+                "needs_config_reload": True,
+            },
+        )
+        self.assertEqual(
             jobs.completed_command_sequence_state({"title": "Checkout project Git ref", "rc": 1}),
             {"last_exit": 1, "status": "Checkout project Git ref: exit 1"},
         )

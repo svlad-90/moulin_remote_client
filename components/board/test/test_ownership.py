@@ -17,6 +17,14 @@ class BoardOwnershipTests(unittest.TestCase):
             ownership.parse_ownership_status(json.dumps({"owner": "host/alice", "user": "alice"}))["state"],
             "owned",
         )
+        self.assertEqual(
+            ownership.parse_ownership_status(json.dumps({
+                "owner": "testrpi5/pilot-a",
+                "user": "alice",
+                "workspace": "/srv/labgrid-pilot/workspaces/alice",
+            }))["state"],
+            "busy",
+        )
         busy = ownership.parse_ownership_status(json.dumps({"owner": "host/bob", "user": "alice"}))
         self.assertEqual(busy["state"], "busy")
         self.assertIn("host/bob", busy["text"])

@@ -284,6 +284,19 @@ class MainMenuBuilderTests(unittest.TestCase):
             )
             self.assertEqual(camera_item.group, "flashing / board")
             self.assertFalse(camera_item.confirm)
+            board_labels = [
+                item.label
+                for item in builder.command_items.board_action_items(app)
+                if item.group == "flashing / board"
+            ]
+            self.assertLess(
+                board_labels.index("Open U-Boot console"),
+                board_labels.index("Open camera stream"),
+            )
+            self.assertLess(
+                board_labels.index("Open camera stream"),
+                board_labels.index("Turn off board"),
+            )
 
     def test_camera_stream_action_is_hidden_without_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -377,7 +390,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(
                 build_labels,
                 [
-                    "Copy mapped files to build host",
+                    "Update product",
                     "Clean-up BitBake server",
                     "Regenerate Moulin/Ninja",
                     "Run product build",
@@ -390,14 +403,38 @@ class MainMenuBuilderTests(unittest.TestCase):
                 ],
             )
             mapping_labels = [item.label for item in menu_items if item.group == "build / files mapping"]
-            self.assertEqual(mapping_labels, ["Sync mapped files", "Open mapped workspace"])
+            self.assertEqual(
+                mapping_labels,
+                [
+                    "Copy mapped files to build host",
+                    "Sync mapped files",
+                    "Open mapped workspace",
+                ],
+            )
+            build_group_sequence = list(dict.fromkeys(
+                item.group
+                for item in menu_items
+                if item.group.startswith("build / ")
+            ))
+            self.assertEqual(
+                build_group_sequence,
+                [
+                    "build / build host",
+                    "build / docker",
+                    "build / configuration",
+                    "build / commands",
+                    "build / files mapping",
+                ],
+            )
             self.assertIn("Select build host", [item.label for item in menu_items if item.group == "sessions / build host"])
             self.assertIn("Select board", [item.label for item in menu_items if item.group == "sessions / board host"])
             flashing_labels = [item.label for item in menu_items if item.group == "flashing / commands"]
             flashing_configuration_labels = [item.label for item in menu_items if item.group == "flashing / configuration"]
             flashing_host_labels = [item.label for item in menu_items if item.group == "flashing / hosts"]
-            board_host_labels = [item.label for item in menu_items if item.group == "flashing / board host"]
-            self.assertEqual(flashing_configuration_labels, ["Configure copied artifacts"])
+            board_labels = [item.label for item in menu_items if item.group == "flashing / board"]
+            board_setup_labels = [item.label for item in menu_items if item.group == "flashing / board setup"]
+            self.assertEqual(flashing_configuration_labels, [])
+            self.assertEqual(flashing_labels[0], "Configure copied artifacts")
             self.assertIn("Copy build artifacts", flashing_labels)
             self.assertIn("Flash bootloaders (flash mode)", flashing_labels)
             self.assertIn("Flash bootloaders", flashing_labels)
@@ -412,14 +449,25 @@ class MainMenuBuilderTests(unittest.TestCase):
             ]
             self.assertLess(
                 flashing_order.index(("flashing / hosts", "Open board host shell")),
-                flashing_order.index(("flashing / configuration", "Configure copied artifacts")),
+                flashing_order.index(("flashing / commands", "Configure copied artifacts")),
             )
             self.assertLess(
-                flashing_order.index(("flashing / configuration", "Configure copied artifacts")),
+                flashing_order.index(("flashing / commands", "Configure copied artifacts")),
                 flashing_order.index(("flashing / commands", "Copy build artifacts")),
             )
+            flashing_groups = [group for group, _label in flashing_order]
+            collapsed_flashing_groups = [
+                group
+                for index, group in enumerate(flashing_groups)
+                if index == 0 or group != flashing_groups[index - 1]
+            ]
+            self.assertEqual(collapsed_flashing_groups.count("flashing / commands"), 1)
             self.assertEqual(
-                board_host_labels,
+                collapsed_flashing_groups[-2:],
+                ["flashing / commands", "flashing / board setup"],
+            )
+            self.assertEqual(
+                board_labels,
                 [
                     "Restart board",
                     "Open board serial console",
@@ -428,11 +476,15 @@ class MainMenuBuilderTests(unittest.TestCase):
                 ],
             )
 
-            self.assertIn("Open board serial console", board_host_labels)
-            self.assertIn("Open U-Boot console", board_host_labels)
-            self.assertIn("Restart board", board_host_labels)
-            self.assertIn("Turn off board", board_host_labels)
-            self.assertNotIn("Turn on board", board_host_labels)
+            self.assertIn("Open board serial console", board_labels)
+            self.assertIn("Open U-Boot console", board_labels)
+            self.assertIn("Restart board", board_labels)
+            self.assertIn("Turn off board", board_labels)
+            self.assertNotIn("Turn on board", board_labels)
+            self.assertEqual(
+                board_setup_labels,
+                ["Apply U-Boot UFS env", "Inject invasive U-Boot parameters"],
+            )
             self.assertIn("Stop current board command", flashing_labels)
             tftp_deploy_labels = [item.label for item in menu_items if item.group == "tftp/nfs / deploy artifacts"]
             tftp_control_labels = [item.label for item in menu_items if item.group == "tftp/nfs / board control"]
@@ -466,8 +518,6 @@ class MainMenuBuilderTests(unittest.TestCase):
                 [
                     "Install NFS deploy helper",
                     "Apply U-Boot network env",
-                    "Apply U-Boot UFS env",
-                    "Inject invasive U-Boot parameters",
                 ],
             )
             self.assertEqual(
@@ -488,8 +538,6 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Open local Dom0 initramfs workspace",
                     "Install NFS deploy helper",
                     "Apply U-Boot network env",
-                    "Apply U-Boot UFS env",
-                    "Inject invasive U-Boot parameters",
                     "Stop current board command",
                     "Open remote TFTP root",
                     "Open remote NFS root",
@@ -2463,6 +2511,16 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual([item.label for item in ownership_items], ["Release board"])
             self.assertEqual(ownership_items[0].availability(app), (True, ""))
 
+            app.board_ownership_status = {
+                "state": "busy",
+                "text": "acquired by lab/pilot-a",
+                "owner": "lab/pilot-a",
+            }
+            command_items = builder.command_items.build_items(app)
+            ownership_items = [item for item in command_items if item.group == "flashing / ownership"]
+            self.assertEqual([item.label for item in ownership_items], ["Acquire board"])
+            self.assertEqual(ownership_items[0].availability(app), (True, ""))
+
     def test_setup_items_service_adds_preflight_action_handlers(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
@@ -2520,7 +2578,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertIn("rm -rf", command)
             self.assertIn("refusing to remove unsafe project directory", command)
 
-    def test_setup_items_service_adds_single_checkout_repair_action(self) -> None:
+    def test_command_items_service_always_adds_product_update_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
             builder = items.main_menu_builder(
@@ -2536,19 +2594,110 @@ class MainMenuBuilderTests(unittest.TestCase):
             app = FakeApp(_config(app_dir))
             app.preflight_values = {"project": "ok", "origin": "ok", "ref": "mismatch:mirror"}
             setup_items = builder.setup_items.build_items(app)
+            command_items = builder.command_items.build_items(app)
             labels = [item.label for item in setup_items]
-            self.assertEqual(labels.count("Checkout project Git ref"), 1)
+            self.assertNotIn("Checkout project Git ref", labels)
             self.assertNotIn("Clear stale Git index lock", labels)
             self.assertNotIn("Stash changes and checkout project Git ref", labels)
-            checkout_item = next(item for item in setup_items if item.label == "Checkout project Git ref")
+            update_items = [item for item in command_items if item.label == "Update product"]
+            self.assertEqual(len(update_items), 1)
+            update_item = update_items[0]
 
-            checkout_item.handler(app)
+            with patch.object(
+                builder.command_items,
+                "select_product_update_steps",
+                return_value=({"checkout"}, False, "repair"),
+            ):
+                update_item.handler(app)
 
-            self.assertEqual(app.workflow.command_calls[0][0], "Checkout project Git ref")
+            self.assertEqual(app.workflow.command_calls[0][0], "Update product")
             self.assertIn(".git/index.lock", app.workflow.command_calls[0][1][0][-1])
             self.assertIn("rm -f", app.workflow.command_calls[0][1][0][-1])
             self.assertIn("git add -A", app.workflow.command_calls[0][1][0][-1])
             self.assertIn("git stash push", app.workflow.command_calls[0][1][0][-1])
+            self.assertIn("git merge --ff-only", app.workflow.command_calls[0][1][0][-1])
+
+    def test_product_update_runs_only_selected_stages_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            update_item = next(
+                item for item in builder.command_items.build_items(app) if item.label == "Update product"
+            )
+
+            with patch.object(
+                builder.command_items,
+                "select_product_update_steps",
+                return_value=({"checkout", "regenerate", "sync"}, True, "safe"),
+            ):
+                update_item.handler(app)
+
+            title, commands = app.workflow.command_calls[0]
+            self.assertEqual(title, "Update product")
+            self.assertEqual(len(commands), 3)
+            self.assertIn("git fetch origin --prune", commands[0][-1])
+            self.assertNotIn("git stash push", commands[0][-1])
+            self.assertIn("moulin", commands[1][-1])
+            self.assertIn("repo sync --fail-fast --force-sync", commands[2][-1])
+
+    def test_product_update_menu_cycles_checkout_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeMenuApp(_config(app_dir), [ord("c"), 10])
+
+            selection = builder.command_items.select_product_update_steps(app)
+
+            self.assertEqual(selection, ({"checkout", "regenerate"}, False, "stash"))
+            self.assertEqual(builder.command_items.product_update_checkout_mode, "stash")
+
+    def test_product_update_menu_toggles_force_sync_as_checkbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeMenuApp(
+                _config(app_dir),
+                [curses.KEY_DOWN, curses.KEY_DOWN, curses.KEY_DOWN, ord(" "), 10],
+            )
+
+            selection = builder.command_items.select_product_update_steps(app)
+
+            self.assertEqual(selection, ({"checkout", "regenerate"}, True, "safe"))
+            self.assertTrue(builder.command_items.product_update_force_sync)
+            self.assertTrue(
+                any(
+                    "[x] Repair Repo metadata links (--force-sync)" in row[2]
+                    for row in app.add_calls
+                )
+            )
 
     def test_missing_project_workflow_exposes_prepare_and_blocks_checkout_dependent_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2612,7 +2761,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 "remote project needs preparation",
             )
 
-    def test_git_ref_mismatch_workflow_exposes_checkout_and_blocks_build_actions(self) -> None:
+    def test_git_ref_mismatch_workflow_exposes_update_and_blocks_build_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
             builder = items.main_menu_builder(
@@ -2630,10 +2779,11 @@ class MainMenuBuilderTests(unittest.TestCase):
             menu_items = builder.build_items(app)
             labels = [item.label for item in menu_items]
 
-            self.assertIn("Checkout project Git ref", labels)
+            self.assertIn("Update product", labels)
+            self.assertNotIn("Checkout project Git ref", labels)
             self.assertNotIn("Prepare remote project", labels)
 
-            checkout = next(item for item in menu_items if item.label == "Checkout project Git ref")
+            update = next(item for item in menu_items if item.label == "Update product")
             run_build = next(item for item in menu_items if item.label == "Run product build")
             select_targets = next(item for item in menu_items if item.label == "Select build targets")
             copy_artifacts = next(item for item in menu_items if item.label == "Copy build artifacts")
@@ -2649,7 +2799,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 "prepare_remote_project_needed": False,
                 "checkout_git_ref_needed": True,
             }
-            self.assertTrue(menu_api.item_enabled(checkout, **common))
+            self.assertTrue(menu_api.item_enabled(update, **common))
             self.assertFalse(menu_api.item_enabled(run_build, **common))
             self.assertFalse(menu_api.item_enabled(select_targets, **common))
             self.assertTrue(menu_api.item_enabled(copy_artifacts, **common))
@@ -2688,7 +2838,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             controller = state.main_menu_state_controller(app_dir=app_dir)
             labels = (
                 "Prepare remote project",
-                "Checkout project Git ref",
+                "Update product",
                 "Open build host shell",
                 "Open build host git repo",
                 "Select build targets",
@@ -2705,7 +2855,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     True,
                     {
                         "Prepare remote project": (True, ""),
-                        "Checkout project Git ref": None,
+                        "Update product": (False, "remote project needs preparation"),
                         "Open build host shell": (True, ""),
                         "Open build host git repo": (True, ""),
                         "Select build targets": (False, "remote project needs preparation"),
@@ -2722,7 +2872,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     True,
                     {
                         "Prepare remote project": (True, ""),
-                        "Checkout project Git ref": None,
+                        "Update product": (False, "remote project needs preparation"),
                         "Open build host shell": (True, ""),
                         "Open build host git repo": (True, ""),
                         "Select build targets": (False, "remote project needs preparation"),
@@ -2739,7 +2889,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     True,
                     {
                         "Prepare remote project": None,
-                        "Checkout project Git ref": (True, ""),
+                        "Update product": (True, ""),
                         "Open build host shell": (True, ""),
                         "Open build host git repo": (True, ""),
                         "Select build targets": (False, "remote project Git ref mismatch"),
@@ -2756,7 +2906,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     False,
                     {
                         "Prepare remote project": None,
-                        "Checkout project Git ref": None,
+                        "Update product": (False, "connect to the build host first"),
                         "Open build host shell": (False, "connect to the build host first"),
                         "Open build host git repo": (False, "connect to the build host first"),
                         "Select build targets": (True, ""),
@@ -2932,7 +3082,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             menu_items = builder.build_items(app)
 
             item = next(item for item in menu_items if item.label == "Configure copied artifacts")
-            self.assertEqual(item.group, "flashing / configuration")
+            self.assertEqual(item.group, "flashing / commands")
 
             item.handler(app)
 
