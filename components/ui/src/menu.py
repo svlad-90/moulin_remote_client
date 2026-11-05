@@ -104,6 +104,7 @@ def is_open_item(item: MenuItem) -> bool:
 def is_project_recovery_item(item: MenuItem) -> bool:
     return item.label in {
         "Prepare remote project",
+        "Update product",
         "Checkout project Git ref",
         "Stash changes and checkout project Git ref",
         "Clear stale Git index lock",
@@ -336,8 +337,15 @@ def selected_menu_row(rows: list[tuple[str, int | None]], selected: int) -> int:
 
 def clamp_menu_scroll(rows: list[tuple[str, int | None]], selected: int, scroll: int, visible_rows: int) -> int:
     selected_row = selected_menu_row(rows, selected)
-    if selected_row < scroll:
-        return selected_row
+    selected_anchor = selected_row
+    if (
+        selected_row > 0
+        and rows[selected_row - 1][1] is None
+        and bool(rows[selected_row - 1][0])
+    ):
+        selected_anchor = selected_row - 1
+    if selected_anchor < scroll:
+        return selected_anchor
     if selected_row >= scroll + visible_rows:
         return selected_row - visible_rows + 1
     return scroll

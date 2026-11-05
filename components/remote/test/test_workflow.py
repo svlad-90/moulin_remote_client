@@ -82,6 +82,8 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("git reset --hard", repair_checkout)
         self.assertIn("git clean -fd", repair_checkout)
         self.assertIn("git checkout", repair_checkout)
+        self.assertIn("git fetch origin --prune", repair_checkout)
+        self.assertIn("git merge --ff-only", repair_checkout)
 
     def test_project_maintenance_service_owns_prepare_checkout_and_preflight(self) -> None:
         config = sample_config()
@@ -122,10 +124,18 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("git reset --hard", repair_checkout)
         self.assertIn("git clean -fd", repair_checkout)
         self.assertIn("git checkout", repair_checkout)
+        self.assertIn("git fetch origin --prune", repair_checkout)
+        self.assertIn("git merge --ff-only", repair_checkout)
         self.assertEqual(
             service.preflight_command_for_config(config, "prod_img"),
             commands.build_remote_preflight_command_for_config(config, "prod_img"),
         )
+        preflight = shlex.join(service.preflight_command_for_config(config, "prod_img"))
+        self.assertIn("synced_ref=", preflight)
+        self.assertIn("remote_ref=", preflight)
+        self.assertIn("git_summary=clean", preflight)
+        self.assertIn("diverged +$git_ahead/-$git_behind", preflight)
+        self.assertIn("git=error:%s", preflight)
 
     def test_build_commands_match_command_builders(self) -> None:
         config = sample_config()
@@ -151,6 +161,22 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
             service.docker_shell_command(config, docker_image="prod_img"),
             commands.build_remote_docker_shell_command_for_config(config, docker_image="prod_img"),
         )
+        repo_sync_command = service.repo_source_sync_command(
+            config, docker_image="prod_img", force=False
+        )
+        repo_sync = shlex.join(repo_sync_command)
+        self.assertIn("repo sync --fail-fast", repo_sync)
+        self.assertNotIn("--force-sync", repo_sync)
+        self.assertNotIn("-tt", repo_sync_command)
+        self.assertIn(" -i --rm ", repo_sync)
+        self.assertNotIn(" -it --rm ", repo_sync)
+        forced_repo_sync = shlex.join(
+            service.repo_source_sync_command(config, docker_image="prod_img", force=True)
+        )
+        self.assertIn("repo sync --fail-fast --force-sync", forced_repo_sync)
+        self.assertIn("repo forall -c", forced_repo_sync)
+        self.assertIn("git status --porcelain", forced_repo_sync)
+        self.assertNotIn("repo status --orphans", forced_repo_sync)
         components = [{"name": "domd", "builder_type": "yocto", "build_dir": "yocto", "work_dir": "build-domd"}]
         self.assertEqual(
             service.bitbake_cleanup_command(config, docker_image="prod_img", components=components),

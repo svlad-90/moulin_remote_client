@@ -13,7 +13,7 @@ class StatusSegmentBehaviorTests(unittest.TestCase):
                 ("Params: ", "accent"),
                 ("ANDROID=", "normal"),
                 ("yes", "ok"),
-                ("  ", "normal"),
+                (" | ", "section"),
                 ("DOMU=", "normal"),
                 ("no", "warn"),
             ],
@@ -27,8 +27,90 @@ class StatusSegmentBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(
             status_segments.preflight_segments("project ok | docker missing", connected=True),
-            [("project ok", "ok"), (" | ", "normal"), ("docker missing", "error")],
+            [("project ok", "ok"), (" | ", "section"), ("docker missing", "error")],
         )
+        self.assertEqual(
+            status_segments.preflight_segments(
+                "git clean | git behind 2 | git dirty 1, ahead 1",
+                connected=True,
+            ),
+            [
+                ("git clean", "ok"),
+                (" | ", "section"),
+                ("git behind 2", "warn"),
+                (" | ", "section"),
+                ("git dirty 1, ahead 1", "error"),
+            ],
+        )
+
+    def test_compact_header_preflight_removes_ref_and_healthy_origin(self) -> None:
+        self.assertEqual(
+            status_segments.compact_header_preflight(
+                "project ok | disk 48G free | origin ok | ref ok"
+            ),
+            "project ok | disk 48G free",
+        )
+        self.assertEqual(
+            status_segments.compact_header_preflight(
+                "project ok | origin mismatch:old | ref mismatch:main"
+            ),
+            "project ok | origin mismatch:old",
+        )
+        self.assertEqual(
+            status_segments.compact_header_preflight(
+                "project ok | disk 48G free, 10% used | git clean",
+                narrow=True,
+            ),
+            "project ok | disk 48G free | git clean",
+        )
+
+    def test_product_ref_segments_show_selected_remote_and_synced_states(self) -> None:
+        self.assertEqual(
+            status_segments.product_ref_segments(
+                "topic",
+                {"remote_ref": "topic@abc1234", "synced_ref": "topic@abc1234", "ref": "ok"},
+            ),
+            [
+                ("Product ref: ", "accent"),
+                ("topic", "normal"),
+                (" | ", "section"),
+                ("Cached tip: ", "accent"),
+                ("abc1234", "normal"),
+                (" | ", "section"),
+                ("HEAD: ", "accent"),
+                ("synced", "ok"),
+            ],
+        )
+        self.assertEqual(
+            status_segments.product_ref_segments(
+                "topic",
+                {"remote_ref": "topic@abc1234", "synced_ref": "topic@abc1234", "ref": "ok"},
+                narrow=True,
+            ),
+            [
+                ("Ref: ", "accent"),
+                ("topic@abc1234", "normal"),
+                (" | ", "section"),
+                ("HEAD: ", "accent"),
+                ("synced", "ok"),
+            ],
+        )
+
+    def test_product_ref_segments_warn_for_unavailable_or_mismatched_states(self) -> None:
+        segments = status_segments.product_ref_segments(
+            "topic",
+            {"remote_ref": "not-fetched", "synced_ref": "main@def5678", "ref": "mismatch:main"},
+        )
+
+        self.assertEqual(segments[4], ("not-fetched", "warn"))
+        self.assertEqual(segments[7], ("main@def5678", "warn"))
+
+        behind_segments = status_segments.product_ref_segments(
+            "topic",
+            {"remote_ref": "topic@abc1234", "synced_ref": "topic@def5678", "ref": "ok"},
+        )
+        self.assertEqual(behind_segments[4], ("abc1234", "normal"))
+        self.assertEqual(behind_segments[7], ("def5678", "warn"))
 
     def test_mapping_status_role_matches_current_attr_policy(self) -> None:
         self.assertEqual(status_segments.mapping_status_role([], None, []), "disabled")

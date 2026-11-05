@@ -84,6 +84,9 @@ class AppTerminalPortAdapter:
     def group_attr(self) -> int:
         return self.terminal_port.group_attr()
 
+    def section_attr(self) -> int:
+        return self.terminal_port.section_attr()
+
     def disabled_attr(self) -> int:
         return self.terminal_port.disabled_attr()
 
@@ -108,8 +111,22 @@ class AppTerminalPortAdapter:
     def add_segments(self, port: Any, y: int, x: int, max_width: int, segments: list[tuple[str, int]]) -> None:
         self.terminal_port.add_segments(port, y, x, max_width, segments)
 
-    def draw_box(self, port: Any, top: int, left: int, height: int, width: int, title: str = "", attr: int = 0) -> None:
-        self.terminal_port.draw_box(port, top, left, height, width, title, attr)
+    def draw_box(
+        self,
+        port: Any,
+        top: int,
+        left: int,
+        height: int,
+        width: int,
+        title: str = "",
+        attr: int = 0,
+        *,
+        title_attr: int | None = None,
+    ) -> None:
+        if title_attr is None:
+            self.terminal_port.draw_box(port, top, left, height, width, title, attr)
+            return
+        self.terminal_port.draw_box(port, top, left, height, width, title, attr, title_attr=title_attr)
 
     def connection_attr_for(self, state: str) -> int:
         return self.terminal_port.connection_attr_for(state)

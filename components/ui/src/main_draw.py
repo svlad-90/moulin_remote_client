@@ -27,9 +27,15 @@ class MainDrawController:
         rendered: list[str] = []
         port.setup_colors()
         height, width = port.screen.getmaxyx()
-        if height < 20 or width < 80:
+        minimum_height = ui_layout_api.minimum_main_height(width)
+        if height < minimum_height or width < 80:
             port.screen.erase()
-            port.add(0, 0, "Terminal is too small. Need at least 80x20.", port.warn_attr())
+            port.add(
+                0,
+                0,
+                f"Terminal is too small. Need at least 80x{minimum_height}.",
+                port.warn_attr(),
+            )
             port.screen.refresh()
             port.main_full_redraw = True
             port.ui_profile_slow("draw-small-terminal", draw_started)
@@ -121,7 +127,7 @@ class MainDrawController:
             )
             return
 
-        self._draw_header(port, width, mapping_status, rendered)
+        self._draw_header(port, width, rendered)
         self._draw_actions(
             port,
             panel_top,
@@ -207,6 +213,7 @@ class MainDrawController:
         expanded_sig += (
             job.get("title", "") if job is not None else "",
             job_api.job_running(job),
+            int(job.get("output_revision", 0)) if job is not None else 0,
             len(job_api.job_output_lines(job)) if job is not None else 0,
             job_output,
         )
@@ -222,28 +229,41 @@ class MainDrawController:
         port.ui_profile_slow("refresh-slow", refresh_started, threshold_ms=5.0)
         port.ui_profile_slow("draw-slow", draw_started, rendered="expanded-logs", active=active_job_exists, selected=port.selected)
 
-    def _draw_header(self, port: Any, width: int, mapping_status: dict[str, str], rendered: list[str]) -> None:
+    def _draw_header(self, port: Any, width: int, rendered: list[str]) -> None:
         header_sig = (
             width,
+            config_accessor_api.ui_title(port.config),
             config_accessor_api.remote_label_for_config(port.config),
             config_accessor_api.remote_spec_for_config(port.config),
             config_accessor_api.remote_project_dir_for_config(port.config),
-            config_accessor_api.board_host_label_for_config(port.config),
+            config_accessor_api.board_access_host_label_for_config(port.config),
             config_accessor_api.board_host_spec_for_config(port.config),
-            str(config_accessor_api.local_project_dir_for_config(port.config, self.app_dir)),
+            config_accessor_api.board_label_for_config(port.config),
             config_accessor_api.moulin_manifest_name_for_config(port.config),
+            config_accessor_api.project_git_ref_for_config(port.config),
             port.connection_state,
             port.board_connection_state,
+            tuple(
+                sorted(
+                    (str(key), str(value))
+                    for key, value in getattr(port, "board_ownership_status", {}).items()
+                )
+            ),
             tuple(sorted(port.build_params.items())),
             port.docker_image,
             port.build_targets,
+            tuple(getattr(port, "build_target_candidates", [])),
             port.preflight,
-            mapping_status["text"],
-            mapping_status["role"],
+            tuple(
+                sorted(
+                    (str(key), str(value))
+                    for key, value in getattr(port, "preflight_values", {}).items()
+                )
+            ),
         )
         if port.main_full_redraw or port.render_cache.get("header") != header_sig:
             started = time.monotonic()
-            ui_panels_api.main_panels_controller().draw_header(port, width, app_dir=self.app_dir)
+            ui_panels_api.main_panels_controller().draw_header(port, width)
             port.ui_profile_slow("panel-header-slow", started, threshold_ms=5.0)
             port.render_cache["header"] = header_sig
             rendered.append("header")
@@ -378,6 +398,7 @@ class MainDrawController:
             active_labels,
             job.get("title", "") if job is not None else "",
             job_api.job_running(job),
+            int(job.get("output_revision", 0)) if job is not None else 0,
             len(job_api.job_output_lines(job)) if job is not None else 0,
             job_output,
             port.log_scroll,

@@ -22,6 +22,7 @@ class FakeCurses:
     COLOR_RED = 1
     COLOR_WHITE = 7
     COLOR_BLUE = 4
+    COLOR_MAGENTA = 5
     A_BOLD = 100
     A_REVERSE = 200
     A_DIM = 400
@@ -138,6 +139,22 @@ class TerminalPortControllerTests(unittest.TestCase):
         self.assertIn(("init_pair", (1, fake_curses.COLOR_BLACK, fake_curses.COLOR_CYAN)), fake_curses.calls)
         self.assertIn(("init_pair", (8, fake_curses.COLOR_BLACK, fake_curses.COLOR_GREEN)), fake_curses.calls)
         self.assertIn(("init_pair", (9, fake_curses.COLOR_BLACK, fake_curses.COLOR_YELLOW)), fake_curses.calls)
+        self.assertIn(("init_pair", (10, fake_curses.COLOR_MAGENTA, -1)), fake_curses.calls)
+
+    def test_section_attr_uses_dimmed_magenta_pair(self) -> None:
+        fake_curses = FakeCurses()
+
+        with patch("components.ui.src.terminal_port.curses", fake_curses):
+            attr = terminal_port.terminal_port_controller().section_attr()
+
+        self.assertEqual(attr, fake_curses.color_pair(10) | fake_curses.A_DIM)
+
+    def test_section_role_uses_section_attr(self) -> None:
+        fake_curses = FakeCurses()
+
+        with patch("components.ui.src.terminal_port.curses", fake_curses):
+            controller = terminal_port.terminal_port_controller()
+            self.assertEqual(controller.role_attr("section"), controller.section_attr())
 
     def test_read_key_encodes_text_and_handles_empty_queue(self) -> None:
         fake_curses = FakeCurses()
@@ -167,11 +184,11 @@ class TerminalPortControllerTests(unittest.TestCase):
         with patch("components.ui.src.terminal_port.curses", fake_curses):
             controller = terminal_port.terminal_port_controller()
             controller.add_segments(port, 0, 0, 5, [("hello", 1), ("world", 2)])
-            controller.draw_box(port, 1, 2, 3, 6, "T", 9)
+            controller.draw_box(port, 1, 2, 3, 6, "T", 9, title_attr=10)
 
         self.assertIn((0, 0, "hello", 1), port.screen.adds)
         self.assertIn((1, 2, "+----+", 9), port.screen.adds)
-        self.assertIn((1, 4, " T", 9), port.screen.adds)
+        self.assertIn((1, 4, " T", 10), port.screen.adds)
 
     def test_draw_label_value_wrapped_uses_layout_and_text_wrapping(self) -> None:
         fake_curses = FakeCurses()

@@ -25,7 +25,7 @@ class PreflightBehaviorTests(unittest.TestCase):
             [
                 "project=ok",
                 "disk=48G free, 10% used",
-                "git=## mirror...origin/mirror",
+                "git=clean",
                 "docker=ok",
                 "origin=ok",
                 "ref=ok",
@@ -37,16 +37,18 @@ class PreflightBehaviorTests(unittest.TestCase):
         self.assertEqual(values["project"], "ok")
         self.assertEqual(
             text,
-            "project ok | disk 48G free, 10% used | git ## mirror...origin/mirror | docker ok | origin ok | ref ok",
+            "project ok | disk 48G free, 10% used | git clean | docker ok | origin ok | ref ok",
         )
 
     def test_preflight_part_ok_matches_client_logic(self) -> None:
         self.assertTrue(preflight.preflight_part_ok("project ok"))
         self.assertTrue(preflight.preflight_part_ok("disk 48G free"))
         self.assertTrue(preflight.preflight_part_ok("git ## mirror"))
+        self.assertTrue(preflight.preflight_part_ok("git clean"))
         self.assertTrue(preflight.preflight_part_ok("origin https://example"))
         self.assertTrue(preflight.preflight_part_ok("ref ok"))
         self.assertFalse(preflight.preflight_part_ok("docker missing"))
+        self.assertFalse(preflight.preflight_part_ok("git error:permission denied"))
         self.assertFalse(preflight.preflight_part_ok("origin mismatch:https://example"))
 
     def test_prepare_remote_project_needed_matches_current_policy(self) -> None:

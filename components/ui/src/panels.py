@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import curses
-from pathlib import Path
+import shlex
 from typing import Any
 
 from components.config.api import accessors as config_accessor_api
@@ -29,6 +29,45 @@ def _split_group(group: str) -> tuple[str, str]:
         return group.strip(), ""
     parent, child = group.split(" / ", 1)
     return parent.strip(), child.strip()
+
+
+def _wrapped_segment_rows(
+    segments: list[tuple[str, int]],
+    width: int,
+    *,
+    max_rows: int = 2,
+) -> list[list[tuple[str, int]]]:
+    """Wrap complete styled segments without splitting normal-sized values."""
+    rows: list[list[tuple[str, int]]] = [[]]
+    used = 0
+    for index, segment in enumerate(segments):
+        text, _attr = segment
+        if text == " | ":
+            group_width = 0
+            for next_text, _next_attr in segments[index + 1:]:
+                if next_text == " | ":
+                    break
+                group_width += len(next_text)
+            if used and used + len(text) + group_width > width and len(rows) < max_rows:
+                rows.append([("  ", 0)])
+                used = 2
+                continue
+        next_text = segments[index + 1][0] if index + 1 < len(segments) else ""
+        if (
+            text.endswith("=")
+            and next_text
+            and next_text != " | "
+            and used + len(text) + len(next_text) > width
+            and len(rows) < max_rows
+        ):
+            rows.append([("  ", 0)])
+            used = 2
+        if used and used + len(text) > width and len(rows) < max_rows:
+            rows.append([("  ", 0)])
+            used = 2
+        rows[-1].append(segment)
+        used += len(text)
+    return rows
 
 
 def _ownership_status_role(state: str) -> str:
@@ -91,68 +130,184 @@ def _details_context_lines(port: Any, item: Any) -> list[str]:
 class MainPanelsController:
     """Render and scroll the details and logs panels."""
 
-    def draw_header(self, port: Any, width: int, *, app_dir: Path) -> None:
-        port.draw_box(0, 0, 10, width, config_accessor_api.ui_title(port.config))
+    def draw_header(self, port: Any, width: int) -> None:
+        port.draw_box(
+            0,
+            0,
+            15 if width < 110 else 12,
+            width,
+            config_accessor_api.ui_title(port.config),
+            title_attr=port.warn_attr(),
+        )
         inner_width = max(1, width - 4)
-        label_width = 14
-        board_host = f"{config_accessor_api.board_host_label_for_config(port.config)}  {config_accessor_api.board_host_spec_for_config(port.config)}"
+        narrow = width < 110
         ownership = getattr(port, "board_ownership_status", {})
-        if ownership.get("state") != "disabled":
-            board_host += f"  Ownership: {ownership.get('text') or 'unknown'}"
-        entries = [
-            ("Build host", f"{config_accessor_api.remote_label_for_config(port.config)}  {config_accessor_api.remote_spec_for_config(port.config)}:{config_accessor_api.remote_project_dir_for_config(port.config)}"),
-            ("Board host", board_host),
-            ("Local overlay", str(config_accessor_api.local_project_dir_for_config(port.config, app_dir))),
-            ("Manifest", config_accessor_api.moulin_manifest_name_for_config(port.config)),
-        ]
-        for offset, (label, value) in enumerate(entries, start=1):
-            port.add(offset, 2, f"{label}:".ljust(label_width), port.accent_attr())
-            fitted_value = ui_text_api.fit_text(value, inner_width - label_width)
-            ownership_marker = "Ownership: "
-            if label == "Board host" and ownership_marker in fitted_value:
-                marker_end = fitted_value.index(ownership_marker) + len(ownership_marker)
-                port.add_segments(
-                    offset,
-                    2 + label_width,
-                    inner_width - label_width,
-                    [
-                        (fitted_value[:marker_end], 0),
-                        (
-                            fitted_value[marker_end:],
-                            port.role_attr(_ownership_status_role(str(ownership.get("state") or "unknown"))),
-                        ),
-                    ],
-                )
-            else:
-                port.add(offset, 2 + label_width, fitted_value)
 
-        row = 5
-        x = 2
-        port.add(row, x, "Connections:", port.accent_attr())
-        x += len("Connections: ")
-        port.add(row, x, "build=", 0)
-        x += len("build=")
-        port.add(row, x, port.connection_state, port.connection_attr_for(port.connection_state))
-        x += len(port.connection_state) + 2
-        port.add(row, x, "board=", 0)
-        x += len("board=")
-        port.add(row, x, port.board_connection_state, port.connection_attr_for(port.board_connection_state))
-        x += len(port.board_connection_state) + 4
-        param_segments = [
+        port.add_segments(
+            1,
+            2,
+            inner_width,
+            [
+                ("--- ", port.section_attr()),
+                ("Build host ", port.section_attr()),
+                (
+                    f"{config_accessor_api.remote_label_for_config(port.config)} "
+                    f"({config_accessor_api.remote_spec_for_config(port.config)}) ",
+                    port.section_attr(),
+                ),
+                ("-" * inner_width, port.section_attr()),
+            ],
+        )
+        build_host_segments = [
+            ("Connection: ", port.accent_attr()),
+            (port.connection_state, port.connection_attr_for(port.connection_state)),
+        ]
+        if not narrow:
+            build_host_segments.extend([
+                (" | ", port.section_attr()),
+                ("Projects: ", port.accent_attr()),
+                (config_accessor_api.build_host_projects_dir_for_config(port.config), 0),
+            ])
+        build_host_segments.extend([
+            (" | ", port.section_attr()),
+            ("Docker: ", port.accent_attr()),
+            (port.docker_image, 0),
+        ])
+        port.add_segments(2, 2, inner_width, build_host_segments)
+        board_section_row = 3
+        if narrow:
+            projects_label = "Projects: "
+            port.add_segments(
+                3,
+                2,
+                inner_width,
+                [
+                    (projects_label, port.accent_attr()),
+                    (
+                        ui_text_api.fit_text(
+                            config_accessor_api.build_host_projects_dir_for_config(port.config),
+                            inner_width - len(projects_label),
+                        ),
+                        0,
+                    ),
+                ],
+            )
+            board_section_row = 4
+
+        port.add_segments(
+            board_section_row,
+            2,
+            inner_width,
+            [
+                ("--- ", port.section_attr()),
+                ("Board host ", port.section_attr()),
+                (
+                    f"{config_accessor_api.board_access_host_label_for_config(port.config)} "
+                    f"({config_accessor_api.board_host_spec_for_config(port.config)}) ",
+                    port.section_attr(),
+                ),
+                ("-" * inner_width, port.section_attr()),
+            ],
+        )
+        board_segments = [
+            ("Connection: ", port.accent_attr()),
+            (port.board_connection_state, port.connection_attr_for(port.board_connection_state)),
+            (" | ", port.section_attr()),
+            ("Board: ", port.accent_attr()),
+            (config_accessor_api.board_label_for_config(port.config), 0),
+        ]
+        if ownership.get("state") != "disabled":
+            board_segments.extend([
+                (" | ", port.section_attr()),
+                ("Ownership: ", port.accent_attr()),
+                (
+                    str(ownership.get("text") or "unknown"),
+                    port.role_attr(_ownership_status_role(str(ownership.get("state") or "unknown"))),
+                ),
+            ])
+        port.add_segments(board_section_row + 1, 2, inner_width, board_segments)
+
+        project_section_row = board_section_row + 2
+        port.add_segments(
+            project_section_row,
+            2,
+            inner_width,
+            [
+                ("--- ", port.section_attr()),
+                ("Project ", port.section_attr()),
+                (
+                    config_accessor_api.moulin_manifest_name_for_config(port.config) + " ",
+                    port.section_attr(),
+                ),
+                ("-" * inner_width, port.section_attr()),
+            ],
+        )
+
+        build_param_segments = [
             (text, port.role_attr(role))
             for text, role in ui_status_segments_api.build_param_segments(port.build_params)
         ]
-        port.add_segments(row, x, width - x - 2, param_segments + [("   Docker image: ", 0), (port.docker_image, port.accent_attr())])
-        port.add(6, 2, "Targets:".ljust(label_width), port.accent_attr())
-        port.add(6, 2 + label_width, ui_text_api.fit_text(port.build_targets, inner_width - label_width))
+        row = project_section_row + 1
+        param_rows = _wrapped_segment_rows(build_param_segments, inner_width) if narrow else [build_param_segments]
+        for segments in param_rows:
+            port.add_segments(row, 2, inner_width, segments)
+            row += 1
+        target_segments: list[tuple[str, int]] = [("Targets: ", port.accent_attr())]
+        selected_targets = shlex.split(port.build_targets)
+        selected_target_set = set(selected_targets)
+        candidate_targets = list(dict.fromkeys(getattr(port, "build_target_candidates", []) or selected_targets))
+        candidate_target_set = set(candidate_targets)
+        unknown_targets = [target for target in selected_targets if target not in candidate_target_set]
+        available_targets = candidate_targets + unknown_targets
+        for index, target in enumerate(available_targets):
+            if index:
+                target_segments.append((" | ", port.section_attr()))
+            if target in unknown_targets:
+                attr = port.warn_attr()
+            elif target in selected_target_set:
+                attr = 0
+            else:
+                attr = port.disabled_attr()
+            target_segments.append((target, attr))
+        target_rows = _wrapped_segment_rows(target_segments, inner_width) if narrow else [target_segments]
+        for segments in target_rows:
+            port.add_segments(row, 2, inner_width, segments)
+            row += 1
+
+        product_ref_segments = [
+            (text, port.role_attr(role))
+            for text, role in ui_status_segments_api.product_ref_segments(
+                config_accessor_api.project_git_ref_for_config(port.config),
+                getattr(port, "preflight_values", {}),
+                narrow=narrow,
+            )
+        ]
+        port.add_segments(
+            row,
+            2,
+            inner_width,
+            product_ref_segments,
+        )
+        row += 1
+        port.add_segments(
+            row,
+            2,
+            inner_width,
+            [
+                ("--- ", port.section_attr()),
+                ("Readiness ", port.section_attr()),
+                ("-" * inner_width, port.section_attr()),
+            ],
+        )
+        row += 1
         preflight_segments = [
             (text, port.role_attr(role))
-            for text, role in ui_status_segments_api.preflight_segments(port.preflight, connected=bool(port.connection_state == "connected"))
+            for text, role in ui_status_segments_api.preflight_segments(
+                ui_status_segments_api.compact_header_preflight(port.preflight, narrow=narrow),
+                connected=bool(port.connection_state == "connected"),
+            )
         ]
-        port.add_segments(7, 2, inner_width, [("Preflight: ", port.accent_attr())] + preflight_segments)
-        port.add(8, 2, "Mappings:".ljust(label_width), port.accent_attr())
-        mapping_status = port.mapping_status_snapshot()
-        port.add(8, 2 + label_width, ui_text_api.fit_text(mapping_status["text"], inner_width - label_width), port.role_attr(mapping_status["role"]))
+        port.add_segments(row, 2, inner_width, [("Preflight: ", port.accent_attr())] + preflight_segments)
 
     def draw_actions_panel(
         self,

@@ -309,6 +309,11 @@ def build_runtime_context_for_config(
         default_moulin_manifest=default_moulin_manifest,
         build_params=dict(context["build_params"]),
     )
+    context["build_target_candidates"] = [
+        str(candidate["target"])
+        for candidate in target_candidates
+        if str(candidate.get("target", "")).strip()
+    ]
     if not env.get("MOULIN_REMOTE_BUILD_TARGETS"):
         context["build_targets"] = reconciled_build_targets(
             str(context["build_targets"]),

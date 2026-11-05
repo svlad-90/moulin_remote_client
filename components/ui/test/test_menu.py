@@ -315,8 +315,23 @@ class MenuModelBehaviorTests(unittest.TestCase):
                 ("3. Stop running command", 2),
             ],
         )
-        self.assertEqual(menu.clamp_menu_scroll(rows, selected=0, scroll=3, visible_rows=4), 1)
+        self.assertEqual(menu.clamp_menu_scroll(rows, selected=0, scroll=3, visible_rows=4), 0)
         self.assertEqual(menu.clamp_menu_scroll(rows, selected=1, scroll=3, visible_rows=4), 3)
+
+    def test_menu_scroll_keeps_heading_visible_for_first_group_item(self) -> None:
+        rows = [
+            ("HOSTS", None),
+            ("1. Open build host shell", 0),
+            ("2. Open board host shell", 1),
+            ("", None),
+            ("OWNERSHIP", None),
+            ("3. Acquire board", 2),
+        ]
+
+        self.assertEqual(
+            menu.clamp_menu_scroll(rows, selected=0, scroll=1, visible_rows=4),
+            0,
+        )
 
     def test_menu_tabs_filter_visible_items_with_local_display_numbers(self) -> None:
         items = [

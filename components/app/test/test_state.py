@@ -58,6 +58,7 @@ class AppStateControllerTests(unittest.TestCase):
                     "docker_image": "image",
                     "build_params": {"A": "1"},
                     "build_targets": "target",
+                    "build_target_candidates": ["target", "other"],
                     "board_artifacts": "artifact",
                 },
             ) as runtime_factory, patch(
@@ -71,6 +72,7 @@ class AppStateControllerTests(unittest.TestCase):
             self.assertEqual(port.docker_image, "image")
             self.assertEqual(port.build_params, {"A": "1"})
             self.assertEqual(port.build_targets, "target")
+            self.assertEqual(port.build_target_candidates, ["target", "other"])
             self.assertEqual(port.board_artifacts, "artifact")
             self.assertEqual(port.mapping_selection_cache, ["src"])
             self.assertNotIn("details", port.render_cache)
@@ -103,6 +105,7 @@ class AppStateControllerTests(unittest.TestCase):
             self.assertEqual(port.docker_image, "")
             self.assertEqual(port.build_params, {})
             self.assertEqual(port.build_targets, "default-target")
+            self.assertEqual(port.build_target_candidates, [])
             self.assertEqual(port.board_artifacts, "default-target")
             self.assertEqual(port.connection_state, "disconnected")
             self.assertEqual(port.board_connection_state, "disconnected")

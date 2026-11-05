@@ -254,6 +254,14 @@ def board_host_label_for_config(config: dict[str, Any]) -> str:
     return profile_label(config_profiles.active_board(config), "board")
 
 
+def board_access_host_label_for_config(config: dict[str, Any]) -> str:
+    return profile_label(config_profiles.active_board_access_host(config), "board host")
+
+
+def board_label_for_config(config: dict[str, Any]) -> str:
+    return profile_label(config_profiles.active_board(config), "board")
+
+
 def board_host_spec_for_config(config: dict[str, Any]) -> str:
     return host_spec(config_profiles.active_board_access_host(config))
 

@@ -320,6 +320,50 @@ if not build_dirs:
             build_params=build_params,
         )
 
+    def repo_source_sync_command(
+        self,
+        remote: str,
+        project_dir: str,
+        docker_image: str,
+        *,
+        force: bool,
+    ) -> list[str]:
+        sync_flags = "--fail-fast --force-sync" if force else "--fail-fast"
+        script = (
+            "set -eu; found=0; "
+            "repo_dirs=$(find . -mindepth 2 -maxdepth 5 -type d -name .repo -print); "
+            "for repo_dir in $repo_dirs; do source_dir=${repo_dir%/.repo}; found=1; "
+            "printf 'Checking Repo workspace: %s\\n' \"$source_dir\"; "
+            "status=$(cd \"$source_dir\" && repo forall -c '"
+            "changes=$(git status --porcelain); "
+            "if [ -n \"$changes\" ]; then "
+            "printf \"project %s\\n%s\\n\" \"$REPO_PATH\" \"$changes\"; fi'); "
+            "if [ -n \"$status\" ]; then "
+            "printf 'Local Repo workspace changes prevent synchronization:\\n%s\\n' \"$status\" >&2; exit 2; fi; "
+            f"(cd \"$source_dir\" && repo sync {sync_flags}); "
+            "done; "
+            "if [ \"$found\" -eq 0 ]; then printf 'No Repo source workspaces found; nothing to synchronize.\\n'; fi"
+        )
+        return self.session_service.remote_shell_command(
+            remote,
+            project_dir,
+            self.product_docker_command(project_dir, docker_image, script),
+        )
+
+    def repo_source_sync_command_for_config(
+        self,
+        config: dict[str, Any],
+        *,
+        docker_image: str,
+        force: bool,
+    ) -> list[str]:
+        return self.repo_source_sync_command(
+            config_accessors.remote_spec_for_config(config),
+            config_accessors.remote_project_dir_for_config(config),
+            docker_image,
+            force=force,
+        )
+
     def run_moulin_for_config(
         self,
         config: dict[str, Any],
