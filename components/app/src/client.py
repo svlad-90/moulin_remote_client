@@ -235,6 +235,9 @@ class ClientApp:
     def group_attr(self) -> int:
         return self.terminal.group_attr()
 
+    def section_attr(self) -> int:
+        return self.terminal.section_attr()
+
     def disabled_attr(self) -> int:
         return self.terminal.disabled_attr()
 
@@ -259,8 +262,21 @@ class ClientApp:
     def add_segments(self, y: int, x: int, max_width: int, segments: list[tuple[str, int]]) -> None:
         self.terminal.add_segments(self, y, x, max_width, segments)
 
-    def draw_box(self, top: int, left: int, height: int, width: int, title: str = "", attr: int = 0) -> None:
-        self.terminal.draw_box(self, top, left, height, width, title, attr)
+    def draw_box(
+        self,
+        top: int,
+        left: int,
+        height: int,
+        width: int,
+        title: str = "",
+        attr: int = 0,
+        *,
+        title_attr: int | None = None,
+    ) -> None:
+        if title_attr is None:
+            self.terminal.draw_box(self, top, left, height, width, title, attr)
+            return
+        self.terminal.draw_box(self, top, left, height, width, title, attr, title_attr=title_attr)
 
     def connection_attr_for(self, state: str) -> int:
         return self.terminal.connection_attr_for(state)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from components.config.src.accessors import (
+    board_access_host_label_for_config,
     board_artifacts_dir,
     board_artifacts_dir_for_config,
     board_camera_stream_url,
@@ -20,6 +21,7 @@ from components.config.src.accessors import (
     board_host_user_for_config,
     board_ipaddr,
     board_ipaddr_for_config,
+    board_label_for_config,
     board_mac_address,
     board_mac_address_for_config,
     board_network_base_dir,
@@ -88,6 +90,7 @@ from components.config.src.accessors import (
 )
 
 __all__ = [
+    "board_access_host_label_for_config",
     "board_artifacts_dir",
     "board_artifacts_dir_for_config",
     "board_camera_stream_url",
@@ -105,6 +108,7 @@ __all__ = [
     "board_host_user_for_config",
     "board_ipaddr",
     "board_ipaddr_for_config",
+    "board_label_for_config",
     "board_mac_address",
     "board_mac_address_for_config",
     "board_network_base_dir",

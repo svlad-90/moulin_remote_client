@@ -45,8 +45,9 @@ def main_layout(height: int, width: int) -> MainLayout:
     left_width = min(46, max(34, width // 3))
     right_left = left_width + 1
     right_width = width - right_left
-    panel_top = 11
-    panel_height = height - 13
+    header_height = 15 if width < 110 else 12
+    panel_top = header_height + 1
+    panel_height = height - header_height - 3
     details_height = max(8, panel_height // 2)
     logs_height = max(5, panel_height - details_height - 1)
     logs_top = panel_top + details_height + 1
@@ -62,6 +63,11 @@ def main_layout(height: int, width: int) -> MainLayout:
         logs_height=logs_height,
         logs_top=logs_top,
     )
+
+
+def minimum_main_height(width: int) -> int:
+    """Return the smallest height that fits header, Details, Logs, and footer."""
+    return 32 if width < 110 else 29
 
 
 def label_value_layout(x: int, width: int, label: str) -> LabelValueLayout:

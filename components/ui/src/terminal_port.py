@@ -40,6 +40,7 @@ class TerminalPortController:
         curses.init_pair(7, curses.COLOR_GREEN, -1)
         curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_GREEN)
         curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+        curses.init_pair(10, curses.COLOR_MAGENTA, -1)
 
     def configure_escape_delay(self) -> None:
         try:
@@ -201,6 +202,9 @@ class TerminalPortController:
     def group_attr(self) -> int:
         return curses.color_pair(4) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
 
+    def section_attr(self) -> int:
+        return curses.color_pair(10) | curses.A_DIM if curses.has_colors() else curses.A_DIM
+
     def disabled_attr(self) -> int:
         return curses.A_DIM
 
@@ -218,6 +222,7 @@ class TerminalPortController:
             "disabled": self.disabled_attr,
             "error": self.error_attr,
             "ok": self.ok_attr,
+            "section": self.section_attr,
             "warn": self.warn_attr,
         }
         attr_func = attrs.get(role)
@@ -240,7 +245,18 @@ class TerminalPortController:
             pos += len(chunk)
             remaining -= len(chunk)
 
-    def draw_box(self, port: Any, top: int, left: int, height: int, width: int, title: str = "", attr: int = 0) -> None:
+    def draw_box(
+        self,
+        port: Any,
+        top: int,
+        left: int,
+        height: int,
+        width: int,
+        title: str = "",
+        attr: int = 0,
+        *,
+        title_attr: int | None = None,
+    ) -> None:
         if height < 2 or width < 2:
             return
         horizontal = "-" * max(0, width - 2)
@@ -251,7 +267,8 @@ class TerminalPortController:
             self.add(port, row, left + width - 1, "|", attr)
         self.add(port, top + height - 1, left, "+" + horizontal + "+", attr)
         if title:
-            self.add(port, top, left + 2, f" {title} "[: max(0, width - 4)], attr or self.accent_attr())
+            resolved_title_attr = title_attr if title_attr is not None else attr or self.accent_attr()
+            self.add(port, top, left + 2, f" {title} "[: max(0, width - 4)], resolved_title_attr)
 
     def connection_attr_for(self, state: str) -> int:
         if state == "connected":

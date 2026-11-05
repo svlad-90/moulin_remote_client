@@ -110,6 +110,7 @@ class AppStateController:
         port.docker_image = str(context["docker_image"])
         port.build_params = dict(context["build_params"])
         port.build_targets = str(context["build_targets"]) or config_env.build_targets_from_env(self.env, self.default_build_targets)
+        port.build_target_candidates = [str(target) for target in context.get("build_target_candidates", [])]
         port.board_artifacts = str(context["board_artifacts"]) or port.build_targets
 
     def load_active_project_runtime(
@@ -131,6 +132,7 @@ class AppStateController:
         port.docker_image = str(context["docker_image"])
         port.build_params = dict(context["build_params"])
         port.build_targets = str(context["build_targets"])
+        port.build_target_candidates = [str(target) for target in context.get("build_target_candidates", [])]
         port.board_artifacts = str(context["board_artifacts"])
 
     def refresh_mapping_selection_cache(self, port: Any) -> None:

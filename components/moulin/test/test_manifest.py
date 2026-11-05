@@ -268,6 +268,7 @@ class MoulinManifestBehaviorTests(unittest.TestCase):
             )
 
             self.assertEqual(context["build_targets"], "boot_artifacts full_ufs.img.gz")
+            self.assertEqual(context["build_target_candidates"], ["boot_artifacts", "full_ufs.img.gz"])
 
     @unittest.skipUnless(manifest.yaml_available(), "PyYAML is not installed")
     def test_build_runtime_context_preserves_valid_target_subset(self) -> None:

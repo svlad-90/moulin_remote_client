@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from collections import deque
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -69,6 +70,7 @@ class FakePort:
         self.render_cache: dict[str, Any] = {}
         self.connection_state = "connected"
         self.board_connection_state = "connected"
+        self.board_ownership_status = {"state": "free", "text": "free"}
         self.active_job: dict[str, Any] | None = None
         self.board_job: dict[str, Any] | None = None
         self.last_job: dict[str, Any] | None = None
@@ -84,6 +86,7 @@ class FakePort:
         self.docker_image = ""
         self.build_targets = ""
         self.preflight = ""
+        self.preflight_values: dict[str, str] = {}
         self.mapping_selection_cache: list[str] = []
         self.last_exit: int | None = None
         self.rows: list[tuple[int, int, str, int]] = []
@@ -130,6 +133,26 @@ class MainDrawControllerTests(unittest.TestCase):
         self.assertTrue(port.main_full_redraw)
         self.assertTrue(any("Terminal is too small" in row[2] for row in port.rows))
 
+    def test_terminal_shorter_than_supported_layout_draws_warning(self) -> None:
+        port = FakePort(height=28, width=100)
+        panels = FakePanels()
+
+        with patch("components.ui.src.main_draw.ui_panels_api.main_panels_controller", return_value=panels):
+            main_draw.main_draw_controller(app_dir=Path("/app")).draw(port)
+
+        self.assertEqual(panels.calls, [])
+        self.assertTrue(any("80x32" in row[2] for row in port.rows))
+
+    def test_wide_terminal_keeps_shorter_minimum_height(self) -> None:
+        port = FakePort(height=28, width=120)
+        panels = FakePanels()
+
+        with patch("components.ui.src.main_draw.ui_panels_api.main_panels_controller", return_value=panels):
+            main_draw.main_draw_controller(app_dir=Path("/app")).draw(port)
+
+        self.assertEqual(panels.calls, [])
+        self.assertTrue(any("80x29" in row[2] for row in port.rows))
+
     def test_full_draw_renders_all_main_panels_and_caches_layout(self) -> None:
         port = FakePort()
         panels = FakePanels()
@@ -154,8 +177,50 @@ class MainDrawControllerTests(unittest.TestCase):
         self.assertEqual(port.screen.erase_count, 1)
         self.assertFalse(port.main_full_redraw)
 
+    def test_logs_redraw_when_terminal_rewrites_a_line_outside_cached_tail(self) -> None:
+        port = FakePort()
+        port.main_full_redraw = False
+        port.active_job = {
+            "title": "Incremental rebuild",
+            "item_label": "Run product build",
+            "finished": False,
+            "output": deque(["[0/2] Repo sync", "one", "two", "three", "four", "five"]),
+            "output_revision": 1,
+        }
+        panels = FakePanels()
+        controller = main_draw.main_draw_controller(app_dir=Path("/app"))
+
+        with (
+            patch("components.ui.src.main_draw.ui_panels_api.main_panels_controller", return_value=panels),
+            patch("components.ui.src.main_draw.time.monotonic", side_effect=[1.0, 1.0, 2.0, 2.0]),
+        ):
+            controller._draw_logs(port, 10, 60, 12, 59, port.items[0], True, (), [])
+            port.active_job["output"][0] = "[1/2] Android build"
+            port.active_job["output_revision"] = 2
+            port.logs_dirty = True
+            controller._draw_logs(port, 10, 60, 12, 59, port.items[0], True, (), [])
+
+        self.assertEqual(panels.calls, ["logs", "logs"])
+
+    def test_header_cache_tracks_product_refs_and_board_ownership(self) -> None:
+        port = FakePort()
+        panels = FakePanels()
+        controller = main_draw.main_draw_controller(app_dir=Path("/app"))
+        rendered: list[str] = []
+
+        with patch("components.ui.src.main_draw.ui_panels_api.main_panels_controller", return_value=panels):
+            controller._draw_header(port, 120, rendered)
+            port.main_full_redraw = False
+            controller._draw_header(port, 120, rendered)
+            port.preflight_values = {"remote_ref": "main@abc1234"}
+            controller._draw_header(port, 120, rendered)
+            port.board_ownership_status = {"state": "busy", "text": "owned by other"}
+            controller._draw_header(port, 120, rendered)
+
+        self.assertEqual(panels.calls, ["header", "header", "header"])
+
     def test_full_draw_wraps_long_action_labels_before_scroll_and_render(self) -> None:
-        port = FakePort(width=82)
+        port = FakePort(height=32, width=82)
         port.items = [
             MenuItem("Build Docker image", "build commands", "", lambda _app: "", lambda _app: None),
             MenuItem("Clean impacted Yocto recipes + run product build", "build commands", "", lambda _app: "", lambda _app: None),

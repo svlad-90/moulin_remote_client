@@ -76,6 +76,9 @@ class FakeTerminalAdapter:
     def selected_warn_attr(self) -> int:
         return 9
 
+    def section_attr(self) -> int:
+        return 10
+
     def read_key(self, _port: Any) -> int:
         return 113
 
@@ -187,6 +190,7 @@ class ClientAppFactoryTests(unittest.TestCase):
             self.assertEqual(app.stop_running_preview("build"), "preview:build")
             self.assertEqual(app.selected_attr(), 7)
             self.assertEqual(app.selected_warn_attr(), 9)
+            self.assertEqual(app.section_attr(), 10)
             self.assertEqual(app.read_key(), 113)
             app.add(1, 2, "text", 3)
             app.quit()

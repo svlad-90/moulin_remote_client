@@ -15,6 +15,7 @@ class AppTerminalPortAdapterTests(unittest.TestCase):
             terminal_port = Mock()
             terminal_port.selected_attr.return_value = 7
             terminal_port.selected_warn_attr.return_value = 9
+            terminal_port.section_attr.return_value = 10
             terminal_port.read_key.return_value = 113
             terminal_port.draw_wrapped.return_value = 4
             main_menu_state = Mock()
@@ -37,6 +38,7 @@ class AppTerminalPortAdapterTests(unittest.TestCase):
             adapter.unread_key(10)
             self.assertEqual(adapter.selected_attr(), 7)
             self.assertEqual(adapter.selected_warn_attr(), 9)
+            self.assertEqual(adapter.section_attr(), 10)
             self.assertTrue(adapter.item_enabled(port, item))
             self.assertEqual(adapter.disabled_reason(port, item), "")
             adapter.add(port, 1, 2, "text", 3)

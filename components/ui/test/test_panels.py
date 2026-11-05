@@ -67,12 +67,13 @@ class FakePanelPort:
         self.build_params = {"ENABLE_ANDROID": "yes"}
         self.docker_image = "image"
         self.build_targets = "full_ufs.img.gz"
+        self.build_target_candidates = ["full_ufs.img.gz"]
         self.preflight = "ssh ok"
         self.mapping_selection_cache = ["meta"]
         self.last_exit: int | None = 0
         self.rows: list[tuple[int, int, str, int | None]] = []
         self.segment_calls: list[list[tuple[str, int]]] = []
-        self.boxes: list[tuple[int, int, int, int, str, int | None]] = []
+        self.boxes: list[tuple[int, int, int, int, str, int | None, int | None]] = []
 
     def add(self, row: int, col: int, text: str, attr: int | None = None) -> None:
         self.rows.append((row, col, text, attr))
@@ -81,8 +82,18 @@ class FakePanelPort:
         self.segment_calls.append(segments)
         self.rows.append((row, col, "".join(text for text, _attr in segments), None))
 
-    def draw_box(self, top: int, left: int, height: int, width: int, title: str, attr: int | None = None) -> None:
-        self.boxes.append((top, left, height, width, title, attr))
+    def draw_box(
+        self,
+        top: int,
+        left: int,
+        height: int,
+        width: int,
+        title: str,
+        attr: int | None = None,
+        *,
+        title_attr: int | None = None,
+    ) -> None:
+        self.boxes.append((top, left, height, width, title, attr, title_attr))
 
     def draw_wrapped(self, row: int, x: int, width: int, text: str, *, max_lines: int = 3) -> int:
         lines = [text[index : index + width] for index in range(0, len(text), width)] or [""]
@@ -95,6 +106,9 @@ class FakePanelPort:
 
     def group_attr(self) -> int:
         return 2
+
+    def section_attr(self) -> int:
+        return 14
 
     def disabled_attr(self) -> int:
         return 3
@@ -115,7 +129,7 @@ class FakePanelPort:
         return 7
 
     def role_attr(self, role: str) -> int:
-        return {"ok": 10, "warn": 11, "error": 12, "disabled": 13}.get(role, 5)
+        return {"ok": 10, "warn": 11, "error": 12, "disabled": 13, "section": 14}.get(role, 5)
 
     def item_enabled(self, _item: Any) -> bool:
         return True
@@ -268,21 +282,166 @@ class MainPanelsControllerTests(unittest.TestCase):
 
     def test_draw_header_renders_configured_state(self) -> None:
         port = FakePanelPort()
+        port.config.update({
+            "active_board_host": "lab-host",
+            "active_board": "carla-3",
+            "board_hosts": [
+                {
+                    "name": "lab-host",
+                    "label": "testrpi5",
+                    "user": "tester",
+                    "host": "10.0.0.2",
+                    "boards": [{"name": "carla-3", "label": "carla.ih3"}],
+                }
+            ],
+        })
+        port.config["projects"][0]["git_ref"] = "topic"
+        port.build_targets = "dom0 full_ufs.img.gz"
+        port.build_target_candidates = ["boot_artifacts", "dom0", "full_ufs.img.gz"]
+        port.preflight = "project ok | disk 48G free | origin ok | ref ok"
+        port.preflight_values = {
+            "remote_ref": "topic@abc1234",
+            "synced_ref": "topic@abc1234",
+            "ref": "ok",
+        }
 
-        panels.main_panels_controller().draw_header(port, 120, app_dir=Path("/tmp"))
+        panels.main_panels_controller().draw_header(port, 120)
 
         rendered = [row[2] for row in port.rows]
-        self.assertTrue(any("Build host:" in text for text in rendered))
-        self.assertTrue(any("Board host:" in text for text in rendered))
+        self.assertEqual(port.boxes[0][-1], 9)
+        self.assertFalse(any(text.startswith("Overlay:") for text in rendered))
+        self.assertFalse(any(text.startswith("Mappings:") for text in rendered))
+        self.assertTrue(any(text.startswith("--- Build host Build (builder@10.0.0.1) --") for text in rendered))
+        self.assertTrue(any(text.startswith("--- Board host testrpi5 (tester@10.0.0.2) --") for text in rendered))
+        self.assertTrue(any(text.startswith("--- Project product.yaml --") for text in rendered))
+        build_section_segments = next(
+            segments
+            for segments in port.segment_calls
+            if any("Build host " in text for text, _attr in segments)
+        )
+        self.assertEqual(build_section_segments[0], ("--- ", 14))
+        self.assertEqual(build_section_segments[1], ("Build host ", 14))
+        self.assertTrue(all(attr == 14 for _text, attr in build_section_segments))
+        board_section_segments = next(
+            segments
+            for segments in port.segment_calls
+            if any("Board host " in text for text, _attr in segments)
+        )
+        project_section_segments = next(
+            segments
+            for segments in port.segment_calls
+            if any(text == "Project " for text, _attr in segments)
+        )
+        readiness_section_segments = next(
+            segments
+            for segments in port.segment_calls
+            if any(text == "Readiness " for text, _attr in segments)
+        )
+        self.assertEqual(board_section_segments[1], ("Board host ", 14))
+        self.assertEqual(project_section_segments[1], ("Project ", 14))
+        self.assertEqual(readiness_section_segments[1], ("Readiness ", 14))
+        self.assertTrue(all(attr == 14 for _text, attr in board_section_segments))
+        self.assertTrue(all(attr == 14 for _text, attr in project_section_segments))
+        self.assertTrue(all(attr == 14 for _text, attr in readiness_section_segments))
+        self.assertTrue(any("Connection: connected | Projects: /mnt/projects" in text for text in rendered))
+        project_section_row = next(
+            row
+            for row, _col, text, _attr in port.rows
+            if text.startswith("--- Project product.yaml --")
+        )
+        params_row = next(row for row, _col, text, _attr in port.rows if text.startswith("Params: "))
+        self.assertGreater(params_row, project_section_row)
+        build_host_segments = next(
+            segments
+            for segments in port.segment_calls
+            if any("Projects:" in text for text, _attr in segments)
+        )
+        self.assertEqual(build_host_segments[0], ("Connection: ", 4))
+        self.assertEqual(build_host_segments[1], ("connected", 7))
+        self.assertEqual(build_host_segments[2], (" | ", 14))
+        self.assertEqual(build_host_segments[3], ("Projects: ", 4))
+        self.assertTrue(any("Board: carla.ih3" in text for text in rendered))
         self.assertTrue(any("Ownership: acquired by you" in text for text in rendered))
+        self.assertFalse(any("Connections:" in text for text in rendered))
         ownership_segments = next(
             segments
             for segments in port.segment_calls
             if any("Ownership:" in text for text, _attr in segments)
         )
-        self.assertEqual(ownership_segments[-1], ("acquired by you", 10))
+        self.assertIn(("acquired by you", 10), ownership_segments)
+        self.assertEqual(ownership_segments[0], ("Connection: ", 4))
+        self.assertEqual(ownership_segments[1], ("connected", 7))
+        self.assertEqual(ownership_segments[2], (" | ", 14))
+        self.assertEqual(ownership_segments[3], ("Board: ", 4))
+        self.assertEqual(ownership_segments[5], (" | ", 14))
+        self.assertEqual(ownership_segments[6], ("Ownership: ", 4))
         self.assertTrue(any("full_ufs.img.gz" in text for text in rendered))
-        self.assertTrue(any("Preflight: ssh ok" in text for text in rendered))
+        target_segments = next(
+            segments
+            for segments in port.segment_calls
+            if segments and segments[0][0].startswith("Targets:")
+        )
+        self.assertEqual(target_segments[0], ("Targets: ", 4))
+        self.assertEqual(
+            target_segments[1:],
+            [
+                ("boot_artifacts", 3),
+                (" | ", 14),
+                ("dom0", 0),
+                (" | ", 14),
+                ("full_ufs.img.gz", 0),
+            ],
+        )
+        self.assertTrue(any("Preflight: project ok | disk 48G free" in text for text in rendered))
+        self.assertFalse(any("origin ok" in text or "ref ok" in text for text in rendered))
+        self.assertTrue(
+            any(
+                "Product ref: topic | Cached tip: abc1234 | HEAD: synced" in text
+                for text in rendered
+            )
+        )
+
+    def test_draw_header_wraps_full_project_details_at_narrow_width(self) -> None:
+        port = FakePanelPort()
+        port.build_params = {
+            "BB_PRIORITY": "high",
+            "DOMA_LAUNCH_TARGET": "aosp_xenvm_trout_arm64-trunk_staging-userdebug",
+        }
+        port.build_targets = "dom0 stale"
+        port.build_target_candidates = ["dom0", "doma", "domd"]
+        port.config["projects"][0]["git_ref"] = "topic"
+        port.preflight_values = {
+            "remote_ref": "topic@abc1234",
+            "synced_ref": "topic@abc1234",
+            "ref": "ok",
+        }
+        port.preflight = "project ok | disk 48G free, 10% used | git clean | docker ok"
+
+        panels.main_panels_controller().draw_header(port, 80)
+
+        rendered = [row[2] for row in port.rows]
+        rendered_text = "\n".join(rendered)
+        self.assertIn("Params: BB_PRIORITY=high", rendered_text)
+        self.assertIn("DOMA_LAUNCH_TARGET=aosp_xenvm_trout_arm64-trunk_staging-userdebug", rendered_text)
+        self.assertIn("Targets: dom0 | doma | domd | stale", rendered_text)
+        self.assertTrue(any("Ref: topic@abc1234 | HEAD: synced" in text for text in rendered))
+        self.assertTrue(any("disk 48G free | git clean" in text for text in rendered))
+        self.assertTrue(any("Projects:" in text for text in rendered))
+        self.assertEqual(port.boxes[0][2], 15)
+
+    def test_draw_header_warns_for_selected_target_outside_candidates(self) -> None:
+        port = FakePanelPort()
+        port.build_targets = "dom0 stale"
+        port.build_target_candidates = ["dom0", "doma"]
+
+        panels.main_panels_controller().draw_header(port, 120)
+
+        target_segments = next(
+            segments
+            for segments in port.segment_calls
+            if segments and segments[0][0].startswith("Targets:")
+        )
+        self.assertIn(("stale", 9), target_segments)
 
     def test_draw_header_colors_ownership_by_state(self) -> None:
         expected = {
@@ -299,14 +458,14 @@ class MainPanelsControllerTests(unittest.TestCase):
                 port = FakePanelPort()
                 port.board_ownership_status = {"state": state, "text": state, "owner": ""}
 
-                panels.main_panels_controller().draw_header(port, 120, app_dir=Path("/tmp"))
+                panels.main_panels_controller().draw_header(port, 120)
 
                 ownership_segments = next(
                     segments
                     for segments in port.segment_calls
                     if any("Ownership:" in text for text, _segment_attr in segments)
                 )
-                self.assertEqual(ownership_segments[-1], (state, attr))
+                self.assertIn((state, attr), ownership_segments)
 
     def test_draw_actions_panel_renders_selected_item(self) -> None:
         port = FakePanelPort()
