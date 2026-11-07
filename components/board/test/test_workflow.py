@@ -194,6 +194,8 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         restart = service.board_action_commands(config, "restart_board")
 
         self.assertEqual(len(power_off), 1)
+        self.assertIn("-tt", power_off[0])
+        self.assertIn("bash -lic", power_off[0][-1])
         self.assertIn("relayctl off slot-2", power_off[0][-1])
         self.assertIn("relayctl normal slot-2", restart[-1][-1])
 
@@ -217,6 +219,9 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
             ["ownership_acquire", "ownership_release"],
         )
         self.assertNotIn("ownership_status", [action.action_id for action in actions])
+        self.assertNotIn("-tt", acquire[0])
+        self.assertNotIn("-tt", release[0])
+        self.assertNotIn("-tt", status[0])
         self.assertIn("labgrid-client -p ironhide-2 acquire", acquire[0][-1])
         self.assertIn("labgrid-client -p ironhide-2 release", release[0][-1])
         self.assertIn("labctl --board ironhide-2 status", status[0][-1])

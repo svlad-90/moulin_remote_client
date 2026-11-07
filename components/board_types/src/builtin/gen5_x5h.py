@@ -602,7 +602,12 @@ sys.stdout.buffer.flush()
         if action_id == "restart_board":
             return self.restart_board_command_plan(ctx)
         if action_id == "turn_off_board":
-            return self.board_power_command_plan(ctx, command_id="power_off", title="Turn off board")
+            return self.board_power_command_plan(
+                ctx,
+                command_id="power_off",
+                title="Turn off board",
+                interactive=True,
+            )
         if action_id in {"ownership_acquire", "ownership_release", "ownership_status"}:
             titles = {
                 "ownership_acquire": "Acquire board",
@@ -1492,6 +1497,7 @@ echo "rootfs deploy: done" >&2
         *,
         command_id: str,
         title: str,
+        interactive: bool = False,
     ) -> list[list[str]]:
         command = self.board_command(ctx, command_id)
         if not command.strip():
@@ -1504,7 +1510,9 @@ echo "rootfs deploy: done" >&2
             f"echo {shlex.quote('done: ' + command)}\n"
         )
         return [ctx.command_builder.board_ssh_command(
-            config_accessors.board_host_spec_for_config(ctx.config), script,
+            config_accessors.board_host_spec_for_config(ctx.config),
+            script,
+            tty=interactive,
         )]
 
     def board_console_command_plan(
