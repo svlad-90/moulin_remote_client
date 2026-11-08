@@ -47,7 +47,7 @@ class TerminalPortController:
 
     def configure_escape_delay(self) -> None:
         try:
-            curses.set_escdelay(500)
+            curses.set_escdelay(100)
         except (AttributeError, curses.error):
             pass
 

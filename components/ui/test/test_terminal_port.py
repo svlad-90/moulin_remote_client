@@ -114,13 +114,13 @@ class FakePort:
 
 
 class TerminalPortControllerTests(unittest.TestCase):
-    def test_configure_escape_delay_allows_complete_arrow_sequences(self) -> None:
+    def test_configure_escape_delay_keeps_escape_responsive(self) -> None:
         fake_curses = FakeCurses()
 
         with patch("components.ui.src.terminal_port.curses", fake_curses):
             terminal_port.terminal_port_controller().configure_escape_delay()
 
-        self.assertIn(("set_escdelay", 500), fake_curses.calls)
+        self.assertIn(("set_escdelay", 100), fake_curses.calls)
 
     def test_job_notification_wakes_event_wait(self) -> None:
         port = FakePort()

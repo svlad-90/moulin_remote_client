@@ -133,6 +133,7 @@ class AppServicesController:
     def poll_background_tasks(self, port: Any) -> None:
         self.workflows.poll_project_source_reload(port)
         self.board_ownership.poll(port)
+        self.ui.poll_mapping_selection_refresh(port)
         self.ui.poll_plugin_view(port)
 
     def plugin_runtime(self) -> Any:

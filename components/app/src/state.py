@@ -69,6 +69,7 @@ class AppStateController:
         port.board_ownership_task = None
         port.board_ownership_next_poll = 0.0
         port.board_ownership_last_job = None
+        port.mapping_selection_refresh_task = None
         port.preflight_values = {}
         port.status = "Disconnected"
         reset_preflight(port)
@@ -138,11 +139,23 @@ class AppStateController:
         port.board_artifacts = str(context["board_artifacts"])
 
     def refresh_mapping_selection_cache(self, port: Any) -> None:
-        port.mapping_selection_cache = self.mapping_selection_service.read_mapping_selection_for_config(
-            port.config,
-            config_accessors.mapping_selection_path_for_config(port.config, self.app_dir),
+        self.apply_mapping_selection_cache(
+            port,
+            self.read_mapping_selection_cache(port.config),
+        )
+
+    def read_mapping_selection_cache(self, config: dict[str, Any]) -> list[str]:
+        """Read selected mappings without mutating live UI state."""
+        return self.mapping_selection_service.read_mapping_selection_for_config(
+            config,
+            config_accessors.mapping_selection_path_for_config(config, self.app_dir),
             required=False,
         )
+
+    @staticmethod
+    def apply_mapping_selection_cache(port: Any, selection: list[str]) -> None:
+        """Apply a completed mapping read from the UI thread."""
+        port.mapping_selection_cache = selection
         if hasattr(port, "render_cache"):
             port.render_cache.pop("details", None)
 

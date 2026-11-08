@@ -31,6 +31,12 @@ class FakeAppState:
     def refresh_mapping_selection_cache(self, port: Any) -> None:
         self.refresh_calls.append(port)
 
+    def read_mapping_selection_cache(self, config: dict[str, Any]) -> list[str]:
+        return list(config.get("mappings", []))
+
+    def apply_mapping_selection_cache(self, port: Any, selection: list[str]) -> None:
+        port.mapping_selection_cache = selection
+
     def profile(self, port: Any, event: str, **fields: Any) -> None:
         self.profile_calls.append((port, event, fields))
 
