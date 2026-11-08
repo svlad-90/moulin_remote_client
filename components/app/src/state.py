@@ -79,6 +79,8 @@ class AppStateController:
         port.focus_panel = "actions"
         port.log_scroll = 0
         port.log_follow = True
+        port.log_selection_anchor = None
+        port.log_selection_cursor = None
         port.logs_expanded = False
         port.active_plugin_view = None
         port.focus_before_logs_expanded = "actions"

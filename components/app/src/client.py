@@ -363,6 +363,9 @@ class ClientApp:
     def restore_tui(self) -> None:
         self.terminal.restore_tui(self)
 
+    def copy_to_clipboard(self, text: str) -> bool:
+        return self.terminal.copy_to_clipboard(text)
+
     def wait_message(self, message: str) -> None:
         self.services.wait_message(self, message)
 

@@ -114,6 +114,14 @@ class FakePort:
 
 
 class TerminalPortControllerTests(unittest.TestCase):
+    def test_configure_escape_delay_allows_complete_arrow_sequences(self) -> None:
+        fake_curses = FakeCurses()
+
+        with patch("components.ui.src.terminal_port.curses", fake_curses):
+            terminal_port.terminal_port_controller().configure_escape_delay()
+
+        self.assertIn(("set_escdelay", 500), fake_curses.calls)
+
     def test_job_notification_wakes_event_wait(self) -> None:
         port = FakePort()
         controller = terminal_port.terminal_port_controller()
@@ -235,6 +243,76 @@ class TerminalPortControllerTests(unittest.TestCase):
             terminal_port.terminal_port_controller().configure_mouse()
 
         self.assertIn(("mousemask", fake_curses.ALL_MOUSE_EVENTS | fake_curses.REPORT_MOUSE_POSITION), fake_curses.calls)
+
+    def test_copy_to_clipboard_writes_base64_osc52_sequence(self) -> None:
+        with (
+            patch("components.ui.src.terminal_port.sys.stdout") as output,
+            patch.dict("components.ui.src.terminal_port.os.environ", {}, clear=True),
+            patch("components.ui.src.terminal_port.shutil.which", return_value=None),
+        ):
+            copied = terminal_port.terminal_port_controller().copy_to_clipboard(
+                "one\ntwo"
+            )
+
+        self.assertTrue(copied)
+        output.write.assert_called_once_with("\x1b]52;c;b25lCnR3bw==\x07")
+        output.flush.assert_called_once_with()
+
+    def test_copy_to_clipboard_prefers_wayland_helper(self) -> None:
+        with (
+            patch.dict(
+                "components.ui.src.terminal_port.os.environ",
+                {
+                    "WAYLAND_DISPLAY": "wayland-0",
+                    "GIO_LAUNCHED_DESKTOP_FILE": "agent-workspace.desktop",
+                    "GIO_LAUNCHED_DESKTOP_FILE_PID": "123",
+                    "XDG_ACTIVATION_TOKEN": "activation-token",
+                },
+                clear=True,
+            ),
+            patch(
+                "components.ui.src.terminal_port.shutil.which",
+                side_effect=lambda tool: "/usr/bin/wl-copy" if tool == "wl-copy" else None,
+            ),
+            patch("components.ui.src.terminal_port.subprocess.run") as run,
+        ):
+            copied = terminal_port.terminal_port_controller().copy_to_clipboard("log")
+
+        self.assertTrue(copied)
+        run.assert_called_once()
+        args, kwargs = run.call_args
+        self.assertEqual((["wl-copy"],), args)
+        self.assertEqual("log", kwargs["input"])
+        self.assertTrue(kwargs["text"])
+        self.assertTrue(kwargs["check"])
+        self.assertEqual(2, kwargs["timeout"])
+        self.assertNotIn("GIO_LAUNCHED_DESKTOP_FILE", kwargs["env"])
+        self.assertNotIn("GIO_LAUNCHED_DESKTOP_FILE_PID", kwargs["env"])
+        self.assertNotIn("XDG_ACTIVATION_TOKEN", kwargs["env"])
+        self.assertEqual("wayland-0", kwargs["env"]["WAYLAND_DISPLAY"])
+
+    def test_copy_to_clipboard_prefers_xclip_in_hybrid_session(self) -> None:
+        with (
+            patch.dict(
+                "components.ui.src.terminal_port.os.environ",
+                {"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"},
+                clear=True,
+            ),
+            patch(
+                "components.ui.src.terminal_port.shutil.which",
+                side_effect=lambda tool: (
+                    f"/usr/bin/{tool}" if tool in {"wl-copy", "xclip"} else None
+                ),
+            ),
+            patch("components.ui.src.terminal_port.subprocess.run") as run,
+        ):
+            copied = terminal_port.terminal_port_controller().copy_to_clipboard("log")
+
+        self.assertTrue(copied)
+        self.assertEqual(
+            ["xclip", "-selection", "clipboard"],
+            run.call_args.args[0],
+        )
 
 
 if __name__ == "__main__":

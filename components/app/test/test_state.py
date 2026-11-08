@@ -122,6 +122,8 @@ class AppStateControllerTests(unittest.TestCase):
             self.assertEqual(port.status, "Disconnected")
             self.assertEqual(port.selected, 0)
             self.assertEqual(port.focus_panel, "actions")
+            self.assertIsNone(port.log_selection_anchor)
+            self.assertIsNone(port.log_selection_cursor)
             self.assertEqual(port.items, ["item:Disconnected"])
             self.assertTrue(port.menu_dirty)
             self.assertTrue(port.main_full_redraw)

@@ -18,6 +18,7 @@ class AppTerminalPortAdapterTests(unittest.TestCase):
             terminal_port.section_attr.return_value = 10
             terminal_port.read_key.return_value = 113
             terminal_port.draw_wrapped.return_value = 4
+            terminal_port.copy_to_clipboard.return_value = True
             main_menu_state = Mock()
             main_menu_state.item_enabled.return_value = True
             main_menu_state.disabled_reason.return_value = ""
@@ -48,6 +49,7 @@ class AppTerminalPortAdapterTests(unittest.TestCase):
             self.assertEqual(adapter.draw_wrapped(port, 1, 2, 20, "text"), 4)
             adapter.suspend_tui()
             adapter.restore_tui(port)
+            self.assertTrue(adapter.copy_to_clipboard("log"))
 
             terminal_port.setup_colors.assert_called_once_with()
             terminal_port.configure_escape_delay.assert_called_once_with()
@@ -64,6 +66,7 @@ class AppTerminalPortAdapterTests(unittest.TestCase):
             terminal_port.draw_wrapped.assert_called_once_with(port, 1, 2, 20, "text", 0, 4)
             terminal_port.suspend_tui.assert_called_once_with()
             terminal_port.restore_tui.assert_called_once_with(port)
+            terminal_port.copy_to_clipboard.assert_called_once_with("log")
 
 
 if __name__ == "__main__":

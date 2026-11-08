@@ -35,6 +35,15 @@ class FakeConfigWorkflow:
         self.project_calls += 1
 
 
+class FakeScreen:
+    def __init__(self, height: int = 30, width: int = 100) -> None:
+        self.height = height
+        self.width = width
+
+    def getmaxyx(self) -> tuple[int, int]:
+        return self.height, self.width
+
+
 class FakePort:
     def __init__(self) -> None:
         self.items = [
@@ -46,13 +55,22 @@ class FakePort:
         self.menu_focus = "items"
         self.focus_panel = "actions"
         self.focus_before_logs_expanded = "actions"
+        self.screen = FakeScreen()
         self.logs_expanded = False
         self.main_full_redraw = False
         self.render_cache = {"x": "y"}
         self.log_follow = False
+        self.log_scroll = 0
+        self.log_selection_anchor: int | None = None
+        self.log_selection_cursor: int | None = None
         self.status = ""
         self.active_job: dict[str, Any] | None = None
         self.board_job: dict[str, Any] | None = None
+        self.last_job: dict[str, Any] | None = None
+        self.last_board_job: dict[str, Any] | None = None
+        self.last_jobs_by_label: dict[str, dict[str, Any]] = {}
+        self.last_board_jobs_by_label: dict[str, dict[str, Any]] = {}
+        self.copied_text = ""
         self.run_selected_calls = 0
         self.quit_calls = 0
         self.dialog_workflow = FakeDialogWorkflow(True)
@@ -66,6 +84,10 @@ class FakePort:
 
     def quit(self) -> None:
         self.quit_calls += 1
+
+    def copy_to_clipboard(self, text: str) -> bool:
+        self.copied_text = text
+        return True
 
     def dialog_workflow_controller(self) -> FakeDialogWorkflow:
         return self.dialog_workflow
@@ -183,6 +205,127 @@ class MainKeyControllerTests(unittest.TestCase):
         self.assertTrue(port.log_follow)
         self.assertTrue(port.main_full_redraw)
         self.assertEqual(port.render_cache, {})
+
+    def test_expanded_logs_horizontal_keys_cannot_change_selected_action(self) -> None:
+        port = FakePort()
+        port.items = [
+            MenuItem("One", "first", "First", lambda _app: "", lambda _app: None),
+            MenuItem("Two", "second", "Second", lambda _app: "", lambda _app: None),
+        ]
+        port.selected = 1
+        port.active_menu_tab = "first"
+        port.logs_expanded = True
+
+        controller = main_keys.main_key_controller()
+        for ch in (curses.KEY_LEFT, curses.KEY_RIGHT, ord("h"), ord("l")):
+            controller.handle_key(port, ch)
+
+        self.assertEqual(port.selected, 1)
+        self.assertEqual(port.active_menu_tab, "first")
+        self.assertTrue(port.logs_expanded)
+        self.assertIn("keeps the selected action", port.status)
+
+    def test_opening_expanded_logs_places_cursor_on_last_source_line(self) -> None:
+        port = FakePort()
+        port.last_job = {
+            "item_label": "One",
+            "output": ["first", "second", "third"],
+        }
+
+        main_keys.main_key_controller().handle_key(port, ord("f"))
+
+        self.assertTrue(port.logs_expanded)
+        self.assertEqual(port.log_selection_cursor, 2)
+        self.assertIsNone(port.log_selection_anchor)
+        self.assertTrue(port.log_follow)
+        self.assertEqual(port.status, "Current log line 3")
+
+    def test_expanded_logs_copy_current_line_and_keep_cursor(self) -> None:
+        port = FakePort()
+        port.logs_expanded = True
+        port.log_selection_cursor = 2
+        port.last_job = {
+            "item_label": "One",
+            "output": ["first   ", "", "", "second"],
+        }
+
+        main_keys.main_key_controller().handle_key(port, ord("c"))
+
+        self.assertEqual(port.copied_text, "second")
+        self.assertEqual(port.log_selection_cursor, 2)
+        self.assertIsNone(port.log_selection_anchor)
+        self.assertEqual(port.status, "Copied 1 log line; current line 3")
+
+    def test_expanded_logs_visual_selection_copies_only_selected_source_lines(self) -> None:
+        port = FakePort()
+        port.logs_expanded = True
+        port.log_selection_cursor = 0
+        port.last_job = {
+            "item_label": "One",
+            "output": ["first", "second", "third", "fourth"],
+        }
+
+        controller = main_keys.main_key_controller()
+        controller.handle_key(port, curses.KEY_SF)
+        controller.handle_key(port, curses.KEY_SF)
+        self.assertEqual(
+            port.status,
+            "Selected log lines 1-3; current line 3",
+        )
+        controller.handle_key(port, ord("c"))
+
+        self.assertIsNone(port.log_selection_anchor)
+        self.assertEqual(port.log_selection_cursor, 2)
+        self.assertEqual(port.copied_text, "first\nsecond\nthird")
+        self.assertEqual(port.status, "Copied 3 log lines; current line 3")
+
+    def test_expanded_logs_escape_cancels_selection_before_closing(self) -> None:
+        port = FakePort()
+        port.logs_expanded = True
+        port.log_selection_anchor = 1
+        port.log_selection_cursor = 2
+
+        controller = main_keys.main_key_controller()
+        controller.handle_key(port, 27)
+
+        self.assertTrue(port.logs_expanded)
+        self.assertIsNone(port.log_selection_anchor)
+        self.assertEqual(port.log_selection_cursor, 2)
+        self.assertEqual(port.status, "Log selection cancelled")
+
+    def test_plain_cursor_move_clears_existing_range(self) -> None:
+        port = FakePort()
+        port.logs_expanded = True
+        port.log_selection_cursor = 0
+        port.last_job = {
+            "item_label": "One",
+            "output": ["first", "second", "third"],
+        }
+
+        controller = main_keys.main_key_controller()
+        controller.handle_key(port, curses.KEY_SF)
+        controller.handle_key(port, curses.KEY_DOWN)
+
+        self.assertIsNone(port.log_selection_anchor)
+        self.assertEqual(port.log_selection_cursor, 2)
+        self.assertEqual(port.status, "Current log line 3")
+
+    def test_visual_selection_scrolls_to_keep_current_line_visible(self) -> None:
+        port = FakePort()
+        port.screen = FakeScreen(height=10)
+        port.logs_expanded = True
+        port.log_selection_cursor = 0
+        port.last_job = {
+            "item_label": "One",
+            "output": [f"line {index}" for index in range(20)],
+        }
+
+        controller = main_keys.main_key_controller()
+        controller.handle_key(port, curses.KEY_NPAGE)
+
+        self.assertEqual(port.log_selection_cursor, 10)
+        self.assertLessEqual(port.log_scroll, 10)
+        self.assertGreater(port.log_scroll + 2, 10)
 
     def test_settings_hotkey_runs_project_configuration_screen(self) -> None:
         port = FakePort()

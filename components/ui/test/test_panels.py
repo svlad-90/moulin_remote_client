@@ -59,6 +59,8 @@ class FakePanelPort:
         self.logs_expanded = False
         self.log_follow = True
         self.log_scroll = 0
+        self.log_selection_anchor: int | None = None
+        self.log_selection_cursor: int | None = None
         self.status = ""
         self.focus_panel = "logs"
         self.connection_state = "connected"
@@ -186,6 +188,71 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertIn("$ rm -rf -- alpha beta", rendered)
         self.assertIn("  gamma delta epsilon", rendered)
         self.assertTrue(any("lines 1-2/2 follow" in text for text in rendered))
+
+    def test_draw_logs_panel_highlights_selected_source_lines(self) -> None:
+        port = FakePanelPort()
+        port.last_job = _job(output=["first", "second", "third"])
+        port.log_selection_anchor = 0
+        port.log_selection_cursor = 1
+
+        panels.main_panels_controller().draw_logs_panel(
+            port, 0, 0, 10, 80, port.items[0]
+        )
+
+        attrs = {text: attr for _row, _col, text, attr in port.rows}
+        self.assertEqual(attrs["first"], port.selected_attr())
+        self.assertEqual(attrs["second"], port.selected_active_attr())
+        self.assertEqual(attrs["third"], 0)
+
+    def test_draw_logs_panel_renders_cursor_cell_on_empty_source_line(self) -> None:
+        port = FakePanelPort()
+        port.logs_expanded = True
+        port.log_follow = False
+        port.log_selection_cursor = 1
+        port.last_job = _job(output=["first", "", "third"])
+
+        panels.main_panels_controller().draw_logs_panel(
+            port, 0, 0, 10, 80, port.items[0]
+        )
+
+        cursor_cells = [
+            (text, attr)
+            for _row, _col, text, attr in port.rows
+            if text == " " and attr == port.selected_active_attr()
+        ]
+        self.assertEqual(cursor_cells, [(" ", port.selected_active_attr())])
+
+    def test_expanded_logs_keep_cursor_row_inside_visible_window(self) -> None:
+        port = FakePanelPort()
+        port.logs_expanded = True
+        port.log_follow = False
+        port.log_selection_cursor = 10
+        port.last_job = _job(output=[f"line {index}" for index in range(20)])
+
+        panels.main_panels_controller().draw_logs_panel(
+            port, 0, 0, 10, 80, port.items[0]
+        )
+
+        rendered = [text for _row, _col, text, _attr in port.rows]
+        self.assertIn("line 10", rendered)
+        self.assertLessEqual(port.log_scroll, 10)
+        self.assertGreater(port.log_scroll + 4, 10)
+
+    def test_expanded_running_logs_follow_latest_source_line(self) -> None:
+        port = FakePanelPort()
+        port.logs_expanded = True
+        port.log_follow = True
+        port.log_selection_cursor = 1
+        port.last_job = _job(output=[f"line {index}" for index in range(20)])
+
+        panels.main_panels_controller().draw_logs_panel(
+            port, 0, 0, 10, 80, port.items[0]
+        )
+
+        rendered = [text for _row, _col, text, _attr in port.rows]
+        self.assertEqual(port.log_selection_cursor, 19)
+        self.assertIn("line 19", rendered)
+        self.assertTrue(port.log_follow)
 
     def test_draw_logs_panel_uses_last_job_for_selected_action_label(self) -> None:
         port = FakePanelPort()
