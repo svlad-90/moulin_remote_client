@@ -31,6 +31,8 @@ from components.ui.api.menu import MenuItem
 
 CLEAN_COMPONENT_BACK = object()
 LOCAL_ARTIFACT_BACK = object()
+PRODUCT_UPDATE_STEPS = ("checkout", "regenerate", "sync")
+PRODUCT_UPDATE_CHECKOUT_MODES = {"safe", "stash", "repair"}
 
 
 class MainMenuCommandItemsService:
@@ -561,6 +563,7 @@ class MainMenuCommandItemsService:
         )
 
     def product_update_preview(self, app: Any) -> str:
+        self._load_product_update_preferences(app.config)
         selected_ref = config_accessors.project_git_ref_for_config(app.config) or "<not configured>"
         values = getattr(app, "preflight_values", {})
         remote_ref = values.get("remote_ref", "not-fetched")
@@ -618,6 +621,7 @@ class MainMenuCommandItemsService:
                 "Allow Repo to replace incompatible Git object-directory links after the local-change check passes.",
             ),
         ]
+        self._load_product_update_preferences(app.config)
         selected = set(self.product_update_steps)
         checkout_mode = self.product_update_checkout_mode
         force_sync = self.product_update_force_sync
@@ -695,19 +699,75 @@ class MainMenuCommandItemsService:
                     if not selected:
                         app.status = "Select at least one product update stage"
                         continue
-                    self.product_update_index = index
-                    self.product_update_steps = set(selected)
-                    self.product_update_checkout_mode = checkout_mode
-                    self.product_update_force_sync = force_sync
+                    self._save_product_update_preferences(
+                        app,
+                        index=index,
+                        selected=selected,
+                        checkout_mode=checkout_mode,
+                        force_sync=force_sync,
+                    )
                     return selected, force_sync, checkout_mode
                 elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
-                    self.product_update_index = index
-                    self.product_update_steps = set(selected)
-                    self.product_update_checkout_mode = checkout_mode
-                    self.product_update_force_sync = force_sync
+                    self._save_product_update_preferences(
+                        app,
+                        index=index,
+                        selected=selected,
+                        checkout_mode=checkout_mode,
+                        force_sync=force_sync,
+                    )
                     return None
         finally:
             app.screen.timeout(250)
+
+    def _load_product_update_preferences(self, config: dict[str, Any]) -> None:
+        ui = config.get("ui")
+        preferences = ui.get("product_update") if isinstance(ui, dict) else None
+        if not isinstance(preferences, dict):
+            return
+
+        configured_steps = preferences.get("steps")
+        if isinstance(configured_steps, list):
+            self.product_update_steps = {
+                step
+                for step in configured_steps
+                if isinstance(step, str) and step in PRODUCT_UPDATE_STEPS
+            }
+        checkout_mode = preferences.get("checkout_mode")
+        if (
+            isinstance(checkout_mode, str)
+            and checkout_mode in PRODUCT_UPDATE_CHECKOUT_MODES
+        ):
+            self.product_update_checkout_mode = checkout_mode
+        self.product_update_force_sync = bool(preferences.get("force_sync"))
+        if "sync" not in self.product_update_steps:
+            self.product_update_force_sync = False
+
+    def _save_product_update_preferences(
+        self,
+        app: Any,
+        *,
+        index: int,
+        selected: set[str],
+        checkout_mode: str,
+        force_sync: bool,
+    ) -> None:
+        self.product_update_index = index
+        self.product_update_steps = set(selected)
+        self.product_update_checkout_mode = checkout_mode
+        self.product_update_force_sync = force_sync
+
+        def update(config: dict[str, Any]) -> None:
+            ui = config.setdefault("ui", {})
+            if not isinstance(ui, dict):
+                ui = {}
+                config["ui"] = ui
+            ui["product_update"] = {
+                "steps": [step for step in PRODUCT_UPDATE_STEPS if step in selected],
+                "checkout_mode": checkout_mode,
+                "force_sync": force_sync,
+            }
+
+        app.config_store.update_config(update)
 
     def run_product_update_menu(self, app: Any) -> int | None:
         app.reload_config_from_disk()

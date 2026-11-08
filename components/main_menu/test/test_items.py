@@ -2672,6 +2672,15 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             self.assertEqual(selection, ({"checkout", "regenerate"}, False, "stash"))
             self.assertEqual(builder.command_items.product_update_checkout_mode, "stash")
+            self.assertEqual(
+                app.config["ui"]["product_update"],
+                {
+                    "steps": ["checkout", "regenerate"],
+                    "checkout_mode": "stash",
+                    "force_sync": False,
+                },
+            )
+            self.assertEqual(len(app.saved_configs), 1)
             stash_row = [
                 row for row in app.add_calls if "Stash local changes" in row[2]
             ][-1]
@@ -2721,10 +2730,16 @@ class MainMenuBuilderTests(unittest.TestCase):
                 remote_read_project_file=lambda *_args, **_kwargs: "",
                 manifest_cache={},
             )
-            builder.command_items.product_update_steps.add("sync")
-            builder.command_items.product_update_force_sync = True
+            config = _config(app_dir)
+            config["ui"] = {
+                "product_update": {
+                    "steps": ["checkout", "regenerate", "sync"],
+                    "checkout_mode": "safe",
+                    "force_sync": True,
+                }
+            }
             app = FakeMenuApp(
-                _config(app_dir),
+                config,
                 [curses.KEY_DOWN] * 5 + [ord(" "), 10],
             )
 
@@ -2732,6 +2747,33 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             self.assertEqual(selection, ({"checkout", "regenerate"}, False, "safe"))
             self.assertFalse(builder.command_items.product_update_force_sync)
+
+    def test_product_update_menu_restores_persisted_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            config = _config(app_dir)
+            config["ui"] = {
+                "product_update": {
+                    "steps": ["checkout", "sync"],
+                    "checkout_mode": "repair",
+                    "force_sync": True,
+                }
+            }
+            app = FakeMenuApp(config, [10])
+
+            selection = builder.command_items.select_product_update_steps(app)
+
+            self.assertEqual(selection, ({"checkout", "sync"}, True, "repair"))
 
     def test_missing_project_workflow_exposes_prepare_and_blocks_checkout_dependent_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
