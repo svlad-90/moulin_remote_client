@@ -170,10 +170,27 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
         self.assertNotIn("-tt", repo_sync_command)
         self.assertIn(" -i --rm ", repo_sync)
         self.assertNotIn(" -it --rm ", repo_sync)
+        self.assertIn("ninja -t targets rule repo_init", repo_sync)
+        self.assertIn("ninja -t targets rule repo_sync", repo_sync)
+        self.assertIn("ninja $init_targets", repo_sync)
+        self.assertIn("ninja $sync_targets", repo_sync)
+        self.assertLess(
+            repo_sync.index("ninja -t targets rule repo_init"),
+            repo_sync.index("repo forall -c"),
+        )
+        self.assertLess(
+            repo_sync.index("repo forall -c"),
+            repo_sync.index("ninja $sync_targets"),
+        )
+        self.assertIn("exec \"$MRC_REPO_BIN\" sync --fail-fast \"$@\"", repo_sync)
         forced_repo_sync = shlex.join(
             service.repo_source_sync_command(config, docker_image="prod_img", force=True)
         )
         self.assertIn("repo sync --fail-fast --force-sync", forced_repo_sync)
+        self.assertIn(
+            "exec \"$MRC_REPO_BIN\" sync --fail-fast --force-sync \"$@\"",
+            forced_repo_sync,
+        )
         self.assertIn("repo forall -c", forced_repo_sync)
         self.assertIn("git status --porcelain", forced_repo_sync)
         self.assertNotIn("repo status --orphans", forced_repo_sync)
