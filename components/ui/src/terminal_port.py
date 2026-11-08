@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import curses
 import os
 import select
+import shutil
+import subprocess
 import sys
 from typing import Any
 
@@ -44,7 +47,7 @@ class TerminalPortController:
 
     def configure_escape_delay(self) -> None:
         try:
-            curses.set_escdelay(100)
+            curses.set_escdelay(500)
         except (AttributeError, curses.error):
             pass
 
@@ -308,6 +311,54 @@ class TerminalPortController:
         port.screen.keypad(True)
         self.configure_mouse()
         port.screen.timeout(250)
+
+    def copy_to_clipboard(self, text: str) -> bool:
+        """Copy text with a desktop helper, falling back to terminal OSC 52."""
+        if not text:
+            return False
+        commands: list[list[str]] = []
+        if os.environ.get("DISPLAY") and shutil.which("xclip"):
+            commands.append(["xclip", "-selection", "clipboard"])
+        if os.environ.get("DISPLAY") and shutil.which("xsel"):
+            commands.append(["xsel", "--clipboard", "--input"])
+        if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+            commands.append(["wl-copy"])
+        for command in commands:
+            try:
+                environment = os.environ.copy()
+                for variable in (
+                    "BAMF_DESKTOP_FILE_HINT",
+                    "DESKTOP_STARTUP_ID",
+                    "GIO_LAUNCHED_DESKTOP_FILE",
+                    "GIO_LAUNCHED_DESKTOP_FILE_PID",
+                    "STARTUP_ID",
+                    "XDG_ACTIVATION_TOKEN",
+                ):
+                    environment.pop(variable, None)
+                subprocess.run(
+                    command,
+                    input=text,
+                    text=True,
+                    check=True,
+                    timeout=2,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=environment,
+                )
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                continue
+            return True
+        payload = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        sequence = f"\x1b]52;c;{payload}\x07"
+        if os.environ.get("TMUX"):
+            escaped = sequence.replace("\x1b", "\x1b\x1b")
+            sequence = f"\x1bPtmux;{escaped}\x1b\\"
+        try:
+            sys.stdout.write(sequence)
+            sys.stdout.flush()
+        except (OSError, UnicodeError):
+            return False
+        return True
 
 
 def terminal_port_controller() -> TerminalPortController:

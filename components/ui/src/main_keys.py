@@ -16,10 +16,10 @@ class MainKeyController:
     """Handle keyboard actions for the main screen."""
 
     def handle_key(self, port: Any, ch: int) -> None:
-        self._sync_menu_state(port)
         if port.logs_expanded:
             self._handle_expanded_logs_key(port, ch)
             return
+        self._sync_menu_state(port)
         if ch == curses.KEY_LEFT or ui_input_api.key_code_matches(ch, "h"):
             port.focus_panel = "actions"
             self._move_tab(port, -1)
@@ -39,6 +39,7 @@ class MainKeyController:
         elif ui_input_api.key_code_matches(ch, "f"):
             port.focus_before_logs_expanded = port.focus_panel
             port.logs_expanded = True
+            self._initialize_log_cursor(port)
             port.main_full_redraw = True
             port.render_cache.clear()
         elif ui_input_api.key_code_matches(ch, "s"):
@@ -68,24 +69,160 @@ class MainKeyController:
             port.selected = ui_menu_api.nearest_visible_selection(port.selected, visible, enabled)
 
     def _handle_expanded_logs_key(self, port: Any, ch: int) -> None:
-        if ui_input_api.key_code_matches(ch, "f") or ch == 27:
+        if ch in (curses.KEY_LEFT, curses.KEY_RIGHT) or ui_input_api.key_code_matches(
+            ch, "h", "l"
+        ):
+            port.status = "Full Logs keeps the selected action; use f/Esc to return"
+        elif ch == 27 and self._range_selected(port):
+            self._clear_log_selection(port)
+            port.status = "Log selection cancelled"
+        elif ui_input_api.key_code_matches(ch, "f") or ch == 27:
+            self._clear_log_cursor(port)
             port.logs_expanded = False
             port.focus_panel = port.focus_before_logs_expanded
             port.log_follow = True
             port.main_full_redraw = True
             port.render_cache.clear()
         elif ch == curses.KEY_UP or ui_input_api.key_code_matches(ch, "k"):
-            ui_panels_api.main_panels_controller().scroll_logs(port, -1)
+            self._move_log_cursor(port, -1, extend=False)
         elif ch == curses.KEY_DOWN or ui_input_api.key_code_matches(ch, "j"):
-            ui_panels_api.main_panels_controller().scroll_logs(port, 1)
+            self._move_log_cursor(port, 1, extend=False)
+        elif ch == getattr(curses, "KEY_SR", -1):
+            self._move_log_cursor(port, -1, extend=True)
+        elif ch == getattr(curses, "KEY_SF", -1):
+            self._move_log_cursor(port, 1, extend=True)
         elif ch in (curses.KEY_PPAGE,):
-            ui_panels_api.main_panels_controller().scroll_logs(port, -10)
+            self._move_log_cursor(port, -10, extend=False)
         elif ch in (curses.KEY_NPAGE,):
-            ui_panels_api.main_panels_controller().scroll_logs(port, 10)
+            self._move_log_cursor(port, 10, extend=False)
+        elif ui_input_api.key_code_matches(ch, "c"):
+            self._copy_logs(port)
         elif ch == curses.KEY_MOUSE:
             self._handle_mouse(port)
         else:
-            port.status = "Logs expanded; use f/Esc to return"
+            port.status = "Use arrows to move, Shift+Up/Down to select, c to copy"
+
+    @staticmethod
+    def _range_selected(port: Any) -> bool:
+        return getattr(port, "log_selection_anchor", None) is not None
+
+    @staticmethod
+    def _clear_log_selection(port: Any) -> None:
+        port.log_selection_anchor = None
+        port.main_full_redraw = True
+
+    @staticmethod
+    def _clear_log_cursor(port: Any) -> None:
+        port.log_selection_anchor = None
+        port.log_selection_cursor = None
+        port.main_full_redraw = True
+
+    def _display_job(self, port: Any) -> dict[str, Any] | None:
+        if not port.items:
+            return None
+        item = port.items[min(max(port.selected, 0), len(port.items) - 1)]
+        return ui_menu_api.display_job_for_item(
+            item,
+            active_job=port.active_job,
+            board_job=port.board_job,
+            last_board_job=port.last_board_job,
+            last_job=port.last_job,
+            last_board_jobs_by_label=getattr(port, "last_board_jobs_by_label", {}),
+            last_jobs_by_label=getattr(port, "last_jobs_by_label", {}),
+        )
+
+    def _initialize_log_cursor(self, port: Any) -> None:
+        job = self._display_job(port)
+        source = job_api.job_output_lines(job)
+        if not source:
+            self._clear_log_cursor(port)
+            port.status = "No command log"
+            return
+        port.log_selection_anchor = None
+        port.log_selection_cursor = len(source) - 1
+        self._reveal_log_cursor(port, job)
+        port.log_follow = job_api.job_running(job)
+        port.status = f"Current log line {len(source)}"
+
+    def _move_log_cursor(self, port: Any, delta: int, *, extend: bool) -> None:
+        job = self._display_job(port)
+        source = job_api.job_output_lines(job)
+        if not source:
+            self._clear_log_cursor(port)
+            port.status = "No command log"
+            return
+        previous = min(
+            max(0, int(getattr(port, "log_selection_cursor", len(source) - 1))),
+            len(source) - 1,
+        )
+        if extend:
+            if not self._range_selected(port):
+                port.log_selection_anchor = previous
+        else:
+            port.log_selection_anchor = None
+        cursor = min(
+            max(0, previous + delta),
+            len(source) - 1,
+        )
+        port.log_selection_cursor = cursor
+        self._reveal_log_cursor(port, job)
+        if self._range_selected(port):
+            anchor = int(port.log_selection_anchor)
+            lower, upper = sorted((anchor, cursor))
+            port.status = (
+                f"Selected log lines {lower + 1}-{upper + 1}; "
+                f"current line {cursor + 1}"
+            )
+        else:
+            port.status = f"Current log line {cursor + 1}"
+
+    def _reveal_log_cursor(self, port: Any, job: dict[str, Any]) -> None:
+        cursor = int(port.log_selection_cursor)
+        height, width = port.screen.getmaxyx()
+        source_indices = job_api.wrapped_job_output_source_indices(job, width - 4)
+        visual_index = next(
+            (index for index, source_index in enumerate(source_indices) if source_index == cursor),
+            0,
+        )
+        visible = max(1, height - 8)
+        if visual_index < port.log_scroll:
+            port.log_scroll = visual_index
+        elif visual_index >= port.log_scroll + visible:
+            port.log_scroll = max(0, visual_index - visible + 1)
+        port.log_follow = False
+        port.main_full_redraw = True
+
+    def _copy_logs(self, port: Any) -> None:
+        port.main_full_redraw = True
+        job = self._display_job(port)
+        if job is None:
+            port.status = "No command log to copy"
+            return
+        source = job_api.job_output_lines(job)
+        if not source:
+            port.status = "Command log is empty"
+            return
+        cursor = min(
+            max(0, int(getattr(port, "log_selection_cursor", len(source) - 1))),
+            len(source) - 1,
+        )
+        start = cursor
+        end = cursor
+        if self._range_selected(port):
+            start, end = sorted(
+                (int(port.log_selection_anchor), int(port.log_selection_cursor))
+            )
+        text = job_api.clipboard_log_text(job, start, end)
+        if not text:
+            port.status = "Command log is empty"
+            return
+        if port.copy_to_clipboard(text):
+            count = end - start + 1
+            self._clear_log_selection(port)
+            noun = "line" if count == 1 else "lines"
+            port.status = f"Copied {count} log {noun}; current line {cursor + 1}"
+        else:
+            port.status = "Could not copy command log"
 
     def _handle_mouse(self, port: Any) -> None:
         try:
@@ -99,7 +236,7 @@ class MainKeyController:
 
     def _move_or_scroll(self, port: Any, delta: int) -> None:
         if port.logs_expanded:
-            ui_panels_api.main_panels_controller().scroll_logs(port, delta)
+            self._move_log_cursor(port, delta, extend=False)
             return
         port.focus_panel = "actions"
         if getattr(port, "menu_focus", "items") == "tabs":

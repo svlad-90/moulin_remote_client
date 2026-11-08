@@ -170,9 +170,35 @@ def job_output_lines(job: dict[str, Any] | None) -> list[str]:
     return compact_log_lines(list(job.get("output", [])))
 
 
-def wrapped_job_output_lines(job: dict[str, Any] | None, width: int) -> list[str]:
+def clipboard_log_text(
+    job: dict[str, Any] | None,
+    start: int | None = None,
+    end: int | None = None,
+) -> str:
+    """Return readable log text without screen wrapping or blank runs."""
+    source = job_output_lines(job)
+    if start is not None or end is not None:
+        lower = max(0, start or 0)
+        upper = len(source) - 1 if end is None else min(len(source) - 1, end)
+        source = source[lower : upper + 1] if lower <= upper else []
+    cleaned: list[str] = []
+    for line in source:
+        line = line.rstrip()
+        if line:
+            cleaned.append(line)
+        elif cleaned and cleaned[-1]:
+            cleaned.append("")
+    while cleaned and not cleaned[-1]:
+        cleaned.pop()
+    return "\n".join(cleaned)
+
+
+def _wrapped_job_output(
+    job: dict[str, Any] | None,
+    width: int,
+) -> tuple[list[str], list[int]]:
     if job is None:
-        return []
+        return [], []
     inner_width = max(1, width)
     lock = job.get("output_lock")
     if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
@@ -181,34 +207,47 @@ def wrapped_job_output_lines(job: dict[str, Any] | None, width: int) -> list[str
             cache = job.setdefault("wrapped_output_cache", {})
             cached = cache.get(inner_width)
             if cached is not None and cached[0] == revision:
-                return cached[1]
+                return cached[1], cached[2]
             source = compact_log_lines(list(job.get("output", [])))
     else:
         revision = int(job.get("output_revision", 0))
         cache = job.setdefault("wrapped_output_cache", {})
         cached = cache.get(inner_width)
         if cached is not None and cached[0] == revision:
-            return cached[1]
+            return cached[1], cached[2]
         source = compact_log_lines(list(job.get("output", [])))
 
     lines: list[str] = []
-    for line in source:
+    source_indices: list[int] = []
+    for source_index, line in enumerate(source):
         if not line:
             lines.append("")
+            source_indices.append(source_index)
             continue
-        lines.extend(
-            textwrap.wrap(
-                line,
-                width=inner_width,
-                subsequent_indent="  ",
-                replace_whitespace=False,
-                drop_whitespace=True,
-            )
-            or [""]
+        wrapped = textwrap.wrap(
+            line,
+            width=inner_width,
+            subsequent_indent="  ",
+            replace_whitespace=False,
+            drop_whitespace=True,
         )
+        wrapped = wrapped or [""]
+        lines.extend(wrapped)
+        source_indices.extend([source_index] * len(wrapped))
     cache.clear()
-    cache[inner_width] = (revision, lines)
-    return lines
+    cache[inner_width] = (revision, lines, source_indices)
+    return lines, source_indices
+
+
+def wrapped_job_output_lines(job: dict[str, Any] | None, width: int) -> list[str]:
+    return _wrapped_job_output(job, width)[0]
+
+
+def wrapped_job_output_source_indices(
+    job: dict[str, Any] | None,
+    width: int,
+) -> list[int]:
+    return _wrapped_job_output(job, width)[1]
 
 
 def log_max_scroll(job: dict[str, Any] | None, visible: int, *, width: int | None = None) -> int:

@@ -466,6 +466,7 @@ class MainPanelsController:
         row += 2
         visible = max(1, top + height - 2 - row)
         output = job_api.wrapped_job_output_lines(job, inner)
+        source_indices = job_api.wrapped_job_output_source_indices(job, inner)
         if not output:
             port.add(row, x, "Waiting for output..."[:inner], port.disabled_attr())
             return
@@ -476,6 +477,24 @@ class MainPanelsController:
             scroll=port.log_scroll,
             width=inner,
         )
+        cursor = getattr(port, "log_selection_cursor", None)
+        if port.logs_expanded and cursor is not None and source_indices:
+            latest_source_index = max(source_indices)
+            if port.log_follow and getattr(port, "log_selection_anchor", None) is None:
+                cursor = latest_source_index
+            else:
+                cursor = min(max(0, int(cursor)), latest_source_index)
+            port.log_selection_cursor = cursor
+            if not port.log_follow:
+                cursor_row = next(
+                    index
+                    for index, source_index in enumerate(source_indices)
+                    if source_index == cursor
+                )
+                if cursor_row < scroll:
+                    scroll = cursor_row
+                elif cursor_row >= scroll + visible:
+                    scroll = max(0, cursor_row - visible + 1)
         port.log_scroll = scroll
         shown = output[scroll : scroll + visible]
         first = min(len(output), scroll + 1)
@@ -483,14 +502,33 @@ class MainPanelsController:
         follow = " follow" if port.log_follow else ""
         counter = f"lines {first}-{last}/{len(output)}{follow}"
         port.add(top, max(left + 2, left + width - len(counter) - 2), counter[: max(0, width - 4)], port.accent_attr())
-        for line in shown:
-            port.add(row, x, line[:inner])
+        anchor = getattr(port, "log_selection_anchor", None)
+        cursor = getattr(port, "log_selection_cursor", None)
+        selection = sorted((int(anchor), int(cursor))) if anchor is not None and cursor is not None else None
+        for offset, line in enumerate(shown):
+            visual_index = scroll + offset
+            source_index = source_indices[visual_index]
+            selected = selection is not None and selection[0] <= source_index <= selection[1]
+            current = cursor is not None and source_index == int(cursor)
+            if current:
+                attr = port.selected_active_attr()
+            elif selected:
+                attr = port.selected_attr()
+            else:
+                attr = 0
+            rendered = line[:inner]
+            if not rendered and (current or selected):
+                rendered = " "
+            port.add(row, x, rendered, attr)
             row += 1
 
     def draw_expanded_logs(self, port: Any, height: int, width: int, item: Any) -> None:
         port.screen.erase()
         self.draw_logs_panel(port, 0, 0, max(3, height - 2), width, item)
-        footer = "Logs full | Up/Down/PgUp/PgDn scroll | f/Esc shrink"
+        if getattr(port, "log_selection_anchor", None) is not None:
+            footer = "Logs range | Shift+Up/Down extend | c copy and clear | Esc clear"
+        else:
+            footer = "Logs full | Up/Down cursor | Shift+Up/Down select | c copy | f/Esc shrink"
         port.add(height - 2, 0, footer[:width].ljust(width), port.accent_attr())
         port.add(height - 1, 0, port.status[:width].ljust(width), curses.A_REVERSE)
 

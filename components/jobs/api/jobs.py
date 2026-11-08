@@ -14,6 +14,7 @@ from components.jobs.src.jobs import (
     build_command_start_plan,
     cancel_connect_timeout_wakeup,
     clamp_log_scroll,
+    clipboard_log_text,
     board_connect_completed_state,
     command_failed_state,
     completed_command_sequence_state,
@@ -55,6 +56,7 @@ from components.jobs.src.jobs import (
     stopped_state,
     stop_running_preview,
     wrapped_job_output_lines,
+    wrapped_job_output_source_indices,
 )
 
 __all__ = [
@@ -70,6 +72,7 @@ __all__ = [
     "cancel_connect_timeout_wakeup",
     "board_connect_completed_state",
     "clamp_log_scroll",
+    "clipboard_log_text",
     "command_failed_state",
     "completed_command_sequence_state",
     "completed_process_action",
@@ -110,4 +113,5 @@ __all__ = [
     "stopped_state",
     "stop_running_preview",
     "wrapped_job_output_lines",
+    "wrapped_job_output_source_indices",
 ]

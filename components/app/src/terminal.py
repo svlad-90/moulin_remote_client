@@ -159,6 +159,9 @@ class AppTerminalPortAdapter:
     def restore_tui(self, port: Any) -> None:
         self.terminal_port.restore_tui(port)
 
+    def copy_to_clipboard(self, text: str) -> bool:
+        return self.terminal_port.copy_to_clipboard(text)
+
 
 def app_terminal_port_adapter(
     *,

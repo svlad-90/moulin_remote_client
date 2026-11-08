@@ -237,6 +237,19 @@ class JobsBehaviorTests(unittest.TestCase):
         self.assertIsNot(lines, job["output"])
         self.assertEqual(jobs.job_output_lines(None), [])
 
+    def test_clipboard_log_text_trims_lines_and_collapses_blank_runs(self) -> None:
+        job = jobs.create_command_job(
+            title="Build",
+            item_label="Run product build",
+            slot="build",
+            commands=[],
+            initial_output=["", "first   ", "", "", "second", "", ""],
+        )
+
+        self.assertEqual(jobs.clipboard_log_text(job), "first\n\nsecond")
+        self.assertEqual(jobs.clipboard_log_text(job, 1, 2), "first")
+        self.assertEqual(jobs.clipboard_log_text(None), "")
+
     def test_append_job_output_sanitizes_splits_and_collapses_blank_lines(self) -> None:
         job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
 
@@ -505,6 +518,7 @@ class JobsBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(jobs.log_max_scroll(job, 2, width=16), 1)
         self.assertEqual(jobs.clamp_log_scroll(job, 2, follow=True, scroll=0, width=16), (1, True))
+        self.assertEqual(jobs.wrapped_job_output_source_indices(job, 16), [0, 0, 0])
 
     def test_wrapped_output_is_cached_until_output_changes(self) -> None:
         job = jobs.create_command_job(

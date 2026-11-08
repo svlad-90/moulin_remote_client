@@ -31,6 +31,8 @@ from components.ui.api.menu import MenuItem
 
 CLEAN_COMPONENT_BACK = object()
 LOCAL_ARTIFACT_BACK = object()
+PRODUCT_UPDATE_STEPS = ("checkout", "regenerate", "sync")
+PRODUCT_UPDATE_CHECKOUT_MODES = {"safe", "stash", "repair"}
 
 
 class MainMenuCommandItemsService:
@@ -561,6 +563,7 @@ class MainMenuCommandItemsService:
         )
 
     def product_update_preview(self, app: Any) -> str:
+        self._load_product_update_preferences(app.config)
         selected_ref = config_accessors.project_git_ref_for_config(app.config) or "<not configured>"
         values = getattr(app, "preflight_values", {})
         remote_ref = values.get("remote_ref", "not-fetched")
@@ -577,7 +580,7 @@ class MainMenuCommandItemsService:
         return (
             f"Selected: {selected_ref}\nRemote: {remote_ref}\nSynced: {synced_ref}\n"
             f"Update stages: {', '.join(enabled) or '<none>'}\n"
-            f"Checkout mode: {self.product_update_checkout_mode}"
+            f"Checkout: {self.product_update_checkout_mode}"
         )
 
     def select_product_update_steps(self, app: Any) -> tuple[set[str], bool, str] | None:
@@ -586,6 +589,21 @@ class MainMenuCommandItemsService:
                 "checkout",
                 "Fetch and checkout selected product ref",
                 "Fetch origin and switch the product checkout to the ref selected in Project configuration.",
+            ),
+            (
+                "checkout_safe",
+                "Safe checkout",
+                "Refuse checkout when tracked local changes are present.",
+            ),
+            (
+                "checkout_stash",
+                "Stash local changes",
+                "Back up local changes before checkout.",
+            ),
+            (
+                "checkout_repair",
+                "Repair checkout",
+                "Remove a stale lock, back up changes, then reset and clean only if needed.",
             ),
             (
                 "regenerate",
@@ -603,13 +621,8 @@ class MainMenuCommandItemsService:
                 "Allow Repo to replace incompatible Git object-directory links after the local-change check passes.",
             ),
         ]
+        self._load_product_update_preferences(app.config)
         selected = set(self.product_update_steps)
-        checkout_modes = ("safe", "stash", "repair")
-        checkout_mode_descriptions = {
-            "safe": "Safe: refuse checkout when tracked local changes are present.",
-            "stash": "Stash: back up local changes before checkout.",
-            "repair": "Repair: remove a stale lock, back up changes, then reset/clean only if needed.",
-        }
         checkout_mode = self.product_update_checkout_mode
         force_sync = self.product_update_force_sync
         index = self.product_update_index
@@ -618,8 +631,8 @@ class MainMenuCommandItemsService:
             while True:
                 app.screen.erase()
                 height, width = app.screen.getmaxyx()
-                if height < 16 or width < 72:
-                    app.add(0, 0, "Terminal is too small. Need at least 72x16.", app.warn_attr())
+                if height < 18 or width < 72:
+                    app.add(0, 0, "Terminal is too small. Need at least 72x18.", app.warn_attr())
                     app.screen.refresh()
                     ch = app.read_key()
                     if ui_input_api.key_code_matches(ch, "q") or ch == 27:
@@ -640,28 +653,25 @@ class MainMenuCommandItemsService:
 
                 app.add(5, 2, "Select update stages and Repo options. Space toggles the selected row.", app.accent_attr())
                 for offset, (step, label, _description) in enumerate(options):
-                    enabled = force_sync if step == "force_sync" else step in selected
-                    mark = "[x]" if enabled else "[ ]"
+                    if step.startswith("checkout_"):
+                        enabled = checkout_mode == step.removeprefix("checkout_")
+                        mark = "(x)" if enabled else "( )"
+                    else:
+                        enabled = force_sync if step == "force_sync" else step in selected
+                        mark = "[x]" if enabled else "[ ]"
+                    indent = "    " if step.startswith("checkout_") or step == "force_sync" else ""
                     row = 7 + offset
                     attr = app.selected_attr() if offset == index else 0
-                    app.add(row, 2, ui_text_api.fit_text(f"{mark} {label}", width - 4).ljust(width - 4), attr)
+                    app.add(
+                        row,
+                        2,
+                        ui_text_api.fit_text(f"{indent}{mark} {label}", width - 4).ljust(width - 4),
+                        attr,
+                    )
 
-                sync_mode = "force" if force_sync else "normal"
-                checkout_attr = app.warn_attr() if checkout_mode == "repair" else app.accent_attr()
-                app.add(
-                    11,
-                    2,
-                    ui_text_api.fit_text(
-                        f"Modes: checkout={checkout_mode} | repo-sync={sync_mode}",
-                        width - 4,
-                    ),
-                    checkout_attr,
-                )
                 description = options[index][2]
-                if options[index][0] == "checkout":
-                    description = checkout_mode_descriptions[checkout_mode]
                 app.add(height - 4, 2, ui_text_api.fit_text(description, width - 4))
-                footer = "Up/Down: select | Space: toggle | c: checkout mode | f: sync mode | Enter: run | q/Esc: back"
+                footer = "Up/Down: select | Space: toggle | Enter: run | q/Esc: back"
                 app.add(height - 2, 0, footer[:width], app.accent_attr())
                 app.add(height - 1, 0, app.status[:width].ljust(width), curses.A_REVERSE)
                 app.screen.refresh()
@@ -672,35 +682,92 @@ class MainMenuCommandItemsService:
                     index = ui_menu_api.move_index(index, len(options), 1)
                 elif ch == ord(" "):
                     step = options[index][0]
-                    if step == "force_sync":
+                    if step.startswith("checkout_"):
+                        checkout_mode = step.removeprefix("checkout_")
+                        selected.add("checkout")
+                    elif step == "force_sync":
                         force_sync = not force_sync
+                        if force_sync:
+                            selected.add("sync")
                     elif step in selected:
                         selected.remove(step)
+                        if step == "sync":
+                            force_sync = False
                     else:
                         selected.add(step)
-                elif ui_input_api.key_code_matches(ch, "f"):
-                    force_sync = not force_sync
-                elif ui_input_api.key_code_matches(ch, "c"):
-                    checkout_mode = checkout_modes[
-                        (checkout_modes.index(checkout_mode) + 1) % len(checkout_modes)
-                    ]
                 elif ch in (10, 13):
                     if not selected:
                         app.status = "Select at least one product update stage"
                         continue
-                    self.product_update_index = index
-                    self.product_update_steps = set(selected)
-                    self.product_update_checkout_mode = checkout_mode
-                    self.product_update_force_sync = force_sync
+                    self._save_product_update_preferences(
+                        app,
+                        index=index,
+                        selected=selected,
+                        checkout_mode=checkout_mode,
+                        force_sync=force_sync,
+                    )
                     return selected, force_sync, checkout_mode
                 elif ui_input_api.key_code_matches(ch, "q") or ch == 27:
-                    self.product_update_index = index
-                    self.product_update_steps = set(selected)
-                    self.product_update_checkout_mode = checkout_mode
-                    self.product_update_force_sync = force_sync
+                    self._save_product_update_preferences(
+                        app,
+                        index=index,
+                        selected=selected,
+                        checkout_mode=checkout_mode,
+                        force_sync=force_sync,
+                    )
                     return None
         finally:
             app.screen.timeout(250)
+
+    def _load_product_update_preferences(self, config: dict[str, Any]) -> None:
+        ui = config.get("ui")
+        preferences = ui.get("product_update") if isinstance(ui, dict) else None
+        if not isinstance(preferences, dict):
+            return
+
+        configured_steps = preferences.get("steps")
+        if isinstance(configured_steps, list):
+            self.product_update_steps = {
+                step
+                for step in configured_steps
+                if isinstance(step, str) and step in PRODUCT_UPDATE_STEPS
+            }
+        checkout_mode = preferences.get("checkout_mode")
+        if (
+            isinstance(checkout_mode, str)
+            and checkout_mode in PRODUCT_UPDATE_CHECKOUT_MODES
+        ):
+            self.product_update_checkout_mode = checkout_mode
+        self.product_update_force_sync = bool(preferences.get("force_sync"))
+        if "sync" not in self.product_update_steps:
+            self.product_update_force_sync = False
+
+    def _save_product_update_preferences(
+        self,
+        app: Any,
+        *,
+        index: int,
+        selected: set[str],
+        checkout_mode: str,
+        force_sync: bool,
+    ) -> None:
+        self.product_update_index = index
+        self.product_update_steps = set(selected)
+        self.product_update_checkout_mode = checkout_mode
+        self.product_update_force_sync = force_sync
+
+        def update(config: dict[str, Any]) -> None:
+            ui = config.setdefault("ui", {})
+            if not isinstance(ui, dict):
+                ui = {}
+                config["ui"] = ui
+            ui["product_update"] = {
+                "steps": [step for step in PRODUCT_UPDATE_STEPS if step in selected],
+                "checkout_mode": checkout_mode,
+                "force_sync": force_sync,
+            }
+
+        app.config_store.update_config(update)
 
     def run_product_update_menu(self, app: Any) -> int | None:
         app.reload_config_from_disk()
