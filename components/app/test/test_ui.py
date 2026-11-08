@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from typing import Any
@@ -11,8 +12,15 @@ from components.app.api import ui
 
 class FakePort:
     def __init__(self) -> None:
+        self.config: dict[str, Any] = {}
         self.show_message = Mock()
         self.refresh_mapping_selection_cache = Mock()
+        self.read_mapping_selection_cache = Mock(return_value=["mapping"])
+        self.apply_mapping_selection_cache = Mock()
+        self.notify_job_state_changed = Mock()
+        self.menu_dirty = False
+        self.main_full_redraw = False
+        self.status = ""
 
 
 class AppUiControllerTests(unittest.TestCase):
@@ -90,8 +98,41 @@ class AppUiControllerTests(unittest.TestCase):
             confirm_action.assert_called_once_with(port, "content")
             action_factory.call_args.kwargs["show_message"]("Title", ["line"])
             port.show_message.assert_called_once_with("Title", ["line"])
-            action_factory.call_args.kwargs["refresh_after_action"]()
-            port.refresh_mapping_selection_cache.assert_called_once_with()
+            action_factory.call_args.kwargs["schedule_refresh_after_action"]()
+            task = port.mapping_selection_refresh_task
+            task["thread"].join(timeout=1)
+            controller.poll_mapping_selection_refresh(port)
+            port.read_mapping_selection_cache.assert_called_once_with({})
+            port.apply_mapping_selection_cache.assert_called_once_with(["mapping"])
+            self.assertTrue(port.menu_dirty)
+            self.assertTrue(port.main_full_redraw)
+
+    def test_mapping_refresh_returns_before_background_read_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            controller = self.make_controller(Path(tmpdir))
+            port = FakePort()
+            release = threading.Event()
+
+            def delayed_read(_config: dict[str, Any]) -> list[str]:
+                release.wait(timeout=1)
+                return ["updated"]
+
+            port.read_mapping_selection_cache.side_effect = delayed_read
+
+            controller.schedule_mapping_selection_refresh(port)
+
+            task = port.mapping_selection_refresh_task
+            self.assertTrue(task["thread"].is_alive())
+            self.assertFalse(port.menu_dirty)
+            port.apply_mapping_selection_cache.assert_not_called()
+
+            release.set()
+            task["thread"].join(timeout=1)
+            controller.poll_mapping_selection_refresh(port)
+
+            port.apply_mapping_selection_cache.assert_called_once_with(["updated"])
+            self.assertTrue(port.menu_dirty)
+            port.notify_job_state_changed.assert_called_once_with()
 
 
 if __name__ == "__main__":

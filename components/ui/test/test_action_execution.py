@@ -38,7 +38,7 @@ class Harness:
         self.controller = action_execution.ActionExecutionController(
             confirm_dialog=self.confirm_dialog,
             show_message=self.show_message,
-            refresh_after_action=self.refresh,
+            schedule_refresh_after_action=self.refresh,
         )
 
     def confirm_dialog(self, content: Any) -> bool:
@@ -69,7 +69,7 @@ class ActionExecutionControllerTests(unittest.TestCase):
 
         self.assertEqual(port.handler_calls, 1)
         self.assertEqual(harness.refresh_count, 1)
-        self.assertTrue(port.menu_dirty)
+        self.assertFalse(port.menu_dirty)
         self.assertTrue(port.main_full_redraw)
         self.assertTrue(port.logs_dirty)
 

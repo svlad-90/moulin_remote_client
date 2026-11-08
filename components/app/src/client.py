@@ -133,6 +133,12 @@ class ClientApp:
     def refresh_mapping_selection_cache(self) -> None:
         self.app_state.refresh_mapping_selection_cache(self)
 
+    def read_mapping_selection_cache(self, config: dict[str, Any]) -> list[str]:
+        return self.app_state.read_mapping_selection_cache(config)
+
+    def apply_mapping_selection_cache(self, selection: list[str]) -> None:
+        self.app_state.apply_mapping_selection_cache(self, selection)
+
     def reload_config_from_disk(self) -> None:
         self.dependencies.manifest_cache.clear()
         self.config = self.dependencies.load_config(self.dependencies.default_config_path)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import copy
+import queue
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -76,11 +79,52 @@ class AppUiController:
     def poll_plugin_view(self, port: Any) -> None:
         self.plugins.poll_view(port)
 
+    def schedule_mapping_selection_refresh(self, port: Any) -> None:
+        """Read post-action mapping state without delaying return to the menu."""
+        config = copy.deepcopy(port.config)
+        results: queue.SimpleQueue[tuple[str, Any]] = queue.SimpleQueue()
+
+        def load() -> None:
+            try:
+                selection = port.read_mapping_selection_cache(config)
+            except Exception as exc:
+                results.put(("error", exc))
+            else:
+                results.put(("ok", selection))
+            finally:
+                port.notify_job_state_changed()
+
+        thread = threading.Thread(target=load, name="moulin-menu-refresh", daemon=True)
+        port.mapping_selection_refresh_task = {
+            "results": results,
+            "thread": thread,
+        }
+        thread.start()
+
+    def poll_mapping_selection_refresh(self, port: Any) -> None:
+        """Apply a completed post-action refresh from the main UI thread."""
+        task = getattr(port, "mapping_selection_refresh_task", None)
+        if not isinstance(task, dict):
+            return
+        try:
+            outcome, value = task["results"].get_nowait()
+        except queue.Empty:
+            return
+        if task is not getattr(port, "mapping_selection_refresh_task", None):
+            return
+        port.mapping_selection_refresh_task = None
+        if outcome == "error":
+            port.status = f"Menu refresh failed: {value}"
+        else:
+            port.apply_mapping_selection_cache(value)
+        port.menu_dirty = True
+        port.main_full_redraw = True
+
     def run_selected(self, port: Any) -> None:
         ui_action_execution.action_execution_controller(
             confirm_dialog=lambda content: self.confirm_action(port, content),
             show_message=port.show_message,
-            refresh_after_action=port.refresh_mapping_selection_cache,
+            schedule_refresh_after_action=lambda: self.schedule_mapping_selection_refresh(port),
         ).run_selected(port)
 
 

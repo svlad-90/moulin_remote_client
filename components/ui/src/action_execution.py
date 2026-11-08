@@ -17,11 +17,11 @@ class ActionExecutionController:
         *,
         confirm_dialog: Callable[[Any], bool],
         show_message: Callable[[str, list[str]], None],
-        refresh_after_action: Callable[[], None],
+        schedule_refresh_after_action: Callable[[], None],
     ) -> None:
         self.confirm_dialog = confirm_dialog
         self.show_message = show_message
-        self.refresh_after_action = refresh_after_action
+        self.schedule_refresh_after_action = schedule_refresh_after_action
 
     def run_selected(self, port: Any) -> None:
         item = port.items[port.selected]
@@ -46,8 +46,7 @@ class ActionExecutionController:
         except Exception as exc:
             self._show_action_failed(port, item.label, exc)
         finally:
-            self.refresh_after_action()
-            port.menu_dirty = True
+            self.schedule_refresh_after_action()
             port.main_full_redraw = True
             port.logs_dirty = True
 
@@ -60,10 +59,10 @@ def action_execution_controller(
     *,
     confirm_dialog: Callable[[Any], bool],
     show_message: Callable[[str, list[str]], None],
-    refresh_after_action: Callable[[], None],
+    schedule_refresh_after_action: Callable[[], None],
 ) -> ActionExecutionController:
     return ActionExecutionController(
         confirm_dialog=confirm_dialog,
         show_message=show_message,
-        refresh_after_action=refresh_after_action,
+        schedule_refresh_after_action=schedule_refresh_after_action,
     )
