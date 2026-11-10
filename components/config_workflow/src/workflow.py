@@ -220,8 +220,8 @@ class ConfigWorkflowController:
             reload_runtime=self.reload_runtime,
         )
 
-    def select_board_artifacts(self, port: Any) -> None:
-        self._target_selection_controller().select_board_artifacts(
+    def select_board_artifacts(self, port: Any) -> bool:
+        return self._target_selection_controller().select_board_artifacts(
             port,
             reload_runtime=self.reload_runtime,
         )

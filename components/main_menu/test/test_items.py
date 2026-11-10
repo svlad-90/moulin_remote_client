@@ -62,6 +62,7 @@ class FakeTerminalSession:
 class FakeConfigWorkflow:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.board_artifacts_result = True
 
     def run_remote_configurations_screen(self, _port: Any) -> None:
         self.calls.append("remote")
@@ -81,8 +82,9 @@ class FakeConfigWorkflow:
     def select_build_targets(self, _port: Any) -> None:
         self.calls.append("targets")
 
-    def select_board_artifacts(self, _port: Any) -> None:
+    def select_board_artifacts(self, _port: Any) -> bool:
         self.calls.append("board-artifacts")
+        return self.board_artifacts_result
 
 
 class FakeDialogWorkflow:
@@ -434,8 +436,8 @@ class MainMenuBuilderTests(unittest.TestCase):
             board_labels = [item.label for item in menu_items if item.group == "flashing / board"]
             board_setup_labels = [item.label for item in menu_items if item.group == "flashing / board setup"]
             self.assertEqual(flashing_configuration_labels, [])
-            self.assertEqual(flashing_labels[0], "Configure copied artifacts")
-            self.assertIn("Copy build artifacts", flashing_labels)
+            self.assertEqual(flashing_labels[0], "Copy build artifacts")
+            self.assertNotIn("Configure copied artifacts", flashing_labels)
             self.assertIn("Flash bootloaders (flash mode)", flashing_labels)
             self.assertIn("Flash bootloaders", flashing_labels)
             self.assertIn("Flash UFS image", flashing_labels)
@@ -449,10 +451,6 @@ class MainMenuBuilderTests(unittest.TestCase):
             ]
             self.assertLess(
                 flashing_order.index(("flashing / hosts", "Open board host shell")),
-                flashing_order.index(("flashing / commands", "Configure copied artifacts")),
-            )
-            self.assertLess(
-                flashing_order.index(("flashing / commands", "Configure copied artifacts")),
                 flashing_order.index(("flashing / commands", "Copy build artifacts")),
             )
             flashing_groups = [group for group, _label in flashing_order]
@@ -2473,8 +2471,38 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             copy_item.handler(app)
 
+            self.assertFalse(copy_item.confirm)
+            self.assertEqual(app.config_workflow.calls, ["board-artifacts"])
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
             self.assertEqual(app.workflow.command_calls[0][0], "Copy build artifacts")
             self.assertIn("Copy build artifacts", app.workflow.command_calls[0][1][1][2])
+
+    def test_copy_build_artifacts_cancelled_confirmation_does_not_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_dir = Path(tmpdir)
+            builder = items.main_menu_builder(
+                app_dir=app_dir,
+                default_config_path=app_dir / "config.json",
+                default_dockerfile="doc/Dockerfile",
+                default_moulin_manifest="product.yaml",
+                flash_bootloaders_tool=app_dir / "flash_bootloaders.py",
+                xt_imager_tool=app_dir / "xt-imager.py",
+                remote_read_project_file=lambda *_args, **_kwargs: "",
+                manifest_cache={},
+            )
+            app = FakeApp(_config(app_dir))
+            app.dialog_workflow.confirm_result = False
+            copy_item = next(
+                item for item in builder.command_items.build_items(app)
+                if item.label == "Copy build artifacts"
+            )
+
+            copy_item.handler(app)
+
+            self.assertEqual(app.config_workflow.calls, ["board-artifacts"])
+            self.assertEqual(len(app.dialog_workflow.confirm_calls), 1)
+            self.assertEqual(app.workflow.command_calls, [])
+            self.assertEqual(app.status, "Cancelled: Copy build artifacts")
 
     def test_board_ownership_commands_add_the_ownership_menu_group(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -3141,7 +3169,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(result.stdout.strip(), f"dirty\t{repo}")
             self.assertIn("timeout 3s git -C \"$root\" status --porcelain --untracked-files=no", command)
 
-    def test_configure_copied_artifacts_opens_board_artifact_selector(self) -> None:
+    def test_copy_build_artifacts_cancelled_selection_does_not_confirm_or_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app_dir = Path(tmpdir)
             builder = items.main_menu_builder(
@@ -3155,14 +3183,17 @@ class MainMenuBuilderTests(unittest.TestCase):
                 manifest_cache={},
             )
             app = FakeApp(_config(app_dir))
+            app.config_workflow.board_artifacts_result = False
             menu_items = builder.build_items(app)
 
-            item = next(item for item in menu_items if item.label == "Configure copied artifacts")
+            self.assertNotIn("Configure copied artifacts", [item.label for item in menu_items])
+            item = next(item for item in menu_items if item.label == "Copy build artifacts")
             self.assertEqual(item.group, "flashing / commands")
 
             item.handler(app)
 
             self.assertEqual(app.config_workflow.calls, ["board-artifacts"])
+            self.assertEqual(app.dialog_workflow.confirm_calls, [])
             self.assertEqual(app.workflow.command_calls, [])
 
     def test_settings_screen_toggles_show_commands_config(self) -> None:

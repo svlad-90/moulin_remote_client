@@ -134,8 +134,9 @@ class TargetSelectionControllerTests(unittest.TestCase):
             field_action_controller=field_controller,
         )
 
-        controller.select_board_artifacts(port, reload_runtime=lambda: None)
+        result = controller.select_board_artifacts(port, reload_runtime=lambda: None)
 
+        self.assertTrue(result)
         self.assertEqual(port.build_targets, "boot")
         self.assertEqual(cfg["projects"][0]["board_artifacts"], "boot full")
         self.assertEqual(port.status, "Board artifact selection saved")
