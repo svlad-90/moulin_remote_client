@@ -12,6 +12,7 @@ from components.ui.src.dialogs import (
     confirm_key_result,
     disconnect_confirm_content,
     exit_confirm_content,
+    stop_running_confirm_content,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "confirm_key_result",
     "disconnect_confirm_content",
     "exit_confirm_content",
+    "stop_running_confirm_content",
 ]

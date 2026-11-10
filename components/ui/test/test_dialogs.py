@@ -18,12 +18,19 @@ class DialogBehaviorTests(unittest.TestCase):
     def test_action_confirm_content_matches_current_stop_text(self) -> None:
         content = dialogs.action_confirm_content("Stop current board command", "Ignored.")
 
-        self.assertEqual(content.warning, "Stop the active command?")
+        self.assertEqual(content.warning, "Stop the running command?")
         self.assertEqual(
             content.details,
             "SIGTERM is sent first; if the process does not exit, SIGKILL is sent after a short timeout.",
         )
-        self.assertEqual(content.footer, "Enter/y: stop | n/q/Esc: cancel")
+        self.assertEqual(content.footer, "Enter/y: stop | n/q/Esc: continue running")
+
+    def test_stop_running_confirm_content_names_active_command(self) -> None:
+        content = dialogs.stop_running_confirm_content("Run product build")
+
+        self.assertEqual(content.warning, "Stop the running command?")
+        self.assertEqual(content.subject, "Run product build")
+        self.assertIn("continue running", content.footer)
 
     def test_exit_and_disconnect_content_match_current_text(self) -> None:
         exit_content = dialogs.exit_confirm_content()

@@ -353,9 +353,8 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertNotIn("Rebuild impacted Yocto recipes", labels)
             build_host_labels = [item.label for item in menu_items if item.group == "build / build host"]
             docker_labels = [item.label for item in menu_items if item.group == "build / docker"]
-            build_configuration_labels = [item.label for item in menu_items if item.group == "build / configuration"]
             configuration_labels = [item.label for item in menu_items if item.group == "configuration"]
-            build_labels = [item.label for item in menu_items if item.group == "build / commands"]
+            build_labels = [item.label for item in menu_items if item.group == "build / build"]
             command_labels = [item.label for item in builder.command_items.build_items(FakeApp(_config(app_dir)))]
             self.assertEqual(
                 command_labels[:4],
@@ -379,7 +378,6 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Build Docker image",
                 ],
             )
-            self.assertEqual(build_configuration_labels, ["Select build targets"])
             self.assertEqual(
                 configuration_labels,
                 [
@@ -392,16 +390,35 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(
                 build_labels,
                 [
+                    "Select build targets",
                     "Update product",
-                    "Clean-up BitBake server",
                     "Regenerate Moulin/Ninja",
                     "Run product build",
+                ],
+            )
+            incremental_labels = [
+                item.label
+                for item in menu_items
+                if item.group == "build / incremental build"
+            ]
+            self.assertEqual(
+                incremental_labels,
+                [
                     "Incremental rebuild",
                     "Clean incremental build",
-                    "Reset incremental build state",
+                ],
+            )
+            cleanup_labels = [
+                item.label
+                for item in menu_items
+                if item.group == "build / cleanup"
+            ]
+            self.assertEqual(
+                cleanup_labels,
+                [
+                    "Clean-up BitBake server",
                     "Clean Moulin components",
                     "Clean project folder",
-                    "Stop running command",
                 ],
             )
             mapping_labels = [item.label for item in menu_items if item.group == "build / files mapping"]
@@ -409,6 +426,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 mapping_labels,
                 [
                     "Copy mapped files to build host",
+                    "Reset incremental build state",
                     "Sync mapped files",
                     "Open mapped workspace",
                 ],
@@ -423,14 +441,15 @@ class MainMenuBuilderTests(unittest.TestCase):
                 [
                     "build / build host",
                     "build / docker",
-                    "build / configuration",
-                    "build / commands",
+                    "build / build",
+                    "build / incremental build",
+                    "build / cleanup",
                     "build / files mapping",
                 ],
             )
             self.assertIn("Select build host", [item.label for item in menu_items if item.group == "sessions / build host"])
             self.assertIn("Select board", [item.label for item in menu_items if item.group == "sessions / board host"])
-            flashing_labels = [item.label for item in menu_items if item.group == "flashing / commands"]
+            flashing_labels = [item.label for item in menu_items if item.group == "flashing / flashing"]
             flashing_configuration_labels = [item.label for item in menu_items if item.group == "flashing / configuration"]
             flashing_host_labels = [item.label for item in menu_items if item.group == "flashing / hosts"]
             board_labels = [item.label for item in menu_items if item.group == "flashing / board"]
@@ -451,7 +470,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             ]
             self.assertLess(
                 flashing_order.index(("flashing / hosts", "Open board host shell")),
-                flashing_order.index(("flashing / commands", "Copy build artifacts")),
+                flashing_order.index(("flashing / flashing", "Copy build artifacts")),
             )
             flashing_groups = [group for group, _label in flashing_order]
             collapsed_flashing_groups = [
@@ -459,10 +478,10 @@ class MainMenuBuilderTests(unittest.TestCase):
                 for index, group in enumerate(flashing_groups)
                 if index == 0 or group != flashing_groups[index - 1]
             ]
-            self.assertEqual(collapsed_flashing_groups.count("flashing / commands"), 1)
+            self.assertEqual(collapsed_flashing_groups.count("flashing / flashing"), 1)
             self.assertEqual(
                 collapsed_flashing_groups[-2:],
-                ["flashing / commands", "flashing / board setup"],
+                ["flashing / flashing", "flashing / board setup"],
             )
             self.assertEqual(
                 board_labels,
@@ -483,7 +502,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                 board_setup_labels,
                 ["Apply U-Boot UFS env", "Inject invasive U-Boot parameters"],
             )
-            self.assertIn("Stop current board command", flashing_labels)
+            self.assertNotIn("Stop current board command", flashing_labels)
             tftp_deploy_labels = [item.label for item in menu_items if item.group == "tftp/nfs / deploy artifacts"]
             tftp_control_labels = [item.label for item in menu_items if item.group == "tftp/nfs / board control"]
             tftp_setup_labels = [item.label for item in menu_items if item.group == "tftp/nfs / board setup"]
@@ -492,7 +511,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             tftp_remote_labels = [item.label for item in menu_items if item.group == "tftp/nfs / open remote roots"]
             tftp_labels = [item.label for item in menu_items if item.group.startswith("tftp/nfs / ")]
             self.assertIn("Deploy full TFTP/NFS set", tftp_deploy_labels)
-            self.assertIn("Stop current board command", tftp_control_labels)
+            self.assertNotIn("Stop current board command", tftp_control_labels)
             self.assertEqual(
                 tftp_workspace_labels,
                 [
@@ -536,7 +555,6 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Open local Dom0 initramfs workspace",
                     "Install NFS deploy helper",
                     "Apply U-Boot network env",
-                    "Stop current board command",
                     "Open remote TFTP root",
                     "Open remote NFS root",
                 ],
@@ -2591,12 +2609,11 @@ class MainMenuBuilderTests(unittest.TestCase):
             app.preflight_values = {"project": "ok", "origin": "ok", "ref": "ok"}
             command_items = builder.command_items.build_items(app)
             clean_item = next(item for item in command_items if item.label == "Clean project folder")
-            stop_item = next(item for item in command_items if item.label == "Stop running command")
 
             self.assertTrue(clean_item.confirm)
             self.assertTrue(clean_item.requires_remote)
             self.assertFalse(clean_item.requires_project)
-            self.assertLess(command_items.index(clean_item), command_items.index(stop_item))
+            self.assertEqual(clean_item.group, "build / cleanup")
 
             clean_item.handler(app)
 
@@ -3188,7 +3205,7 @@ class MainMenuBuilderTests(unittest.TestCase):
 
             self.assertNotIn("Configure copied artifacts", [item.label for item in menu_items])
             item = next(item for item in menu_items if item.label == "Copy build artifacts")
-            self.assertEqual(item.group, "flashing / commands")
+            self.assertEqual(item.group, "flashing / flashing")
 
             item.handler(app)
 
