@@ -148,6 +148,7 @@ def _job(
     title: str = "Run product build",
     item_label: str = "Run product build",
     output: list[str] | None = None,
+    rc: int = 0,
 ) -> dict[str, Any]:
     return {
         "title": title,
@@ -155,6 +156,7 @@ def _job(
         "output": deque(output or [], maxlen=1000),
         "process": None,
         "finished": True,
+        "rc": rc,
     }
 
 
@@ -177,6 +179,17 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertIn("line 1", rendered)
         self.assertIn("line 2", rendered)
         self.assertTrue(any("lines 1-2/2 follow" in text for text in rendered))
+
+    def test_draw_logs_panel_marks_failed_command(self) -> None:
+        port = FakePanelPort()
+        port.last_job = _job(output=["Traceback"], rc=1)
+
+        panels.main_panels_controller().draw_logs_panel(port, 0, 0, 10, 80, port.items[0])
+
+        rendered = [row[2] for row in port.rows]
+        self.assertIn("Run product build [FAILED]", rendered)
+        failed_row = next(row for row in port.rows if row[2] == "Run product build [FAILED]")
+        self.assertEqual(port.warn_attr(), failed_row[3])
 
     def test_draw_logs_panel_wraps_long_output_lines(self) -> None:
         port = FakePanelPort()

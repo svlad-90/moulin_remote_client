@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import pathlib
 import subprocess
 import sys
 import time
@@ -23,6 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baudrate", default="1843200", help="Serial baudrate passed to xt-imager.")
     parser.add_argument("--loadaddr", default="", help="Optional xt-imager --loadaddr value.")
     parser.add_argument("--buffersize", default="", help="Optional xt-imager --buffersize value.")
+    parser.add_argument(
+        "--ready-file",
+        default="",
+        help="Touch this file after the serial console has been opened.",
+    )
     return parser.parse_args()
 
 
@@ -39,6 +45,7 @@ def main() -> int:
         tool=args.tool,
         baudrate=args.baudrate,
         extra_args=extra_args,
+        ready_file=args.ready_file,
     )
 
 
@@ -49,9 +56,10 @@ def run_xt_imager(
     tool: str,
     baudrate: str,
     extra_args: list[str],
+    ready_file: str = "",
 ) -> int:
     module = load_xt_imager(tool)
-    patch_xt_imager(module)
+    patch_xt_imager(module, ready_file=ready_file)
     argv = [
         tool,
         "--target",
@@ -100,8 +108,9 @@ def load_xt_imager(tool: str) -> ModuleType:
     return module
 
 
-def patch_xt_imager(module: ModuleType) -> None:
+def patch_xt_imager(module: ModuleType, *, ready_file: str = "") -> None:
     original_wait = module.conn_wait_for_any
+    original_serial_for_url = module.serial.serial_for_url
 
     def conn_wait_for_any(conn: object, expect: list[str]) -> str:
         result = original_wait(conn, expect)
@@ -109,7 +118,14 @@ def patch_xt_imager(module: ModuleType) -> None:
             drain_serial_tail(conn)
         return result
 
+    def serial_for_url(*args: object, **kwargs: object) -> object:
+        conn = original_serial_for_url(*args, **kwargs)
+        if ready_file:
+            pathlib.Path(ready_file).touch()
+        return conn
+
     module.conn_wait_for_any = conn_wait_for_any
+    module.serial.serial_for_url = serial_for_url
     module.confirm_ufs_flash = auto_confirm_ufs_flash
 
 
