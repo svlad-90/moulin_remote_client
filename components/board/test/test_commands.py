@@ -298,6 +298,16 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         self.assertIn("x5h_off", script)
         self.assertIn("x5h_on", script)
         self.assertIn("x5h_boot", script)
+        self.assertLess(script.index("x5h_off"), script.index("x5h_boot"))
+        self.assertLess(script.index("x5h_boot"), script.index("x5h_on"))
+        self.assertIn("sleep 5\n", script)
+        self.assertLess(
+            script.index("board console: drain stale output"),
+            script.index("x5h_boot"),
+        )
+        self.assertNotIn("board power after boot mode", script)
+        self.assertNotIn("sleep 1\n", script)
+        self.assertNotIn("sleep 3\n", script)
         self.assertIn("console=$(ls -1 /dev/GEN5_CONSOLE*", script)
         self.assertIn("python3 /srv/tftp/demo/gen5_x5h_flash_ufs.py", script)
         self.assertIn("--tool /srv/tftp/demo/xt-imager.py", script)
