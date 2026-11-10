@@ -390,11 +390,20 @@ class MainPanelsController:
             port.add(row, 2, label[: left_width - 4].ljust(left_width - 4), attr)
             row += 1
 
-    def draw_footer(self, port: Any, height: int, width: int, *, active_job_exists: bool) -> str:
+    def draw_footer(
+        self,
+        port: Any,
+        height: int,
+        width: int,
+        *,
+        active_job_exists: bool,
+        selected_action_running: bool = False,
+    ) -> str:
         footer = ui_status_segments_api.main_footer_text(
             active_job=active_job_exists,
             focus_panel=port.focus_panel,
             menu_focus=getattr(port, "menu_focus", "items"),
+            selected_action_running=selected_action_running,
         )
         port.add(height - 2, 0, footer[:width].ljust(width), port.accent_attr())
         port.add(height - 1, 0, port.status[:width].ljust(width), curses.A_REVERSE)

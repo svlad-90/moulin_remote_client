@@ -115,7 +115,15 @@ def mapping_status_role(names: list[str], error: str | None, issues: list[str]) 
     return "ok"
 
 
-def main_footer_text(*, active_job: bool, focus_panel: str, menu_focus: str = "items") -> str:
+def main_footer_text(
+    *,
+    active_job: bool,
+    focus_panel: str,
+    menu_focus: str = "items",
+    selected_action_running: bool = False,
+) -> str:
+    if selected_action_running and focus_panel == "actions" and menu_focus == "items":
+        return "Enter/r again stops selected action | Up/Down actions | f full | s settings | q quit"
     if active_job:
         if focus_panel == "actions" and menu_focus == "tabs":
             return "Running | Left/Right tabs | Up/Down items | f full | s settings | q quit"

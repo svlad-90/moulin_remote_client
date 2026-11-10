@@ -167,7 +167,14 @@ class MainDrawController:
             active_labels,
             rendered,
         )
-        self._draw_footer(port, height, width, active_job_exists, rendered)
+        self._draw_footer(
+            port,
+            height,
+            width,
+            active_job_exists,
+            selected_action_running=ui_menu_api.job_for_item(item, running_jobs) is not None,
+            rendered=rendered,
+        )
         port.main_full_redraw = False
         refresh_started = time.monotonic()
         port.screen.refresh()
@@ -428,13 +435,26 @@ class MainDrawController:
         height: int,
         width: int,
         active_job_exists: bool,
+        *,
+        selected_action_running: bool,
         rendered: list[str],
     ) -> None:
-        footer = ui_status_segments_api.main_footer_text(active_job=active_job_exists, focus_panel=port.focus_panel)
+        footer = ui_status_segments_api.main_footer_text(
+            active_job=active_job_exists,
+            focus_panel=port.focus_panel,
+            menu_focus=getattr(port, "menu_focus", "items"),
+            selected_action_running=selected_action_running,
+        )
         footer_sig = (width, footer, port.status)
         if port.main_full_redraw or port.render_cache.get("footer") != footer_sig:
             started = time.monotonic()
-            ui_panels_api.main_panels_controller().draw_footer(port, height, width, active_job_exists=active_job_exists)
+            ui_panels_api.main_panels_controller().draw_footer(
+                port,
+                height,
+                width,
+                active_job_exists=active_job_exists,
+                selected_action_running=selected_action_running,
+            )
             port.render_cache["footer"] = footer_sig
             port.ui_profile_slow("panel-footer-slow", started, threshold_ms=5.0)
             rendered.append("footer")

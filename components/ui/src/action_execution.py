@@ -32,6 +32,15 @@ class ActionExecutionController:
             enabled_for_item=port.item_enabled,
             disabled_reason_for_item=port.disabled_reason,
         )
+        if plan["item_running"]:
+            if not self.confirm_dialog(ui_dialog_api.stop_running_confirm_content(item.label)):
+                port.status = f"Continue running: {item.label}"
+                return
+            port.stop_running_command(ui_menu_api.item_job_slot(item))
+            self.schedule_refresh_after_action()
+            port.main_full_redraw = True
+            port.logs_dirty = True
+            return
         guard = plan["guard"]
         if not guard["allowed"]:
             port.status = str(guard["status"])

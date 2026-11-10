@@ -90,20 +90,20 @@ class MainMenuCommandItemsService:
             ),
             *self.docker_menu_items(app),
             MenuItem(
-                "Select build targets",
-                "build / configuration",
-                "Choose the Ninja targets used by product and incremental builds.",
-                lambda app: f"Current build targets: {app.build_targets or '<not set>'}",
-                lambda app: app.config_workflow_controller().select_build_targets(app),
-                requires_project=True,
-            ),
-            MenuItem(
                 "Update product",
-                "build / commands",
+                "build / build",
                 "Choose and run explicit product update stages: checkout, Moulin regeneration, and Repo source synchronization.",
                 lambda app: self.product_update_preview(app),
                 lambda app: self.run_product_update_menu(app),
                 requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Select build targets",
+                "build / build",
+                "Choose the Ninja targets used by product and incremental builds.",
+                lambda app: f"Current build targets: {app.build_targets or '<not set>'}",
+                lambda app: app.config_workflow_controller().select_build_targets(app),
                 requires_project=True,
             ),
             MenuItem(
@@ -119,7 +119,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Clean-up BitBake server",
-                "build / commands",
+                "build / cleanup",
                 "Kill build containers for the configured Docker image and remove BitBake server locks.",
                 lambda app: shlex.join(
                     self.remote_command_workflow.bitbake_cleanup_command(
@@ -134,7 +134,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Regenerate Moulin/Ninja",
-                "build / commands",
+                "build / build",
                 "Run Moulin on the remote target and refresh Ninja files.",
                 lambda app: shlex.join(
                     self.remote_command_workflow.moulin_regen_command(
@@ -158,7 +158,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Run product build",
-                "build / commands",
+                "build / build",
                 "Run configured Ninja targets on the remote target.",
                 lambda app: shlex.join(
                     self.remote_command_workflow.product_build_command(
@@ -174,7 +174,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Incremental rebuild",
-                "build / commands",
+                "build / incremental build",
                 "Rebuild selected Moulin components and optionally invalidate selected final image targets first.",
                 lambda app: ui_menu_api.command_preview(
                     self.incremental_product_build_commands(app, clean_yocto=False)
@@ -185,7 +185,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Clean incremental build",
-                "build / commands",
+                "build / incremental build",
                 "Clean impacted Yocto recipes only, regenerate Moulin/Ninja, then rebuild selected components.",
                 lambda app: ui_menu_api.command_preview(
                     self.incremental_product_build_commands(app, clean_yocto=True)
@@ -196,7 +196,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Reset incremental build state",
-                "build / commands",
+                "build / files mapping",
                 "Rebuild the mapped-file baseline and queue current local workspace changes for the next incremental build.",
                 lambda app: shlex.join(self.reset_incremental_build_state_command(app)),
                 lambda app: self.run_reset_incremental_build_state(app),
@@ -205,7 +205,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Clean Moulin components",
-                "build / commands",
+                "build / cleanup",
                 "Choose a cleanup mode, then select Moulin components to clean.",
                 lambda _app: "Opens cleanup mode selection: component directory, Moulin artifacts, build output, or Yocto component clean.",
                 lambda app: self.run_component_clean_menu(app),
@@ -214,7 +214,7 @@ class MainMenuCommandItemsService:
             ),
             MenuItem(
                 "Clean project folder",
-                "build / commands",
+                "build / cleanup",
                 "Delete the configured project directory on the build host.",
                 lambda app: shlex.join(self.remote_command_workflow.clean_project_folder_command(app.config)),
                 lambda app: app.command_workflow_service().run_commands(
@@ -224,15 +224,6 @@ class MainMenuCommandItemsService:
                 ),
                 confirm=True,
                 requires_remote=True,
-            ),
-            MenuItem(
-                "Stop running command",
-                "build / commands",
-                "Gracefully stop the currently running build or sync command, then force-kill it if it does not exit.",
-                lambda app: app.stop_running_preview("build"),
-                lambda app: app.stop_running_command("build"),
-                confirm=True,
-                allow_during_job=True,
             ),
             MenuItem(
                 "Open build host shell",
@@ -270,24 +261,6 @@ class MainMenuCommandItemsService:
         items.extend(board_host_items)
         items.extend(board_other_items)
         items.extend([
-            MenuItem(
-                "Stop current board command",
-                "flashing / commands",
-                "Gracefully stop the currently running board command, then force-kill it if it does not exit.",
-                lambda app: app.stop_running_preview("board"),
-                lambda app: app.stop_running_command("board"),
-                confirm=True,
-                allow_during_job=True,
-            ),
-            MenuItem(
-                "Stop current board command",
-                "tftp/nfs / board control",
-                "Gracefully stop the currently running board command, then force-kill it if it does not exit.",
-                lambda app: app.stop_running_preview("board"),
-                lambda app: app.stop_running_command("board"),
-                confirm=True,
-                allow_during_job=True,
-            ),
             MenuItem(
                 "Sync mapped files",
                 "build / files mapping",
@@ -493,15 +466,16 @@ class MainMenuCommandItemsService:
         build_group_order = {
             "build host": 0,
             "docker": 1,
-            "configuration": 2,
-            "commands": 3,
-            "files mapping": 4,
+            "build": 2,
+            "incremental build": 3,
+            "cleanup": 4,
+            "files mapping": 5,
         }
         flashing_group_order = {
             "hosts": 0,
             "ownership": 1,
             "board": 2,
-            "commands": 3,
+            "flashing": 3,
             "board setup": 4,
         }
         tftp_group_order = {
@@ -2528,7 +2502,7 @@ done
         }:
             return "flashing / board setup"
         if action_id in {"copy_build_artifacts", "flash_bootloaders", "flash_single_ipl", "flash_ufs_image"}:
-            return "flashing / commands"
+            return "flashing / flashing"
         if action_id == "open_board_host_shell":
             return "flashing / hosts"
         if action_id in {

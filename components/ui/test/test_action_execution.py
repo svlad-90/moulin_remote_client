@@ -21,12 +21,16 @@ class FakeActionPort:
         self.main_full_redraw = False
         self.logs_dirty = False
         self.handler_calls = 0
+        self.stop_slots: list[str | None] = []
 
     def item_enabled(self, _item: MenuItem) -> bool:
         return self.enabled
 
     def disabled_reason(self, _item: MenuItem) -> str:
         return self.disabled_status
+
+    def stop_running_command(self, slot: str | None = None) -> None:
+        self.stop_slots.append(slot)
 
 
 class Harness:
@@ -85,16 +89,43 @@ class ActionExecutionControllerTests(unittest.TestCase):
         self.assertEqual(port.handler_calls, 0)
         self.assertEqual(harness.refresh_count, 0)
 
-    def test_run_selected_reports_running_item_without_refreshing(self) -> None:
-        port = FakeActionPort(item("Build"))
+    def test_run_selected_confirms_and_stops_running_item(self) -> None:
+        port = FakeActionPort(MenuItem("Build", "build / build", "", lambda _app: "", lambda _app: None))
         port.active_job = {"item_label": "Build"}
         harness = Harness()
 
         harness.controller.run_selected(port)
 
-        self.assertEqual(port.status, "Command is already running; live log is shown in Logs")
+        self.assertEqual(len(harness.confirm_requests), 1)
+        self.assertEqual(harness.confirm_requests[0].subject, "Build")
+        self.assertEqual(port.stop_slots, ["build"])
         self.assertEqual(port.handler_calls, 0)
+        self.assertEqual(harness.refresh_count, 1)
+        self.assertTrue(port.main_full_redraw)
+        self.assertTrue(port.logs_dirty)
+
+    def test_run_selected_can_continue_running_item(self) -> None:
+        port = FakeActionPort(MenuItem("Build", "build / build", "", lambda _app: "", lambda _app: None))
+        port.active_job = {"item_label": "Build"}
+        harness = Harness(confirm=False)
+
+        harness.controller.run_selected(port)
+
+        self.assertEqual(port.status, "Continue running: Build")
+        self.assertEqual(port.stop_slots, [])
         self.assertEqual(harness.refresh_count, 0)
+
+    def test_run_selected_stops_running_board_item_in_board_slot(self) -> None:
+        port = FakeActionPort(
+            MenuItem("Flash UFS image", "flashing / commands", "", lambda _app: "", lambda _app: None)
+        )
+        port.board_job = {"item_label": "Flash UFS image"}
+        harness = Harness()
+
+        harness.controller.run_selected(port)
+
+        self.assertEqual(port.stop_slots, ["board"])
+        self.assertEqual(harness.confirm_requests[0].subject, "Flash UFS image")
 
     def test_run_selected_cancelled_confirmation_does_not_refresh(self) -> None:
         port = FakeActionPort(item("Danger", confirm=True))

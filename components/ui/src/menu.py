@@ -74,6 +74,8 @@ class MenuAvailabilityContext:
 def item_job_slot(item: MenuItem) -> str | None:
     if item.job_slot is not None:
         return item.job_slot
+    if is_board_serial_item(item):
+        return "board"
     if is_open_item(item):
         return None
     if is_board_command_item(item) or item.label in {"Connect board host", "Disconnect board host"}:
@@ -89,12 +91,18 @@ def is_build_command_group(group: str) -> bool:
 
 
 def is_board_command_item(item: MenuItem) -> bool:
+    if is_board_serial_item(item):
+        return True
     if is_open_item(item):
         return False
     parent, _child = split_group(item.group)
     if parent == "tftp/nfs" and item.label.startswith("Open local "):
         return False
     return parent in {"board commands", "flashing", "tftp/nfs"} or item.label in BOARD_COMMAND_LABELS
+
+
+def is_board_serial_item(item: MenuItem) -> bool:
+    return item.label in {"Open board serial console", "Open U-Boot console"}
 
 
 def is_open_item(item: MenuItem) -> bool:

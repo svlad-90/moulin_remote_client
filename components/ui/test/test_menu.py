@@ -91,8 +91,18 @@ class MenuModelBehaviorTests(unittest.TestCase):
         self.assertEqual(menu.item_job_slot(MenuItem("Connect board host", "board host session", "", lambda app: "", lambda app: None)), "board")
         self.assertEqual(menu.item_job_slot(MenuItem("Disconnect board host", "board host session", "", lambda app: "", lambda app: None)), "board")
         self.assertIsNone(menu.item_job_slot(MenuItem("Open local NFS workspace", "tftp/nfs / open local workspaces", "", lambda app: "", lambda app: None)))
-        self.assertIsNone(menu.item_job_slot(MenuItem("Open board serial console", "flashing / board host", "", lambda app: "", lambda app: None)))
-        self.assertIsNone(menu.item_job_slot(MenuItem("Open U-Boot console", "flashing / board host", "", lambda app: "", lambda app: None)))
+        self.assertEqual(
+            menu.item_job_slot(
+                MenuItem("Open board serial console", "flashing / board host", "", lambda app: "", lambda app: None)
+            ),
+            "board",
+        )
+        self.assertEqual(
+            menu.item_job_slot(
+                MenuItem("Open U-Boot console", "flashing / board host", "", lambda app: "", lambda app: None)
+            ),
+            "board",
+        )
         self.assertIsNone(menu.item_job_slot(MenuItem("Open remote TFTP root", "tftp/nfs / open remote roots", "", lambda app: "", lambda app: None)))
         self.assertIsNone(menu.item_job_slot(MenuItem("Project configuration", "setup", "", lambda app: "", lambda app: None)))
 
@@ -543,7 +553,9 @@ class MenuModelBehaviorTests(unittest.TestCase):
         board_serial_item = MenuItem("Open board serial console", "flashing / board host", "", lambda app: "", lambda app: None, allow_during_job=True)
         build_directory_item = MenuItem("Open build directory", "build / workspace", "", lambda app: "", lambda app: None, requires_remote=True, requires_project=True, allow_during_job=True)
         self.assertTrue(_item_enabled(local_workspace_item, board_connected=False))
-        self.assertTrue(_item_enabled(board_serial_item, board_job={"item_label": "Flash UFS image"}))
+        self.assertFalse(_item_enabled(board_serial_item, board_connected=False))
+        self.assertFalse(_item_enabled(board_serial_item, board_job={"item_label": "Flash UFS image"}))
+        self.assertTrue(_item_enabled(board_serial_item, board_job={"item_label": "Open board serial console"}))
         self.assertTrue(_item_enabled(build_directory_item, active_job={"item_label": "Run product build"}))
 
     def test_item_enabled_stops_only_stoppable_board_commands(self) -> None:

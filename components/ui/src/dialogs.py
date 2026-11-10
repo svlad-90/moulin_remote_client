@@ -32,19 +32,23 @@ class ConfirmLayout:
 
 def action_confirm_content(label: str, description: str) -> ConfirmContent:
     if label in STOP_ACTION_LABELS:
-        return ConfirmContent(
-            title="Confirm",
-            warning="Stop the active command?",
-            subject=label,
-            details="SIGTERM is sent first; if the process does not exit, SIGKILL is sent after a short timeout.",
-            footer="Enter/y: stop | n/q/Esc: cancel",
-        )
+        return stop_running_confirm_content(label)
     return ConfirmContent(
         title="Confirm",
         warning="This action can change local or remote build state.",
         subject=label,
         details=description,
         footer="Enter/y: run | n/q/Esc: cancel",
+    )
+
+
+def stop_running_confirm_content(label: str) -> ConfirmContent:
+    return ConfirmContent(
+        title="Confirm",
+        warning="Stop the running command?",
+        subject=label,
+        details="SIGTERM is sent first; if the process does not exit, SIGKILL is sent after a short timeout.",
+        footer="Enter/y: stop | n/q/Esc: continue running",
     )
 
 
