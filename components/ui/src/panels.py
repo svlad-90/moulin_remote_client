@@ -477,8 +477,15 @@ class MainPanelsController:
             port.add(row, x, "No command log for this action yet."[:inner], port.disabled_attr())
             return
 
-        state = "RUNNING" if job_api.job_running(job) else "DONE"
-        port.add(row, x, f"{job.get('title', 'Command')} [{state}]"[:inner], port.running_attr() if state == "RUNNING" else port.group_attr())
+        running = job_api.job_running(job)
+        failed = not running and int(job.get("rc", 0) or 0) != 0
+        if running:
+            state, state_attr = "RUNNING", port.running_attr()
+        elif failed:
+            state, state_attr = "FAILED", port.warn_attr()
+        else:
+            state, state_attr = "DONE", port.group_attr()
+        port.add(row, x, f"{job.get('title', 'Command')} [{state}]"[:inner], state_attr)
         row += 2
         visible = max(1, top + height - 2 - row)
         output = job_api.wrapped_job_output_lines(job, inner)

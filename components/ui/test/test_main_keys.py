@@ -296,6 +296,7 @@ class MainKeyControllerTests(unittest.TestCase):
     def test_plain_cursor_move_clears_existing_range(self) -> None:
         port = FakePort()
         port.logs_expanded = True
+        port.log_follow = False
         port.log_selection_cursor = 0
         port.last_job = {
             "item_label": "One",
@@ -308,7 +309,24 @@ class MainKeyControllerTests(unittest.TestCase):
 
         self.assertIsNone(port.log_selection_anchor)
         self.assertEqual(port.log_selection_cursor, 2)
+        self.assertTrue(port.log_follow)
         self.assertEqual(port.status, "Current log line 3")
+
+    def test_visual_selection_at_last_line_keeps_log_follow_disabled(self) -> None:
+        port = FakePort()
+        port.logs_expanded = True
+        port.log_follow = False
+        port.log_selection_cursor = 1
+        port.last_job = {
+            "item_label": "One",
+            "output": ["first", "second", "third"],
+        }
+
+        main_keys.main_key_controller().handle_key(port, curses.KEY_SF)
+
+        self.assertEqual(port.log_selection_anchor, 1)
+        self.assertEqual(port.log_selection_cursor, 2)
+        self.assertFalse(port.log_follow)
 
     def test_visual_selection_scrolls_to_keep_current_line_visible(self) -> None:
         port = FakePort()

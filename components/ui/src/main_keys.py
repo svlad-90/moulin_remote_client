@@ -166,6 +166,8 @@ class MainKeyController:
         )
         port.log_selection_cursor = cursor
         self._reveal_log_cursor(port, job)
+        if not self._range_selected(port) and cursor == len(source) - 1:
+            port.log_follow = True
         if self._range_selected(port):
             anchor = int(port.log_selection_anchor)
             lower, upper = sorted((anchor, cursor))
