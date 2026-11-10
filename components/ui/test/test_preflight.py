@@ -35,9 +35,10 @@ class PreflightBehaviorTests(unittest.TestCase):
         text, values = preflight.format_preflight(output)
 
         self.assertEqual(values["project"], "ok")
+        self.assertEqual(values["disk"], "48G free, 10% used")
         self.assertEqual(
             text,
-            "project ok | disk 48G free, 10% used | git clean | docker ok | origin ok | ref ok",
+            "project ok | git clean | docker ok | origin ok | ref ok",
         )
 
     def test_preflight_part_ok_matches_client_logic(self) -> None:

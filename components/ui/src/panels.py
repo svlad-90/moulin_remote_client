@@ -168,6 +168,13 @@ class MainPanelsController:
                 ("Projects: ", port.accent_attr()),
                 (config_accessor_api.build_host_projects_dir_for_config(port.config), 0),
             ])
+        disk_status = getattr(port, "preflight_values", {}).get("disk", "")
+        if disk_status:
+            build_host_segments.extend([
+                (" | ", port.section_attr()),
+                ("Disk: ", port.accent_attr()),
+                (disk_status, 0),
+            ])
         build_host_segments.extend([
             (" | ", port.section_attr()),
             ("Docker: ", port.accent_attr()),

@@ -46,9 +46,9 @@ class StatusSegmentBehaviorTests(unittest.TestCase):
     def test_compact_header_preflight_removes_ref_and_healthy_origin(self) -> None:
         self.assertEqual(
             status_segments.compact_header_preflight(
-                "project ok | disk 48G free | origin ok | ref ok"
+                "project ok | origin ok | ref ok"
             ),
-            "project ok | disk 48G free",
+            "project ok",
         )
         self.assertEqual(
             status_segments.compact_header_preflight(
@@ -56,14 +56,6 @@ class StatusSegmentBehaviorTests(unittest.TestCase):
             ),
             "project ok | origin mismatch:old",
         )
-        self.assertEqual(
-            status_segments.compact_header_preflight(
-                "project ok | disk 48G free, 10% used | git clean",
-                narrow=True,
-            ),
-            "project ok | disk 48G free | git clean",
-        )
-
     def test_product_ref_segments_show_selected_remote_and_synced_states(self) -> None:
         self.assertEqual(
             status_segments.product_ref_segments(

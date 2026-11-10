@@ -365,8 +365,9 @@ class MainPanelsControllerTests(unittest.TestCase):
         port.config["projects"][0]["git_ref"] = "topic"
         port.build_targets = "dom0 full_ufs.img.gz"
         port.build_target_candidates = ["boot_artifacts", "dom0", "full_ufs.img.gz"]
-        port.preflight = "project ok | disk 48G free | origin ok | ref ok"
+        port.preflight = "project ok | origin ok | ref ok"
         port.preflight_values = {
+            "disk": "48G free, 10% used",
             "remote_ref": "topic@abc1234",
             "synced_ref": "topic@abc1234",
             "ref": "ok",
@@ -410,7 +411,12 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertTrue(all(attr == 14 for _text, attr in board_section_segments))
         self.assertTrue(all(attr == 14 for _text, attr in project_section_segments))
         self.assertTrue(all(attr == 14 for _text, attr in readiness_section_segments))
-        self.assertTrue(any("Connection: connected | Projects: /mnt/projects" in text for text in rendered))
+        self.assertTrue(
+            any(
+                "Connection: connected | Projects: /mnt/projects | Disk: 48G free, 10% used" in text
+                for text in rendered
+            )
+        )
         project_section_row = next(
             row
             for row, _col, text, _attr in port.rows
@@ -427,6 +433,8 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertEqual(build_host_segments[1], ("connected", 7))
         self.assertEqual(build_host_segments[2], (" | ", 14))
         self.assertEqual(build_host_segments[3], ("Projects: ", 4))
+        self.assertEqual(build_host_segments[6], ("Disk: ", 4))
+        self.assertEqual(build_host_segments[7], ("48G free, 10% used", 0))
         self.assertTrue(any("Board: carla.ih3" in text for text in rendered))
         self.assertTrue(any("Ownership: acquired by you" in text for text in rendered))
         self.assertFalse(any("Connections:" in text for text in rendered))
@@ -459,7 +467,7 @@ class MainPanelsControllerTests(unittest.TestCase):
                 ("full_ufs.img.gz", 0),
             ],
         )
-        self.assertTrue(any("Preflight: project ok | disk 48G free" in text for text in rendered))
+        self.assertTrue(any("Preflight: project ok" in text for text in rendered))
         self.assertFalse(any("origin ok" in text or "ref ok" in text for text in rendered))
         self.assertTrue(
             any(
@@ -478,11 +486,12 @@ class MainPanelsControllerTests(unittest.TestCase):
         port.build_target_candidates = ["dom0", "doma", "domd"]
         port.config["projects"][0]["git_ref"] = "topic"
         port.preflight_values = {
+            "disk": "48G free, 10% used",
             "remote_ref": "topic@abc1234",
             "synced_ref": "topic@abc1234",
             "ref": "ok",
         }
-        port.preflight = "project ok | disk 48G free, 10% used | git clean | docker ok"
+        port.preflight = "project ok | git clean | docker ok"
 
         panels.main_panels_controller().draw_header(port, 80)
 
@@ -492,7 +501,8 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertIn("DOMA_LAUNCH_TARGET=aosp_xenvm_trout_arm64-trunk_staging-userdebug", rendered_text)
         self.assertIn("Targets: dom0 | doma | domd | stale", rendered_text)
         self.assertTrue(any("Ref: topic@abc1234 | HEAD: synced" in text for text in rendered))
-        self.assertTrue(any("disk 48G free | git clean" in text for text in rendered))
+        self.assertTrue(any("Connection: connected | Disk: 48G free, 10% used" in text for text in rendered))
+        self.assertTrue(any("Preflight: project ok | git clean" in text for text in rendered))
         self.assertTrue(any("Projects:" in text for text in rendered))
         self.assertEqual(port.boxes[0][2], 15)
 

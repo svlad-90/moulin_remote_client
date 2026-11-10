@@ -42,8 +42,6 @@ def compact_header_preflight(preflight: str, *, narrow: bool = False) -> str:
     for part in preflight.split(" | "):
         if part.startswith("ref ") or part == "origin ok":
             continue
-        if narrow and part.startswith("disk "):
-            part = part.split(",", 1)[0]
         parts.append(part)
     return " | ".join(parts)
 
