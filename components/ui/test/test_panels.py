@@ -618,6 +618,20 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertIn("Ready".ljust(100), rendered)
         self.assertIn("Left/Right tabs", footer)
 
+    def test_draw_footer_leads_with_repeat_to_stop_hint(self) -> None:
+        port = FakePanelPort()
+        port.focus_panel = "actions"
+
+        footer = panels.main_panels_controller().draw_footer(
+            port,
+            20,
+            100,
+            active_job_exists=True,
+            selected_action_running=True,
+        )
+
+        self.assertTrue(footer.startswith("Enter/r again stops selected action"))
+
 
 if __name__ == "__main__":
     unittest.main()

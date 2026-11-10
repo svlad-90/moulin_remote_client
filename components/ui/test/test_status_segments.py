@@ -112,6 +112,14 @@ class StatusSegmentBehaviorTests(unittest.TestCase):
 
     def test_main_footer_text_matches_current_draw_policy(self) -> None:
         self.assertEqual(
+            status_segments.main_footer_text(
+                active_job=True,
+                focus_panel="actions",
+                selected_action_running=True,
+            ),
+            "Enter/r again stops selected action | Up/Down actions | f full | s settings | q quit",
+        )
+        self.assertEqual(
             status_segments.main_footer_text(active_job=True, focus_panel="logs"),
             "Running | Left/Right tabs | Up/Down actions | f full | s settings | q quit",
         )

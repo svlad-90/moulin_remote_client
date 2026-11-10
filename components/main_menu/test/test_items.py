@@ -362,7 +362,7 @@ class MainMenuBuilderTests(unittest.TestCase):
                     "Open build host shell",
                     "Open build host git repo",
                     "Build Docker image",
-                    "Select build targets",
+                    "Update product",
                 ],
             )
             self.assertEqual(
@@ -390,8 +390,8 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(
                 build_labels,
                 [
-                    "Select build targets",
                     "Update product",
+                    "Select build targets",
                     "Regenerate Moulin/Ninja",
                     "Run product build",
                 ],

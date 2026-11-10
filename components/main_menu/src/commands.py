@@ -90,20 +90,20 @@ class MainMenuCommandItemsService:
             ),
             *self.docker_menu_items(app),
             MenuItem(
-                "Select build targets",
-                "build / build",
-                "Choose the Ninja targets used by product and incremental builds.",
-                lambda app: f"Current build targets: {app.build_targets or '<not set>'}",
-                lambda app: app.config_workflow_controller().select_build_targets(app),
-                requires_project=True,
-            ),
-            MenuItem(
                 "Update product",
                 "build / build",
                 "Choose and run explicit product update stages: checkout, Moulin regeneration, and Repo source synchronization.",
                 lambda app: self.product_update_preview(app),
                 lambda app: self.run_product_update_menu(app),
                 requires_remote=True,
+                requires_project=True,
+            ),
+            MenuItem(
+                "Select build targets",
+                "build / build",
+                "Choose the Ninja targets used by product and incremental builds.",
+                lambda app: f"Current build targets: {app.build_targets or '<not set>'}",
+                lambda app: app.config_workflow_controller().select_build_targets(app),
                 requires_project=True,
             ),
             MenuItem(

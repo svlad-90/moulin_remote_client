@@ -31,6 +31,7 @@ class FakePanels:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.actions_kwargs: dict[str, Any] = {}
+        self.footer_kwargs: dict[str, Any] = {}
 
     def draw_header(self, *_args: Any, **_kwargs: Any) -> None:
         self.calls.append("header")
@@ -47,6 +48,7 @@ class FakePanels:
 
     def draw_footer(self, *_args: Any, **_kwargs: Any) -> str:
         self.calls.append("footer")
+        self.footer_kwargs = _kwargs
         return "footer"
 
     def draw_expanded_logs(self, *_args: Any, **_kwargs: Any) -> None:
@@ -165,6 +167,21 @@ class MainDrawControllerTests(unittest.TestCase):
         self.assertFalse(port.main_full_redraw)
         self.assertFalse(port.logs_dirty)
         self.assertEqual(port.screen.refresh_count, 1)
+
+    def test_footer_identifies_selected_running_action_as_repeat_to_stop(self) -> None:
+        port = FakePort()
+        port.active_job = {
+            "title": "Run product build",
+            "item_label": "Run product build",
+            "finished": False,
+            "output": deque(),
+        }
+        panels = FakePanels()
+
+        with patch("components.ui.src.main_draw.ui_panels_api.main_panels_controller", return_value=panels):
+            main_draw.main_draw_controller(app_dir=Path("/app")).draw(port)
+
+        self.assertTrue(panels.footer_kwargs["selected_action_running"])
 
     def test_full_redraw_erases_screen_even_when_layout_is_cached(self) -> None:
         port = FakePort()
