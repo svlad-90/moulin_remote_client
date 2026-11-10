@@ -268,7 +268,6 @@ class MainMenuCommandItemsService:
         board_host_items = [item for item in board_items if item.group == "flashing / hosts"]
         board_other_items = [item for item in board_items if item.group != "flashing / hosts"]
         items.extend(board_host_items)
-        items.append(self.configure_copied_artifacts_item())
         items.extend(board_other_items)
         items.extend([
             MenuItem(
@@ -551,16 +550,6 @@ class MainMenuCommandItemsService:
                 continue
             ordered_items.append(item)
         return ordered_items
-
-    def configure_copied_artifacts_item(self) -> MenuItem:
-        return MenuItem(
-            "Configure copied artifacts",
-            "flashing / commands",
-            "Choose which build artifacts are copied to the board host artifacts directory.",
-            lambda app: f"Current copied artifacts: {getattr(app, 'board_artifacts', '') or app.build_targets or '<not set>'}",
-            lambda app: app.config_workflow_controller().select_board_artifacts(app),
-            requires_project=True,
-        )
 
     def product_update_preview(self, app: Any) -> str:
         self._load_product_update_preferences(app.config)
@@ -2155,6 +2144,9 @@ done
             if action.local_artifact is not None:
                 items.append(self.artifact_source_flash_item(action))
                 continue
+            if action.action_id == "copy_build_artifacts":
+                items.append(self.copy_build_artifacts_item(action))
+                continue
             items.append(MenuItem(
                 action.label,
                 self.board_action_group(action.action_id),
@@ -2181,6 +2173,45 @@ done
         if camera_item is not None:
             items.append(camera_item)
         return items
+
+    def copy_build_artifacts_item(self, action: board_type_base_api.BoardAction) -> MenuItem:
+        return MenuItem(
+            action.label,
+            self.board_action_group(action.action_id),
+            "Choose build artifacts, confirm the selection, then copy them to the board host.",
+            lambda app: (
+                "Current copied artifacts: "
+                + (getattr(app, "board_artifacts", "") or app.build_targets or "<not set>")
+            ),
+            lambda app: self.run_copy_build_artifacts_menu(app, action),
+            confirm=False,
+            requires_remote=action.requires_remote,
+            requires_project=action.requires_project,
+            allow_during_job=action.allow_during_job,
+        )
+
+    def run_copy_build_artifacts_menu(
+        self,
+        app: Any,
+        action: board_type_base_api.BoardAction,
+    ) -> Any:
+        if not app.config_workflow_controller().select_board_artifacts(app):
+            return None
+        artifact_targets = getattr(app, "board_artifacts", "") or app.build_targets
+        if not app.dialog_workflow_controller().run_confirm_dialog(
+            app,
+            ui_dialog_api.ConfirmContent(
+                title="Confirm",
+                warning="This action copies build outputs to the board host.",
+                subject=action.label,
+                details=f"Artifacts: {artifact_targets or '<not set>'}",
+                footer="Enter/y: copy | n/q/Esc: cancel",
+            ),
+            redraw_background=False,
+        ):
+            app.status = f"Cancelled: {action.label}"
+            return None
+        return self.run_board_action(app, action.action_id)
 
     def open_camera_stream(self, app: Any, url: str) -> bool:
         try:

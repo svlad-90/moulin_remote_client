@@ -73,7 +73,7 @@ class TargetSelectionController:
         port: Any,
         *,
         reload_runtime: Callable[[], Any],
-    ) -> None:
+    ) -> bool:
         project = config_profile_api.active_project(self.config)
         selected_text = self.select_targets(
             port,
@@ -86,13 +86,14 @@ class TargetSelectionController:
             cancelled_status="Board artifact selection cancelled",
         )
         if selected_text is None:
-            return
+            return False
         self.field_action_controller.apply_project_values(
             port,
             project,
             {"board_artifacts": selected_text},
             status="Board artifact selection saved",
         )
+        return True
 
     def select_targets(
         self,
