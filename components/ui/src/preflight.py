@@ -25,7 +25,6 @@ def format_preflight_values(values: dict[str, str]) -> str:
         return " | ".join(parts)
     parts = [
         f"project {values.get('project', '?')}",
-        f"disk {values.get('disk', '?')}",
         f"git {values.get('git', '?')}",
         f"docker {values.get('docker', '?')}",
         f"origin {values.get('origin', '?')}",
