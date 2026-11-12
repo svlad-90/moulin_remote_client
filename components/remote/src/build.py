@@ -29,7 +29,12 @@ class RemoteBuildCommandService:
             '--build-arg "USER_GID=$(id -g)" '
             f"-t {shlex.quote(docker_image + ':latest')}"
         )
-        return self.session_service.remote_shell_command(remote, project_dir, command)
+        return self.session_service.remote_shell_command(
+            remote,
+            project_dir,
+            command,
+            tty="-tt",
+        )
 
     def docker_command_for_config(
         self,
@@ -301,7 +306,8 @@ if not build_dirs:
         return self.session_service.remote_shell_command(
             remote,
             project_dir,
-            self.product_docker_command(project_dir, docker_image, inner),
+            self.product_docker_command(project_dir, docker_image, inner, tty=True),
+            tty="-tt",
         )
 
     def moulin_command_for_config(
@@ -367,7 +373,8 @@ if not build_dirs:
         return self.session_service.remote_shell_command(
             remote,
             project_dir,
-            self.product_docker_command(project_dir, docker_image, script),
+            self.product_docker_command(project_dir, docker_image, script, tty=True),
+            tty="-tt",
         )
 
     def repo_source_sync_command_for_config(
@@ -440,6 +447,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -526,7 +534,17 @@ try:
             output.rename(backup)
             backups.append((output, backup))
 
-    result = subprocess.run(["ninja", *TARGETS], check=False).returncode
+    ninja = subprocess.Popen(["ninja", *TARGETS])
+    try:
+        result = ninja.wait()
+    except KeyboardInterrupt:
+        print("Interrupt received; waiting for Ninja cleanup to finish.", file=sys.stderr)
+        while True:
+            try:
+                result = ninja.wait()
+                break
+            except KeyboardInterrupt:
+                continue
     if result == 0:
         missing = [str(output.relative_to(root)) for _target, output in outputs if not os.path.lexists(output)]
         if missing:
@@ -535,6 +553,10 @@ try:
 
     if result != 0:
         raise SystemExit(result)
+except KeyboardInterrupt:
+    print("Incremental build interrupted before Ninja started; restoring invalidated outputs.", file=sys.stderr)
+    restore_backups(backups)
+    raise SystemExit(130)
 except BaseException:
     restore_backups(backups)
     raise
@@ -844,7 +866,8 @@ raise SystemExit(main())
         return self.session_service.remote_shell_command(
             remote,
             project_dir,
-            self.product_docker_command(project_dir, docker_image, inner),
+            self.product_docker_command(project_dir, docker_image, inner, tty=True),
+            tty="-tt",
         )
 
     def ninja_tool_command(self, remote: str, project_dir: str, docker_image: str, args: str) -> list[str]:
@@ -852,7 +875,8 @@ raise SystemExit(main())
         return self.session_service.remote_shell_command(
             remote,
             project_dir,
-            self.product_docker_command(project_dir, docker_image, f"ninja {quoted_args}"),
+            self.product_docker_command(project_dir, docker_image, f"ninja {quoted_args}", tty=True),
+            tty="-tt",
         )
 
     def target_output_clean_command(
@@ -882,7 +906,8 @@ raise SystemExit(main())
         return self.session_service.remote_shell_command(
             remote,
             project_dir,
-            self.product_docker_command(project_dir, docker_image, inner),
+            self.product_docker_command(project_dir, docker_image, inner, tty=True),
+            tty="-tt",
         )
 
     def bazel_config_command(self, remote: str, project_dir: str, docker_image: str, targets: str) -> list[str]:
@@ -891,7 +916,8 @@ raise SystemExit(main())
         return self.session_service.remote_shell_command(
             remote,
             project_dir,
-            self.product_docker_command(project_dir, docker_image, inner),
+            self.product_docker_command(project_dir, docker_image, inner, tty=True),
+            tty="-tt",
         )
 
     def bazel_component_command(
@@ -926,7 +952,8 @@ raise SystemExit(main())
         return self.session_service.remote_shell_command(
             remote,
             project_dir,
-            self.product_docker_command(project_dir, docker_image, inner),
+            self.product_docker_command(project_dir, docker_image, inner, tty=True),
+            tty="-tt",
         )
 
     def build_command_for_config(
@@ -1061,6 +1088,7 @@ from __future__ import annotations
 
 import base64
 import json
+import signal
 import subprocess
 import sys
 import selectors
@@ -1088,32 +1116,45 @@ def run_lines(argv: list[str]) -> list[str]:
 def run_output(command: str, *, label: str, heartbeat_s: int = 30) -> tuple[int, str]:
     started = time.monotonic()
     next_heartbeat = started + heartbeat_s
-    process = subprocess.Popen(
-        command,
-        shell=True,
-        executable="/bin/bash",
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=1,
-    )
-    assert process.stdout is not None
     output: list[str] = []
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
-    while process.poll() is None:
-        events = selector.select(timeout=1)
-        for key, _mask in events:
-            line = key.fileobj.readline()
-            if line:
-                output.append(line)
-        now = time.monotonic()
-        if now >= next_heartbeat:
-            elapsed = int(now - started)
-            print(f"[progress] still running after {elapsed}s: {label}", flush=True)
-            next_heartbeat = now + heartbeat_s
-    for line in process.stdout:
-        output.append(line)
+    interrupted = False
+    def handle_interrupt(_signum: int, _frame: object) -> None:
+        nonlocal interrupted
+        if not interrupted:
+            print(f"Interrupt received; waiting for {label} to finish.", file=sys.stderr, flush=True)
+        interrupted = True
+
+    previous_handler = signal.signal(signal.SIGINT, handle_interrupt)
+    try:
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            executable="/bin/bash",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+        )
+        if interrupted:
+            os.killpg(os.getpgrp(), signal.SIGINT)
+        assert process.stdout is not None
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while process.poll() is None:
+            events = selector.select(timeout=1)
+            for key, _mask in events:
+                line = key.fileobj.readline()
+                if line:
+                    output.append(line)
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                elapsed = int(now - started)
+                print(f"[progress] still running after {elapsed}s: {label}", flush=True)
+                next_heartbeat = now + heartbeat_s
+        for line in process.stdout:
+            output.append(line)
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
     elapsed = int(time.monotonic() - started)
     print(f"{label}: exit {process.returncode} elapsed {elapsed}s", flush=True)
     return int(process.returncode or 0), "".join(output)
@@ -1126,32 +1167,45 @@ def run_shell(command: str, *, label: str, step: int, total: int, heartbeat_s: i
     print("label:", label)
     started = time.monotonic()
     next_heartbeat = started + heartbeat_s
-    process = subprocess.Popen(
-        command,
-        shell=True,
-        executable="/bin/bash",
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=1,
-    )
-    assert process.stdout is not None
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
-    while process.poll() is None:
-        events = selector.select(timeout=1)
-        for key, _mask in events:
-            line = key.fileobj.readline()
-            if line:
-                print(line, end="")
-        now = time.monotonic()
-        if now >= next_heartbeat:
-            elapsed = int(now - started)
-            print(f"[progress] step {step}/{total} still running after {elapsed}s: {label}", flush=True)
-            next_heartbeat = now + heartbeat_s
+    interrupted = False
+    def handle_interrupt(_signum: int, _frame: object) -> None:
+        nonlocal interrupted
+        if not interrupted:
+            print(f"Interrupt received; waiting for {label} to finish.", file=sys.stderr, flush=True)
+        interrupted = True
 
-    for line in process.stdout:
-        print(line, end="")
+    previous_handler = signal.signal(signal.SIGINT, handle_interrupt)
+    try:
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            executable="/bin/bash",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+        )
+        if interrupted:
+            os.killpg(os.getpgrp(), signal.SIGINT)
+        assert process.stdout is not None
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while process.poll() is None:
+            events = selector.select(timeout=1)
+            for key, _mask in events:
+                line = key.fileobj.readline()
+                if line:
+                    print(line, end="")
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                elapsed = int(now - started)
+                print(f"[progress] step {step}/{total} still running after {elapsed}s: {label}", flush=True)
+                next_heartbeat = now + heartbeat_s
+
+        for line in process.stdout:
+            print(line, end="")
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
     elapsed = int(time.monotonic() - started)
     print(f"exit: {process.returncode} elapsed: {elapsed}s")
     return int(process.returncode or 0)
@@ -1367,7 +1421,8 @@ raise SystemExit(0)
         return self.session_service.remote_shell_command(
             remote,
             project_dir,
-            self.product_docker_command(project_dir, docker_image, inner),
+            self.product_docker_command(project_dir, docker_image, inner, tty=True),
+            tty="-tt",
         )
 
     def yocto_impact_command_for_config(

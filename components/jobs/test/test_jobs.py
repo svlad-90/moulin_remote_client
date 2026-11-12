@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import unittest
 import os
+import subprocess
 import sys
 from collections import deque
 from typing import Any
+from unittest.mock import Mock, patch
 
 from components.jobs.api import jobs
 
@@ -184,6 +186,41 @@ class JobsBehaviorTests(unittest.TestCase):
         )
         self.assertTrue(job["stopping"])
         self.assertEqual(job["stop_requested_at"], 12.0)
+
+    def test_request_stop_plan_interrupts_interactive_build(self) -> None:
+        job = {"title": "Build", "current_stop_mode": "pty-interrupt"}
+
+        self.assertEqual(
+            jobs.request_stop_plan(job, "build", process_running=True, now=12.0),
+            {
+                "action": "interrupt",
+                "log": "graceful stop requested: Ctrl-C",
+                "status": "Waiting for command to stop",
+                "logs_dirty": True,
+            },
+        )
+        self.assertEqual(job["stop_phase"], "interrupt")
+
+    def test_repeated_stop_forces_interactive_build_termination(self) -> None:
+        job = {
+            "title": "Build",
+            "current_stop_mode": "pty-interrupt",
+            "stopping": True,
+            "stop_phase": "interrupt",
+            "stop_requested_at": 12.0,
+        }
+
+        self.assertEqual(
+            jobs.request_stop_plan(job, "build", process_running=True, now=612.0),
+            {
+                "action": "terminate",
+                "log": "forced SSH stop requested: SIGTERM",
+                "status": "Forced SSH stop requested",
+                "logs_dirty": True,
+            },
+        )
+        self.assertEqual(job["stop_phase"], "terminate")
+        self.assertEqual(job["stop_requested_at"], 612.0)
 
     def test_request_stop_plan_finishes_job_without_active_process(self) -> None:
         job = {"title": "Build"}
@@ -378,6 +415,60 @@ class JobsBehaviorTests(unittest.TestCase):
             ["progress group", "all items complete"],
         )
 
+    def test_interactive_build_log_preserves_repainted_terminal_lines(self) -> None:
+        job = jobs.create_command_job(
+            title="Build",
+            item_label="Run product build",
+            slot="build",
+            commands=[],
+        )
+        with (
+            patch("components.jobs.src.jobs.subprocess.Popen", return_value=Mock()),
+            patch("components.jobs.src.jobs.threading.Thread"),
+        ):
+            jobs.start_command_process(job, ["ssh", "-tt", "host", "ninja"])
+
+        jobs.append_job_output_stream(
+            job,
+            "compile task\nprogress group\n2 active items\n",
+        )
+        jobs.append_job_output_stream(
+            job,
+            "\x1b[2A\x1b[Jprogress group\nall items complete\n",
+        )
+
+        self.assertEqual(
+            jobs.job_output_lines(job),
+            [
+                "compile task",
+                "progress group",
+                "2 active items",
+                "progress group",
+                "all items complete",
+            ],
+        )
+
+    def test_interactive_build_log_bounds_completed_line_history(self) -> None:
+        job = jobs.create_command_job(
+            title="Build",
+            item_label="Run product build",
+            slot="build",
+            commands=[],
+        )
+        with (
+            patch("components.jobs.src.jobs.subprocess.Popen", return_value=Mock()),
+            patch("components.jobs.src.jobs.threading.Thread"),
+        ):
+            jobs.start_command_process(job, ["ssh", "-tt", "host", "ninja"])
+
+        for index in range(10005):
+            jobs.append_job_output(job, str(index))
+
+        lines = jobs.job_output_lines(job)
+        self.assertEqual(len(lines), 10000)
+        self.assertEqual(lines[0], "5")
+        self.assertEqual(lines[-1], "10004")
+
     def test_append_job_output_stream_honors_erase_display_modes(self) -> None:
         job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
 
@@ -484,12 +575,60 @@ class JobsBehaviorTests(unittest.TestCase):
             mark_dirty,
         )
         self.assertIs(job["process"], process)
+        self.assertIsNone(job["current_stop_mode"])
+        self.assertIsNone(process.stdin)
         job["output_reader"].join(timeout=2.0)
         rc = process.wait(timeout=2.0)
 
         self.assertEqual(rc, 0)
         self.assertEqual(jobs.job_output_lines(job), ["hello"])
         self.assertGreaterEqual(dirty_count, 1)
+
+    def test_start_command_process_opens_stdin_for_interactive_build(self) -> None:
+        job = jobs.create_command_job(
+            title="Build",
+            item_label="Run product build",
+            slot="build",
+            commands=[],
+        )
+        process = Mock()
+
+        with (
+            patch("components.jobs.src.jobs.subprocess.Popen", return_value=process) as popen,
+            patch("components.jobs.src.jobs.threading.Thread") as thread,
+        ):
+            jobs.start_command_process(job, ["ssh", "-tt", "host", "ninja"])
+
+        self.assertEqual(job["current_stop_mode"], "pty-interrupt")
+        self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.PIPE)
+        thread.return_value.start.assert_called_once_with()
+
+    def test_start_command_process_only_enables_graceful_stop_for_ssh_tty(self) -> None:
+        process = Mock()
+
+        with (
+            patch("components.jobs.src.jobs.subprocess.Popen", return_value=process) as popen,
+            patch("components.jobs.src.jobs.threading.Thread"),
+        ):
+            local_job = jobs.create_command_job(
+                title="Local",
+                item_label="Local",
+                slot="build",
+                commands=[],
+            )
+            jobs.start_command_process(local_job, ["tool", "-tt"])
+            self.assertIsNone(local_job["current_stop_mode"])
+            self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+            ssh_job = jobs.create_command_job(
+                title="SSH",
+                item_label="SSH",
+                slot="build",
+                commands=[],
+            )
+            jobs.start_command_process(ssh_job, ["/usr/bin/ssh", "-t", "host", "ninja"])
+            self.assertEqual(ssh_job["current_stop_mode"], "pty-interrupt")
+            self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.PIPE)
 
     def test_log_scroll_helpers_match_client_methods(self) -> None:
         job = jobs.create_command_job(
@@ -1007,7 +1146,7 @@ class JobsBehaviorTests(unittest.TestCase):
                 rc=None,
                 now=12.1,
             ),
-            {"action": "stop_timeout", "log": "stop timeout: SIGKILL"},
+            {"action": "stop_kill", "log": "stop timeout: SIGKILL"},
         )
         self.assertEqual(
             jobs.poll_process_plan(
@@ -1037,6 +1176,20 @@ class JobsBehaviorTests(unittest.TestCase):
             },
         )
         self.assertEqual(completed_job["rc"], 0)
+
+        completed_remote_job = {
+            "process": object(),
+            "title": "Build",
+            "current_stop_mode": "pty-interrupt",
+        }
+        self.assertEqual(
+            jobs.poll_process_plan(completed_remote_job, process_running=False, rc=8, now=12.0),
+            {
+                "action": "process_complete",
+                "log": "Remote command completed with exit code 8",
+                "completed": {"action": "finish", "state": jobs.command_failed_state("Build", 8)},
+            },
+        )
 
     def test_connection_lifecycle_states_match_current_status_text(self) -> None:
         self.assertEqual(

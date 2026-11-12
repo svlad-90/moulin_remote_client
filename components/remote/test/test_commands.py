@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -365,6 +366,7 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(argv[0], "ssh")
+        self.assertIn("-tt", argv)
         self.assertIn("builder@10.0.0.1", argv)
         self.assertIn("cd /mnt/projects/meta-product && DOCKER_BUILDKIT=1 docker build . -f doc/Dockerfile", argv[-1])
         self.assertIn("-t prod_img:latest", argv[-1])
@@ -459,8 +461,10 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(argv[0], "ssh")
+        self.assertIn("-tt", argv)
         self.assertIn("builder@10.0.0.1", argv)
         self.assertIn("cd /mnt/projects/meta-product && docker run", argv[-1])
+        self.assertIn("-it --rm prod_img", argv[-1])
         self.assertIn(
             "cd android_kernel && tools/bazel --max_idle_secs=1 build //common-modules/xen-virtual-device:xen_virtual_device_aarch64/.config",
             argv[-1],
@@ -491,6 +495,8 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(argv[0], "ssh")
+        self.assertIn("-tt", argv)
+        self.assertIn("-it --rm prod_img", argv[-1])
         self.assertIn("builder@10.0.0.1", argv)
         self.assertIn(
             "cd android_kernel && tools/bazel --max_idle_secs=1 run --verbose_failures //common-modules/xen-virtual-device:xen_virtual_device_aarch64_dist -- --destdir=../android/out/android_kernel/deploy/common-modules/xen-virtual-device/xen_virtual_device_aarch64",
@@ -526,8 +532,11 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         self.assertIn("doma", argv[-1])
         self.assertIn("android_build", argv[-1])
         self.assertIn('["ninja", "-t", "query", target]', argv[-1])
-        self.assertIn('subprocess.run(["ninja", *TARGETS]', argv[-1])
+        self.assertIn('subprocess.Popen(["ninja", *TARGETS])', argv[-1])
+        self.assertIn("waiting for Ninja cleanup to finish", argv[-1])
         self.assertIn("backup.rename(output)", argv[-1])
+        self.assertIn("except KeyboardInterrupt:", argv[-1])
+        self.assertIn("raise SystemExit(130)", argv[-1])
 
     def test_incremental_build_script_replaces_output_on_success_and_restores_it_on_failure(self) -> None:
         config = sample_config()
@@ -585,6 +594,73 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             self.assertEqual(output.read_text(encoding="utf-8"), "old")
             self.assertEqual(list(root.glob(".mrc-ninja-backup-*")), [])
 
+    def test_incremental_build_script_waits_for_ninja_cleanup_after_interrupt(self) -> None:
+        config = sample_config()
+        prepare_config(config)
+        argv = commands.build_remote_incremental_build_command_for_config(
+            config,
+            docker_image="prod_img",
+            targets="doma",
+            invalidate_components=[{"name": "doma", "builder_type": "android"}],
+        )
+        inner = shlex.split(argv[-1])[-1]
+        script = inner.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ninja = root / "ninja"
+            ninja.write_text(
+                "\n".join(
+                    [
+                        "#!/usr/bin/env python3",
+                        "import signal",
+                        "import sys",
+                        "import time",
+                        "if sys.argv[1:3] == ['-t', 'query']:",
+                        "    target = sys.argv[3]",
+                        "    if target == 'doma':",
+                        "        print('doma:\\n  input: phony\\n    out.img\\n  outputs:')",
+                        "    else:",
+                        "        print('out.img:\\n  input: android_build\\n    sync.stamp\\n  outputs:\\n    doma')",
+                        "    raise SystemExit(0)",
+                        "def interrupted(_signum, _frame):",
+                        "    print('ninja-cleanup-start', flush=True)",
+                        "    time.sleep(0.2)",
+                        "    print('ninja-cleanup-done', flush=True)",
+                        "    raise SystemExit(2)",
+                        "signal.signal(signal.SIGINT, interrupted)",
+                        "print('ninja-running', flush=True)",
+                        "while True:",
+                        "    time.sleep(1)",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            ninja.chmod(0o755)
+            output = root / "out.img"
+            output.write_text("old", encoding="utf-8")
+            process = subprocess.Popen(
+                [sys.executable, "-c", script],
+                cwd=root,
+                env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}"},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
+            )
+
+            first_output = process.stdout.readline()
+            self.assertEqual(first_output.strip(), "ninja-running")
+            os.killpg(process.pid, signal.SIGINT)
+            remaining_output, _ = process.communicate(timeout=5)
+            combined_output = first_output + remaining_output
+
+            self.assertEqual(process.returncode, 2)
+            self.assertIn("waiting for Ninja cleanup to finish", combined_output)
+            self.assertIn("ninja-cleanup-done", combined_output)
+            self.assertEqual(output.read_text(encoding="utf-8"), "old")
+            self.assertEqual(list(root.glob(".mrc-ninja-backup-*")), [])
+
     def test_structured_script_api_is_used_directly(self) -> None:
         steps = [
             ("Project directory", "pwd"),
@@ -614,14 +690,18 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         docker_image = "prod_img"
         build_params = {"ENABLE_ANDROID": "yes"}
         build_targets = "boot_artifacts full_ufs.img.gz"
+        moulin_command = commands.build_remote_moulin_command_for_config(
+            config,
+            docker_image=docker_image,
+            default_moulin_manifest=client.DEFAULT_MOULIN_MANIFEST,
+            build_params=build_params,
+        )
+
+        self.assertIn("-tt", moulin_command)
+        self.assertIn("-it --rm prod_img", moulin_command[-1])
 
         self.assertEqual(
-            commands.build_remote_moulin_command_for_config(
-                config,
-                docker_image=docker_image,
-                default_moulin_manifest=client.DEFAULT_MOULIN_MANIFEST,
-                build_params=build_params,
-            ),
+            moulin_command,
             commands.build_remote_moulin_command(
                 config_accessors.remote_spec_for_config(config),
                 config_accessors.remote_project_dir_for_config(config),
@@ -665,8 +745,9 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual(argv[0], "ssh")
+        self.assertIn("-tt", argv)
         self.assertIn("builder@10.0.0.1", argv)
-        self.assertIn("docker run", argv[-1])
+        self.assertIn("-it --rm prod_img", argv[-1])
         self.assertIn("mode:", argv[-1])
         self.assertIn("dry_run:", argv[-1])
         self.assertIn("ninja -t clean", argv[-1])

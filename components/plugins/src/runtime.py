@@ -153,10 +153,10 @@ class PluginCommands:
         host = self._build_host(host_id)
         return self.run_host(host.remote, title, commands)
 
-    def host_command(self, remote: str, command: str) -> list[str]:
+    def host_command(self, remote: str, command: str, *, tty: str = "") -> list[str]:
         if not remote:
             raise RuntimeError("SSH host is not configured")
-        return remote_transport.ssh_command(remote, command)
+        return remote_transport.ssh_command(remote, command, tty=tty)
 
     def build_host_command(self, host_id: str, command: str) -> list[str]:
         return self.host_command(self._build_host(host_id).remote, command)
@@ -373,9 +373,9 @@ class PluginCommands:
             f"--{shlex.quote(name)} {shlex.quote(value)}" for name, value in sorted(project.parameters.items())
         )
         inner = f"moulin {shlex.quote(project.moulin_manifest)}" + (f" {params}" if params else "")
-        docker = self._build_service.product_docker_command(directory, project.docker_image, inner)
+        docker = self._build_service.product_docker_command(directory, project.docker_image, inner, tty=True)
         command = f"cd {shlex.quote(directory)} && if [ ! -f build.ninja ]; then {docker}; fi"
-        return self.host_command(host.remote, command)
+        return self.host_command(host.remote, command, tty="-tt")
 
     def product_build_command(self, host_id: str, project_id: str, targets: list[str]) -> list[str]:
         host = self._build_host(host_id)
@@ -387,8 +387,13 @@ class PluginCommands:
         host = self._build_host(host_id)
         project = self._project(project_id)
         directory = config_accessors.remote_project_dir(dict(host.values), dict(project.values))
-        command = self._build_service.product_docker_command(directory, project.docker_image, inner_command)
-        return self.host_command(host.remote, f"cd {shlex.quote(directory)} && {command}")
+        command = self._build_service.product_docker_command(
+            directory,
+            project.docker_image,
+            inner_command,
+            tty=True,
+        )
+        return self.host_command(host.remote, f"cd {shlex.quote(directory)} && {command}", tty="-tt")
 
     def run_board(self, board_id: str, title: str, commands: list[str]) -> int:
         board = self._board(board_id)

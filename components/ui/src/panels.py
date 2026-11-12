@@ -478,9 +478,12 @@ class MainPanelsController:
             return
 
         running = job_api.job_running(job)
+        stopped = not running and bool(job.get("stopping"))
         failed = not running and int(job.get("rc", 0) or 0) != 0
         if running:
             state, state_attr = "RUNNING", port.running_attr()
+        elif stopped:
+            state, state_attr = "STOPPED", port.group_attr()
         elif failed:
             state, state_attr = "FAILED", port.warn_attr()
         else:

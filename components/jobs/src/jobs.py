@@ -12,6 +12,9 @@ from typing import Any, Callable
 
 
 JOB_STATE_WAKE_KEY = 0
+STOP_MODE_PTY_INTERRUPT = "pty-interrupt"
+STOP_TERM_TIMEOUT = 5.0
+STOP_DEFAULT_TIMEOUT = 2.0
 
 
 def create_command_job(
@@ -160,14 +163,24 @@ def compact_log_lines(source: list[str]) -> list[str]:
     return compacted
 
 
+def _job_output_source_locked(job: dict[str, Any]) -> list[str]:
+    if "terminal_history" not in job:
+        return list(job.get("output", []))
+    source = list(job.get("terminal_history", []))
+    output = job.get("output", [])
+    if job.get("partial_live") and output:
+        source.append(str(output[-1]))
+    return source
+
+
 def job_output_lines(job: dict[str, Any] | None) -> list[str]:
     if job is None:
         return []
     lock = job.get("output_lock")
     if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
         with lock:
-            return compact_log_lines(list(job.get("output", [])))
-    return compact_log_lines(list(job.get("output", [])))
+            return compact_log_lines(_job_output_source_locked(job))
+    return compact_log_lines(_job_output_source_locked(job))
 
 
 def clipboard_log_text(
@@ -208,14 +221,14 @@ def _wrapped_job_output(
             cached = cache.get(inner_width)
             if cached is not None and cached[0] == revision:
                 return cached[1], cached[2]
-            source = compact_log_lines(list(job.get("output", [])))
+            source = compact_log_lines(_job_output_source_locked(job))
     else:
         revision = int(job.get("output_revision", 0))
         cache = job.setdefault("wrapped_output_cache", {})
         cached = cache.get(inner_width)
         if cached is not None and cached[0] == revision:
             return cached[1], cached[2]
-        source = compact_log_lines(list(job.get("output", [])))
+        source = compact_log_lines(_job_output_source_locked(job))
 
     lines: list[str] = []
     source_indices: list[int] = []
@@ -390,6 +403,20 @@ def request_stop_plan(
             "action": "status",
             "status": no_running_command_message(slot, punctuation=False),
         }
+    if (
+        job.get("stopping")
+        and job.get("current_stop_mode") == STOP_MODE_PTY_INTERRUPT
+        and job.get("stop_phase") == "interrupt"
+        and process_running
+    ):
+        job["stop_phase"] = "terminate"
+        job["stop_requested_at"] = now
+        return {
+            "action": "terminate",
+            "log": "forced SSH stop requested: SIGTERM",
+            "status": "Forced SSH stop requested",
+            "logs_dirty": True,
+        }
     if job.get("stopping"):
         return {
             "action": "status",
@@ -398,6 +425,15 @@ def request_stop_plan(
     job["stopping"] = True
     if process_running:
         job["stop_requested_at"] = now
+        if job.get("current_stop_mode") == STOP_MODE_PTY_INTERRUPT:
+            job["stop_phase"] = "interrupt"
+            return {
+                "action": "interrupt",
+                "log": "graceful stop requested: Ctrl-C",
+                "status": "Waiting for command to stop",
+                "logs_dirty": True,
+            }
+        job["stop_phase"] = "terminate"
         return {
             "action": "terminate",
             "log": "stop requested: SIGTERM",
@@ -650,8 +686,16 @@ def poll_process_plan(
 ) -> dict[str, Any]:
     if job.get("process") is None:
         return {"action": "start_next"}
-    if job.get("stopping") and process_running and stop_timeout_due(job, now):
-        return {"action": "stop_timeout", "log": "stop timeout: SIGKILL"}
+    if job.get("stopping") and process_running:
+        phase = job.get("stop_phase", "terminate")
+        timeout = (
+            STOP_TERM_TIMEOUT
+            if job.get("current_stop_mode") == STOP_MODE_PTY_INTERRUPT
+            else STOP_DEFAULT_TIMEOUT
+        )
+        if phase == "terminate" and stop_timeout_due(job, now, timeout=timeout):
+            job["stop_phase"] = "kill"
+            return {"action": "stop_kill", "log": "stop timeout: SIGKILL"}
     if job.get("kind") in {"connect", "board-connect"} and process_running and connect_timeout_due(job, now):
         return {
             "action": "connect_timeout",
@@ -662,9 +706,14 @@ def poll_process_plan(
     if rc is None:
         return {"action": "wait"}
     job["rc"] = int(rc)
+    completion_log = (
+        f"Remote command completed with exit code {int(rc)}"
+        if job.get("current_stop_mode") == STOP_MODE_PTY_INTERRUPT
+        else f"exit: {int(rc)}"
+    )
     return {
         "action": "process_complete",
-        "log": f"exit: {int(rc)}",
+        "log": completion_log,
         "completed": completed_process_action(job, int(rc)),
     }
 
@@ -740,6 +789,9 @@ def sanitize_log_line(line: str) -> str:
 
 def append_log_line_locked(job: dict[str, Any], output: Any, line: str) -> bool:
     output.append(line)
+    history = job.get("terminal_history")
+    if history is not None:
+        history.append(line)
     job["last_log_line_blank"] = line == ""
     return True
 
@@ -762,6 +814,10 @@ def append_job_output(job: dict[str, Any], line: str) -> None:
     lock = job.get("output_lock")
     if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
         with lock:
+            if "terminal_history" in job and job.get("partial_live"):
+                output = job.setdefault("output", deque(maxlen=1000))
+                if output:
+                    job.setdefault("terminal_history", deque(maxlen=10000)).append(str(output[-1]))
             finish_stream_line_locked(job)
             output = job.setdefault("output", deque(maxlen=1000))
             for clean_line in lines:
@@ -769,6 +825,10 @@ def append_job_output(job: dict[str, Any], line: str) -> None:
             trim_output(output)
             job["output_revision"] = int(job.get("output_revision", 0)) + 1
     else:
+        if "terminal_history" in job and job.get("partial_live"):
+            output = job.setdefault("output", deque(maxlen=1000))
+            if output:
+                job.setdefault("terminal_history", deque(maxlen=10000)).append(str(output[-1]))
         finish_stream_line_locked(job)
         output = job.setdefault("output", deque(maxlen=1000))
         for clean_line in lines:
@@ -962,9 +1022,25 @@ def start_command_process(
     command: list[str],
     mark_dirty: Callable[[], None] | None = None,
 ) -> Any:
+    pty_interrupt = (
+        bool(command)
+        and os.path.basename(command[0]) == "ssh"
+        and any(
+            argument.startswith("-") and argument[1:] and set(argument[1:]) == {"t"}
+            for argument in command[1:]
+        )
+    )
+    if pty_interrupt and "terminal_history" not in job:
+        lock = job.get("output_lock")
+        if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
+            with lock:
+                job["terminal_history"] = deque(job.get("output", []), maxlen=10000)
+        else:
+            job["terminal_history"] = deque(job.get("output", []), maxlen=10000)
+    job["current_stop_mode"] = STOP_MODE_PTY_INTERRUPT if pty_interrupt else None
     process = subprocess.Popen(
         command,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE if pty_interrupt else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         start_new_session=True,
@@ -974,3 +1050,15 @@ def start_command_process(
     job["output_reader"] = reader
     reader.start()
     return process
+
+
+def send_process_interrupt(process: Any) -> bool:
+    stream = getattr(process, "stdin", None)
+    if stream is None:
+        return False
+    try:
+        stream.write(b"\x03")
+        stream.flush()
+    except (BrokenPipeError, OSError, ValueError):
+        return False
+    return True

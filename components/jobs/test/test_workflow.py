@@ -11,7 +11,14 @@ class FakeRunner:
         self.calls: list[tuple[Any, str, list[list[str]]]] = []
         self.start_next_command: Any = None
 
-    def start_commands(self, port: Any, title: str, commands: list[list[str]], *, start_next_command: Any) -> int:
+    def start_commands(
+        self,
+        port: Any,
+        title: str,
+        commands: list[list[str]],
+        *,
+        start_next_command: Any,
+    ) -> int:
         self.calls.append((port, title, commands))
         self.start_next_command = start_next_command
         return 0
@@ -112,7 +119,13 @@ class CommandWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(
             runner.calls,
-            [(port, "Run product build", [["save-build-settings"], ["ninja", "full_ufs.img.gz"]])],
+            [
+                (
+                    port,
+                    "Run product build",
+                    [["save-build-settings"], ["ninja", "full_ufs.img.gz"]],
+                )
+            ],
         )
         self.assertEqual(sequence_calls[0]["config"], config)
         self.assertEqual(sequence_calls[0]["build_command"], ["ninja"])

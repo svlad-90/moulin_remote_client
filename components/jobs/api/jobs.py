@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from components.jobs.src.jobs import (
     JOB_STATE_WAKE_KEY,
+    STOP_MODE_PTY_INTERRUPT,
     active_job_for_slot,
     advance_completed_command_step,
     append_job_output,
@@ -48,6 +49,7 @@ from components.jobs.src.jobs import (
     running_job_list,
     schedule_connect_timeout_wakeup,
     sanitize_log_line,
+    send_process_interrupt,
     selected_or_first_running_job,
     selected_or_first_running_job_for_label,
     start_command_process,
@@ -61,6 +63,7 @@ from components.jobs.src.jobs import (
 
 __all__ = [
     "JOB_STATE_WAKE_KEY",
+    "STOP_MODE_PTY_INTERRUPT",
     "active_job_for_slot",
     "advance_completed_command_step",
     "append_job_output",
@@ -105,6 +108,7 @@ __all__ = [
     "running_job_list",
     "schedule_connect_timeout_wakeup",
     "sanitize_log_line",
+    "send_process_interrupt",
     "selected_or_first_running_job",
     "selected_or_first_running_job_for_label",
     "start_command_process",
