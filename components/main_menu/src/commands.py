@@ -956,7 +956,11 @@ class MainMenuCommandItemsService:
             docker_image=app.docker_image,
         )
         commands.append(self.mark_incremental_mapping_build_applied_command(app))
-        return app.command_workflow_service().run_commands(app, "Run product build", commands)
+        return app.command_workflow_service().run_commands(
+            app,
+            "Run product build",
+            commands,
+        )
 
     def incremental_product_build_commands(
         self,

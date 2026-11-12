@@ -83,6 +83,19 @@ class CommandControlService:
             job_api.append_job_output(job, str(plan["log"]))
             port.logs_dirty = True
         process_pid = job_api.process_pid(process)
+        if plan["action"] == "interrupt" and job is not None:
+            if job_api.send_process_interrupt(process):
+                port.status = str(plan["status"])
+                port.logs_dirty = True
+                return
+            job["stop_phase"] = "terminate"
+            job["stop_requested_at"] = self.now()
+            job_api.append_job_output(job, "Ctrl-C unavailable: stopping SSH with SIGTERM")
+            if process_pid is not None:
+                self.terminate_process_group(process_pid, signal.SIGTERM)
+            port.status = "Stop requested"
+            port.logs_dirty = True
+            return
         if plan["action"] == "terminate" and process_pid is not None:
             self.terminate_process_group(process_pid, signal.SIGTERM)
             port.status = str(plan["status"])

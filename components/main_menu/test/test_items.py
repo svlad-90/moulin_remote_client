@@ -22,13 +22,15 @@ class FakeWorkflow:
     def __init__(self) -> None:
         self.build_calls: list[dict[str, Any]] = []
         self.command_calls: list[tuple[str, list[list[str]]]] = []
+        self.command_options: list[dict[str, Any]] = []
 
     def run_build_command(self, _port: Any, title: str, command: list[str], **kwargs: Any) -> int:
         self.build_calls.append({"title": title, "command": command, **kwargs})
         return 0
 
-    def run_commands(self, _port: Any, title: str, commands: list[list[str]]) -> int:
+    def run_commands(self, _port: Any, title: str, commands: list[list[str]], **kwargs: Any) -> int:
         self.command_calls.append((title, commands))
+        self.command_options.append(kwargs)
         return 0
 
 
@@ -876,6 +878,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertEqual(title, "Run product build")
             self.assertIn("ninja full_ufs.img.gz", commands[0][-1])
             self.assertIn("mark_runtime_mapping_build_applied", commands[-1][-1])
+            self.assertEqual(app.workflow.command_options[0], {})
             self.assertEqual(app.workflow.build_calls, [])
 
     def test_build_tab_target_selector_delegates_to_config_workflow(self) -> None:
@@ -984,7 +987,7 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertIn("doma", commands[3][-1])
             self.assertIn("android_build", commands[3][-1])
             self.assertIn("boot_artifacts", commands[3][-1])
-            self.assertIn('subprocess.run(["ninja", *TARGETS]', commands[3][-1])
+            self.assertIn('subprocess.Popen(["ninja", *TARGETS])', commands[3][-1])
             self.assertIn("marked mapped-file changes as applied by build", commands[4][-1])
             settings_path = app_dir / "state" / "build-settings.json"
             self.assertEqual(
@@ -2694,6 +2697,8 @@ class MainMenuBuilderTests(unittest.TestCase):
             self.assertNotIn("git stash push", commands[0][-1])
             self.assertIn("moulin", commands[1][-1])
             self.assertIn("repo sync --fail-fast --force-sync", commands[2][-1])
+            self.assertIn("-tt", commands[1])
+            self.assertIn("-tt", commands[2])
 
     def test_product_update_menu_selects_nested_checkout_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

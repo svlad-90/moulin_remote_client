@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
 import shlex
+import signal
+import subprocess
+import sys
 import unittest
 
 import moulin_remote_client as client
@@ -53,7 +57,9 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
             service.prepare_project_command(config),
             commands.build_remote_prepare_project_command_for_config(config),
         )
+        self.assertIn("-tt", service.prepare_project_command(config))
         clean_project = shlex.join(service.clean_project_folder_command(config))
+        self.assertIn("-tt", service.clean_project_folder_command(config))
         self.assertIn("Clean project folder", clean_project)
         self.assertIn("rm -rf", clean_project)
         self.assertIn("refusing to remove unsafe project directory", clean_project)
@@ -61,17 +67,20 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
             service.checkout_git_ref_command(config),
             commands.build_remote_checkout_git_ref_command_for_config(config),
         )
+        self.assertIn("-tt", service.checkout_git_ref_command(config))
         self.assertIn(
             "git stash push",
             shlex.join(service.stash_and_checkout_git_ref_command(config)),
         )
         stash_checkout = shlex.join(service.stash_and_checkout_git_ref_command(config))
+        self.assertIn("-tt", service.stash_and_checkout_git_ref_command(config))
         self.assertIn("git add -A", stash_checkout)
         self.assertIn("git diff --cached --quiet", stash_checkout)
         clear_lock = shlex.join(service.clear_git_index_lock_command(config))
         self.assertIn(".git/index.lock", clear_lock)
         self.assertIn("rm -f", clear_lock)
         repair_checkout = shlex.join(service.repair_and_checkout_git_ref_command(config))
+        self.assertIn("-tt", service.repair_and_checkout_git_ref_command(config))
         self.assertIn(".git/index.lock", repair_checkout)
         self.assertIn("rm -f", repair_checkout)
         self.assertIn("git add -A", repair_checkout)
@@ -167,9 +176,8 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
         repo_sync = shlex.join(repo_sync_command)
         self.assertIn("repo sync --fail-fast", repo_sync)
         self.assertNotIn("--force-sync", repo_sync)
-        self.assertNotIn("-tt", repo_sync_command)
-        self.assertIn(" -i --rm ", repo_sync)
-        self.assertNotIn(" -it --rm ", repo_sync)
+        self.assertIn("-tt", repo_sync_command)
+        self.assertIn(" -it --rm ", repo_sync)
         self.assertIn("ninja -t targets rule repo_init", repo_sync)
         self.assertIn("ninja -t targets rule repo_sync", repo_sync)
         self.assertIn("ninja $init_targets", repo_sync)
@@ -251,12 +259,18 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
             docker_image="prod_img",
             targets="boot_artifacts full_ufs.img.gz",
         )
+        self.assertIn("-tt", yocto_impact)
+        self.assertIn("-it --rm prod_img", yocto_impact[-1])
         self.assertIn("-e PYTHONUNBUFFERED=1", yocto_impact[-1])
         self.assertIn("python3 -u - <<", yocto_impact[-1])
         self.assertIn("Impacted Yocto recipes", yocto_impact[-1])
         self.assertIn('ACTION = "analyze"', yocto_impact[-1])
         self.assertIn("[progress] step", yocto_impact[-1])
         self.assertIn("[progress] still running", yocto_impact[-1])
+        self.assertIn("signal.signal(signal.SIGINT, handle_interrupt)", yocto_impact[-1])
+        self.assertIn("signal.signal(signal.SIGINT, previous_handler)", yocto_impact[-1])
+        self.assertIn("os.killpg(os.getpgrp(), signal.SIGINT)", yocto_impact[-1])
+        self.assertIn("waiting for {label} to finish", yocto_impact[-1])
         self.assertIn("available_by_build_dir", yocto_impact[-1])
         self.assertIn("scan available recipes in", yocto_impact[-1])
         self.assertIn("elapsed:", yocto_impact[-1])
@@ -324,6 +338,86 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("Configured Yocto image recipes", yocto_clean_rebuild)
         self.assertIn("cleansstate images", yocto_clean_rebuild)
         self.assertIn("rebuild images", yocto_clean_rebuild)
+
+    def test_yocto_wrapper_waits_for_child_cleanup_after_interrupt(self) -> None:
+        config = sample_config()
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        command = self._service().yocto_impact_command(
+            config,
+            docker_image="prod_img",
+            targets="boot_artifacts",
+        )
+        remote_script = shlex.split(command[-1])[-1]
+        generated = remote_script.split("python3 -u - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        runtime = generated.split("\ndef bitbake_setup(", 1)[0]
+        child = (
+            "import signal, sys, time; "
+            "signal.signal(signal.SIGINT, lambda *_: ("
+            "print('child-cleanup-start', flush=True), "
+            "time.sleep(0.2), "
+            "print('child-cleanup-done', flush=True), "
+            "sys.exit(9))); "
+            "print('child-running', flush=True); "
+            "time.sleep(30)"
+        )
+        child_command = f"{shlex.quote(sys.executable)} -c {shlex.quote(child)}"
+        harness = runtime + f"\nraise SystemExit(run_shell({child_command!r}, label='test', step=1, total=1))\n"
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-c", harness],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+
+        output = ""
+        while "child-running" not in output:
+            line = process.stdout.readline()
+            self.assertNotEqual(line, "", output)
+            output += line
+        os.killpg(process.pid, signal.SIGINT)
+        remaining, _ = process.communicate(timeout=5)
+        output += remaining
+
+        self.assertEqual(process.returncode, 9)
+        self.assertIn("Interrupt received; waiting for test to finish.", output)
+        self.assertIn("child-cleanup-done", output)
+
+    def test_yocto_wrapper_forwards_interrupt_received_during_child_spawn(self) -> None:
+        config = sample_config()
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        command = self._service().yocto_impact_command(
+            config,
+            docker_image="prod_img",
+            targets="boot_artifacts",
+        )
+        remote_script = shlex.split(command[-1])[-1]
+        generated = remote_script.split("python3 -u - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        runtime = generated.split("\ndef bitbake_setup(", 1)[0]
+        harness = runtime + """
+real_popen = subprocess.Popen
+def interrupt_before_spawn(*args, **kwargs):
+    os.kill(os.getpid(), signal.SIGINT)
+    subprocess.Popen = real_popen
+    return real_popen(*args, **kwargs)
+subprocess.Popen = interrupt_before_spawn
+raise SystemExit(run_shell("sleep 30", label="spawn", step=1, total=1))
+"""
+
+        process = subprocess.run(
+            [sys.executable, "-u", "-c", harness],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=5,
+            start_new_session=True,
+            check=False,
+        )
+
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("Interrupt received; waiting for spawn to finish.", process.stdout)
 
     def test_workflow_owns_cli_remote_command_routing(self) -> None:
         config = sample_config()

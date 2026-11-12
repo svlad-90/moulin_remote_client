@@ -244,9 +244,28 @@ class CommandLifecycleServiceTests(unittest.TestCase):
         terminations: list[tuple[int, int]] = []
 
         _service(now=4.0, terminations=terminations).poll_job(port, job)
+        _service(now=5.0, terminations=terminations).poll_job(port, job)
 
         self.assertEqual(terminations, [(88, signal.SIGKILL)])
+        self.assertEqual(job["stop_phase"], "kill")
         self.assertIn("stop timeout: SIGKILL", jobs.job_output_lines(job))
+
+    def test_poll_job_waits_indefinitely_for_interactive_stop(self) -> None:
+        port = FakePort()
+        job = jobs.create_command_job(title="Build", item_label="Build", slot="build", commands=[])
+        job["process"] = FakeProcess(None, pid=88)
+        job["stopping"] = True
+        job["stop_phase"] = "interrupt"
+        job["stop_requested_at"] = 1.0
+        job["current_stop_mode"] = "pty-interrupt"
+        terminations: list[tuple[int, int]] = []
+
+        _service(now=601.0, terminations=terminations).poll_job(port, job)
+
+        self.assertEqual(terminations, [])
+        self.assertEqual(job["stop_phase"], "interrupt")
+        self.assertEqual(job["stop_requested_at"], 1.0)
+        self.assertEqual(jobs.job_output_lines(job), [])
 
 
 if __name__ == "__main__":

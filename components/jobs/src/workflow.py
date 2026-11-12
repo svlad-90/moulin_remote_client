@@ -20,7 +20,12 @@ class CommandWorkflowService:
         self.runner = runner
         self.lifecycle = lifecycle
 
-    def run_commands(self, port: Any, title: str, commands: list[list[str]]) -> int:
+    def run_commands(
+        self,
+        port: Any,
+        title: str,
+        commands: list[list[str]],
+    ) -> int:
         return self.runner.start_commands(
             port,
             title,

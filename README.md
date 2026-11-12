@@ -333,6 +333,15 @@ Command logs show compact step labels by default. Set
 `MOULIN_TUI_SHOW_COMMANDS=1` before starting the tool to include full command
 and generated script text in the log.
 
+Stopping an interactive remote build first sends `Ctrl-C` through its SSH PTY
+and keeps the job active while the remote build exits and prints its cleanup
+output, without imposing a timeout. Invoking Stop again explicitly escalates to
+`SIGTERM`; if the process still has not exited after 5 seconds, the client uses
+`SIGKILL`. Non-interactive commands retain the shorter process-termination
+path. Forced termination targets the local SSH session; Ctrl-C is the reliable
+in-band request to the remote build, while a remote process that survives an
+SSH disconnect must be cleaned up on the build host.
+
 Incremental build and clean commands are described in the
 [Build Workflow](#build-workflow) section.
 

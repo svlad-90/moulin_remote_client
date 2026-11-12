@@ -191,6 +191,16 @@ class MainPanelsControllerTests(unittest.TestCase):
         failed_row = next(row for row in port.rows if row[2] == "Run product build [FAILED]")
         self.assertEqual(port.warn_attr(), failed_row[3])
 
+    def test_draw_logs_panel_marks_stopped_command(self) -> None:
+        port = FakePanelPort()
+        port.last_job = _job(output=["ninja: build stopped: interrupted by user."], rc=2)
+        port.last_job["stopping"] = True
+
+        panels.main_panels_controller().draw_logs_panel(port, 0, 0, 10, 80, port.items[0])
+
+        rendered = [row[2] for row in port.rows]
+        self.assertIn("Run product build [STOPPED]", rendered)
+
     def test_draw_logs_panel_wraps_long_output_lines(self) -> None:
         port = FakePanelPort()
         port.last_job = _job(output=["$ rm -rf -- alpha beta gamma delta epsilon"])

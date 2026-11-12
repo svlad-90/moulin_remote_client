@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import signal
 import unittest
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ class FakeProcess:
     def __init__(self, rc: int | None, *, pid: int = 1234) -> None:
         self.rc = rc
         self.pid = pid
+        self.stdin: io.BytesIO | None = None
 
     def poll(self) -> int | None:
         return self.rc
@@ -75,6 +77,66 @@ class CommandControlServiceTests(unittest.TestCase):
         self.assertEqual(port.status, "Stop requested")
         self.assertTrue(port.logs_dirty)
         self.assertIn("stop requested: SIGTERM", jobs.job_output_lines(port.active_job))
+
+    def test_stop_running_build_sends_ctrl_c_and_waits_for_exit(self) -> None:
+        port = FakeControlPort()
+        port.active_job = jobs.create_command_job(
+            title="Build",
+            item_label="Build",
+            slot="build",
+            commands=[],
+        )
+        process = FakeProcess(None, pid=4321)
+        process.stdin = io.BytesIO()
+        port.active_job["process"] = process
+        port.active_job["current_stop_mode"] = "pty-interrupt"
+        terminations: list[tuple[int, int]] = []
+        service = command_control.CommandControlService(
+            now=lambda: 12.0,
+            terminate_process_group=lambda pid, sig: terminations.append((pid, sig)),
+        )
+
+        service.stop_running_command(port, "build")
+
+        self.assertEqual(process.stdin.getvalue(), b"\x03")
+        self.assertEqual(terminations, [])
+        self.assertEqual(port.status, "Waiting for command to stop")
+        self.assertIn("graceful stop requested: Ctrl-C", jobs.job_output_lines(port.active_job))
+
+        service.stop_running_command(port, "build")
+
+        self.assertEqual(terminations, [(4321, signal.SIGTERM)])
+        self.assertEqual(port.status, "Forced SSH stop requested")
+        self.assertIn("forced SSH stop requested: SIGTERM", jobs.job_output_lines(port.active_job))
+
+    def test_stop_running_build_falls_back_when_ctrl_c_pipe_is_closed(self) -> None:
+        port = FakeControlPort()
+        port.active_job = jobs.create_command_job(
+            title="Build",
+            item_label="Build",
+            slot="build",
+            commands=[],
+        )
+        process = FakeProcess(None, pid=4321)
+        process.stdin = io.BytesIO()
+        process.stdin.close()
+        port.active_job["process"] = process
+        port.active_job["current_stop_mode"] = "pty-interrupt"
+        terminations: list[tuple[int, int]] = []
+        service = command_control.CommandControlService(
+            now=lambda: 12.0,
+            terminate_process_group=lambda pid, sig: terminations.append((pid, sig)),
+        )
+
+        service.stop_running_command(port, "build")
+
+        self.assertEqual(terminations, [(4321, signal.SIGTERM)])
+        self.assertEqual(port.active_job["stop_phase"], "terminate")
+        self.assertEqual(port.status, "Stop requested")
+        self.assertIn(
+            "Ctrl-C unavailable: stopping SSH with SIGTERM",
+            jobs.job_output_lines(port.active_job),
+        )
 
     def test_stop_running_command_finishes_job_without_live_process(self) -> None:
         port = FakeControlPort()

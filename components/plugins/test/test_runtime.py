@@ -380,17 +380,24 @@ class PluginRuntimeTests(unittest.TestCase):
 
         prepare = commands.prepare_product_command("build-a", "gen5")
         checkout = commands.checkout_product_command("build-a", "gen5")
+        graph = commands.ensure_product_graph_command("build-a", "gen5")
         build = commands.product_build_command("build-a", "gen5", ["doma"])
+        inner = commands.product_inner_command("build-a", "gen5", "atest VtsHalGnssTargetTest")
 
         self.assertIn("git clone git@example:gen5.git product", prepare[-1])
         self.assertIsNotNone(checkout)
         self.assertIn("selected_ref=main", checkout[-1])
         self.assertIn('git checkout "$selected_ref"', checkout[-1])
         self.assertIn('git merge --ff-only "origin/$selected_ref"', checkout[-1])
+        self.assertIn("-tt", graph)
+        self.assertIn("-it --rm gen5-builder", graph[-1])
         self.assertIn("/work/product", build[-1])
         self.assertIn("docker run", build[-1])
         self.assertIn("gen5-builder", build[-1])
         self.assertIn("ninja doma", build[-1])
+        self.assertIn("-tt", build)
+        self.assertIn("-tt", inner)
+        self.assertIn("-it --rm gen5-builder", inner[-1])
 
     def test_board_capabilities_come_from_board_type(self) -> None:
         commands = PluginCommands(FakeApp())

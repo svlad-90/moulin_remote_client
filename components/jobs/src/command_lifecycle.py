@@ -109,10 +109,11 @@ class CommandLifecycleService:
             self.start_next_command(port, job)
             return
         process_pid = job_api.process_pid(process)
-        if plan["action"] == "stop_timeout" and process_pid is not None:
+        if plan["action"] in {"stop_terminate", "stop_kill"} and process_pid is not None:
             job_api.append_job_output(job, str(plan["log"]))
             port.logs_dirty = True
-            self.terminate_process_group(process_pid, signal.SIGKILL)
+            sig = signal.SIGTERM if plan["action"] == "stop_terminate" else signal.SIGKILL
+            self.terminate_process_group(process_pid, sig)
             return
         if plan["action"] == "connect_timeout" and process_pid is not None:
             self._handle_connect_timeout(port, job, process, process_pid, plan)

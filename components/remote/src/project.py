@@ -39,7 +39,7 @@ class RemoteProjectMaintenanceService:
                 f"cd {shlex.quote(project_dir)} && git remote -v; "
                 "else printf 'project Git URL is required to prepare a missing project checkout\\n' >&2; exit 2; fi"
             )
-        return transport.ssh_command(remote, script)
+        return transport.ssh_command(remote, script, tty="-tt")
 
     def prepare_project_command_for_config(self, config: dict[str, Any]) -> list[str]:
         return self.prepare_project_command(
@@ -71,7 +71,7 @@ class RemoteProjectMaintenanceService:
             "rm -rf -- \"$name\"; "
             "printf 'removed project directory: %s\\n' \"$project_dir\""
         )
-        return transport.ssh_command(remote, script)
+        return transport.ssh_command(remote, script, tty="-tt")
 
     def clean_project_folder_command_for_config(self, config: dict[str, Any]) -> list[str]:
         return self.clean_project_folder_command(
@@ -99,7 +99,7 @@ class RemoteProjectMaintenanceService:
             "else git checkout \"$selected_ref\" || exit $?; fi; "
             "git status --short --branch"
         )
-        return transport.ssh_command(remote, script)
+        return transport.ssh_command(remote, script, tty="-tt")
 
     def stash_and_checkout_git_ref_command(self, remote: str, project_dir: str, git_ref: str) -> list[str]:
         if not git_ref:
@@ -124,7 +124,7 @@ class RemoteProjectMaintenanceService:
             "else git checkout \"$selected_ref\" || exit $?; fi; "
             "git status --short --branch"
         )
-        return transport.ssh_command(remote, script)
+        return transport.ssh_command(remote, script, tty="-tt")
 
     def repair_and_checkout_git_ref_command(self, remote: str, project_dir: str, git_ref: str) -> list[str]:
         if not git_ref:
@@ -171,7 +171,7 @@ class RemoteProjectMaintenanceService:
             "else git checkout \"$selected_ref\" || exit $?; fi; "
             "git status --short --branch"
         )
-        return transport.ssh_command(remote, script)
+        return transport.ssh_command(remote, script, tty="-tt")
 
     def clear_git_index_lock_command(self, remote: str, project_dir: str) -> list[str]:
         quoted_dir = shlex.quote(project_dir)
