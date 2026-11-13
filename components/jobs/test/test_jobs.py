@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import unittest
+import json
 import os
 import subprocess
 import sys
+import tempfile
+import unittest
 from collections import deque
 from typing import Any
 from unittest.mock import Mock, patch
@@ -415,7 +417,7 @@ class JobsBehaviorTests(unittest.TestCase):
             ["progress group", "all items complete"],
         )
 
-    def test_interactive_build_log_preserves_repainted_terminal_lines(self) -> None:
+    def test_interactive_build_log_replaces_repainted_terminal_lines(self) -> None:
         job = jobs.create_command_job(
             title="Build",
             item_label="Run product build",
@@ -442,13 +444,11 @@ class JobsBehaviorTests(unittest.TestCase):
             [
                 "compile task",
                 "progress group",
-                "2 active items",
-                "progress group",
                 "all items complete",
             ],
         )
 
-    def test_interactive_build_log_bounds_completed_line_history(self) -> None:
+    def test_interactive_build_log_bounds_terminal_screen(self) -> None:
         job = jobs.create_command_job(
             title="Build",
             item_label="Run product build",
@@ -465,9 +465,57 @@ class JobsBehaviorTests(unittest.TestCase):
             jobs.append_job_output(job, str(index))
 
         lines = jobs.job_output_lines(job)
-        self.assertEqual(len(lines), 10000)
-        self.assertEqual(lines[0], "5")
+        self.assertEqual(len(lines), 1000)
+        self.assertEqual(lines[0], "9005")
         self.assertEqual(lines[-1], "10004")
+
+    def test_interactive_build_log_replaces_repo_status_before_soong(self) -> None:
+        job = jobs.create_command_job(
+            title="Build",
+            item_label="Run product build",
+            slot="build",
+            commands=[],
+        )
+        with (
+            patch("components.jobs.src.jobs.subprocess.Popen", return_value=Mock()),
+            patch("components.jobs.src.jobs.threading.Thread"),
+        ):
+            jobs.start_command_process(job, ["ssh", "-tt", "host", "ninja"])
+
+        jobs.append_job_output_stream(job, "[1/6] Repo sync\n\rSyncing:  0% (0/65) 0:00 | None\x1b[K")
+        self.assertEqual(
+            jobs.job_output_lines(job)[-1],
+            "Syncing:  0% (0/65) 0:00 | None",
+        )
+
+        jobs.append_job_output_stream(
+            job,
+            "\rSyncing: 100% (65/65), done\x1b[K\n"
+            "[4/6] Invoke Android build system\n"
+            "\r[  0% 1/293] write build marker\x1b[K",
+        )
+
+        expected_tail = [
+            "[1/6] Repo sync",
+            "Syncing: 100% (65/65), done",
+            "[4/6] Invoke Android build system",
+            "[  0% 1/293] write build marker",
+        ]
+        self.assertEqual(expected_tail, jobs.job_output_lines(job)[-4:])
+        self.assertEqual("\n".join(expected_tail), jobs.clipboard_log_text(job))
+
+    def test_repo_padding_does_not_block_following_status_frames(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "\rSyncing:  0% (0/1095) 0:00 | None\x1b[..")
+        jobs.append_job_output_stream(job, "\rSyncing:  1% (11/1095) 0:00 | ..working..\x1b[..")
+        jobs.append_job_output_stream(job, "\rSyncing:  2% (30/1095) 0:01 | 4 jobs\x1b[..")
+
+        self.assertEqual(
+            jobs.job_output_lines(job)[-1],
+            "Syncing:  2% (30/1095) 0:01 | 4 jobs",
+        )
+        self.assertEqual(job["terminal_escape"], "\x1b[..")
 
     def test_append_job_output_stream_honors_erase_display_modes(self) -> None:
         job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
@@ -560,6 +608,22 @@ class JobsBehaviorTests(unittest.TestCase):
         self.assertEqual(jobs.job_output_lines(job), ["abc", "next"])
         self.assertGreaterEqual(dirty_count, 1)
         self.assertEqual(finished_count, 1)
+
+    def test_pty_trace_records_bounded_json_events_when_enabled(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            trace_path = os.path.join(temporary_directory, "pty-trace.jsonl")
+            with patch.dict(os.environ, {"MOULIN_PTY_TRACE": trace_path}):
+                jobs.trace_job_event(job, "pty-chunk", bytes=42, tail="Syncing: 1%")
+
+            with open(trace_path, encoding="utf-8") as trace_file:
+                event = json.loads(trace_file.read())
+
+        self.assertEqual(event["event"], "pty-chunk")
+        self.assertEqual(event["bytes"], 42)
+        self.assertEqual(event["tail"], "Syncing: 1%")
+        self.assertEqual(event["item_label"], "Run product build")
 
     def test_start_command_process_attaches_process_and_reader(self) -> None:
         job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
