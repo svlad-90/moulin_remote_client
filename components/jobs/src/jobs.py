@@ -18,7 +18,7 @@ JOB_STATE_WAKE_KEY = 0
 STOP_MODE_PTY_INTERRUPT = "pty-interrupt"
 STOP_TERM_TIMEOUT = 5.0
 STOP_DEFAULT_TIMEOUT = 2.0
-REPO_PROGRESS_FRAME_SUFFIX = "\x1b[.."
+TERMINAL_ESCAPE_MAX_LENGTH = 64
 PTY_TRACE_ENV = "MOULIN_PTY_TRACE"
 PTY_TRACE_DEFAULT_PATH = "/tmp/moulin-pty-trace.jsonl"
 PTY_TRACE_MAX_BYTES = 2 * 1024 * 1024
@@ -937,12 +937,13 @@ def append_job_output_stream_locked(job: dict[str, Any], text: str) -> None:
                 while sequence_end < len(text) and " " <= text[sequence_end] <= "/":
                     sequence_end += 1
                 if sequence_end == len(text):
-                    job["terminal_escape"] = text[index:]
+                    pending_escape = text[index:]
+                    if len(pending_escape) <= TERMINAL_ESCAPE_MAX_LENGTH:
+                        job["terminal_escape"] = pending_escape
                     break
-                if (
-                    text[index:sequence_end] == REPO_PROGRESS_FRAME_SUFFIX
-                    and text[sequence_end] == "\r"
-                ):
+                if text[sequence_end] == "\r":
+                    # A control byte cannot finish CSI. Recover at the next
+                    # progress frame instead of buffering subsequent output.
                     line = ""
                     cursor = 0
                     render_line()
