@@ -414,6 +414,25 @@ class MainDrawController:
         should_draw_logs = port.main_full_redraw or port.render_cache.get("logs") != logs_sig
         if active_job_exists and port.logs_dirty and now - port.last_log_render_at < 0.15 and port.render_cache.get("logs") is not None:
             should_draw_logs = False
+        if job is not None and job.get("current_stop_mode") == job_api.STOP_MODE_PTY_INTERRUPT:
+            revision = int(job.get("output_revision", 0))
+            last_trace_at = float(job.get("pty_trace_last_draw_at", 0.0))
+            if (
+                job.get("pty_trace_last_draw_revision") != revision
+                or now - last_trace_at >= 1.0
+            ):
+                job_api.trace_job_event(
+                    job,
+                    "pty-draw",
+                    revision=revision,
+                    screen_lines=len(job_api.job_output_lines(job)),
+                    logs_dirty=bool(port.logs_dirty),
+                    should_draw=should_draw_logs,
+                    follow=bool(port.log_follow),
+                    process_running=job_api.process_running(job.get("process")),
+                )
+                job["pty_trace_last_draw_revision"] = revision
+                job["pty_trace_last_draw_at"] = now
         if should_draw_logs:
             started = time.monotonic()
             ui_panels_api.main_panels_controller().draw_logs_panel(port, logs_top, right_left, logs_height, right_width, item)

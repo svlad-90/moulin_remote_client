@@ -86,6 +86,11 @@ class CommandLifecycleService:
         port.logs_dirty = True
 
         def wake() -> None:
+            job_api.trace_job_event(
+                job,
+                "pty-wake",
+                revision=int(job.get("output_revision", 0)),
+            )
             port.notify_job_state_changed()
 
         job["process_finished"] = wake

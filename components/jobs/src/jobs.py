@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import os
-import subprocess
-import threading
 import re
+import subprocess
 import textwrap
+import threading
+import time
 from collections import deque
+from pathlib import Path
 from typing import Any, Callable
 
 
@@ -15,6 +18,39 @@ JOB_STATE_WAKE_KEY = 0
 STOP_MODE_PTY_INTERRUPT = "pty-interrupt"
 STOP_TERM_TIMEOUT = 5.0
 STOP_DEFAULT_TIMEOUT = 2.0
+REPO_PROGRESS_FRAME_SUFFIX = "\x1b[.."
+PTY_TRACE_ENV = "MOULIN_PTY_TRACE"
+PTY_TRACE_DEFAULT_PATH = "/tmp/moulin-pty-trace.jsonl"
+PTY_TRACE_MAX_BYTES = 2 * 1024 * 1024
+_PTY_TRACE_LOCK = threading.Lock()
+
+
+def trace_job_event(job: dict[str, Any], event: str, **fields: Any) -> None:
+    """Append one bounded, best-effort PTY diagnostic event when enabled."""
+    configured_path = os.environ.get(PTY_TRACE_ENV, "").strip()
+    if not configured_path:
+        return
+    path = Path(
+        PTY_TRACE_DEFAULT_PATH
+        if configured_path.lower() in {"1", "true", "yes"}
+        else configured_path
+    )
+    record = {
+        "time_ns": time.time_ns(),
+        "event": event,
+        "title": str(job.get("title", "")),
+        "item_label": str(job.get("item_label", "")),
+        **fields,
+    }
+    try:
+        encoded = json.dumps(record, ensure_ascii=True, sort_keys=True) + "\n"
+        with _PTY_TRACE_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            mode = "w" if path.exists() and path.stat().st_size + len(encoded) > PTY_TRACE_MAX_BYTES else "a"
+            with path.open(mode, encoding="utf-8") as trace_file:
+                trace_file.write(encoded)
+    except OSError:
+        pass
 
 
 def create_command_job(
@@ -164,13 +200,7 @@ def compact_log_lines(source: list[str]) -> list[str]:
 
 
 def _job_output_source_locked(job: dict[str, Any]) -> list[str]:
-    if "terminal_history" not in job:
-        return list(job.get("output", []))
-    source = list(job.get("terminal_history", []))
-    output = job.get("output", [])
-    if job.get("partial_live") and output:
-        source.append(str(output[-1]))
-    return source
+    return list(job.get("output", []))
 
 
 def job_output_lines(job: dict[str, Any] | None) -> list[str]:
@@ -789,9 +819,6 @@ def sanitize_log_line(line: str) -> str:
 
 def append_log_line_locked(job: dict[str, Any], output: Any, line: str) -> bool:
     output.append(line)
-    history = job.get("terminal_history")
-    if history is not None:
-        history.append(line)
     job["last_log_line_blank"] = line == ""
     return True
 
@@ -814,10 +841,6 @@ def append_job_output(job: dict[str, Any], line: str) -> None:
     lock = job.get("output_lock")
     if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
         with lock:
-            if "terminal_history" in job and job.get("partial_live"):
-                output = job.setdefault("output", deque(maxlen=1000))
-                if output:
-                    job.setdefault("terminal_history", deque(maxlen=10000)).append(str(output[-1]))
             finish_stream_line_locked(job)
             output = job.setdefault("output", deque(maxlen=1000))
             for clean_line in lines:
@@ -825,10 +848,6 @@ def append_job_output(job: dict[str, Any], line: str) -> None:
             trim_output(output)
             job["output_revision"] = int(job.get("output_revision", 0)) + 1
     else:
-        if "terminal_history" in job and job.get("partial_live"):
-            output = job.setdefault("output", deque(maxlen=1000))
-            if output:
-                job.setdefault("terminal_history", deque(maxlen=10000)).append(str(output[-1]))
         finish_stream_line_locked(job)
         output = job.setdefault("output", deque(maxlen=1000))
         for clean_line in lines:
@@ -912,8 +931,23 @@ def append_job_output_stream_locked(job: dict[str, Any], text: str) -> None:
         if char == "\x1b" and text[index + 1] == "[":
             match = re.match(r"\x1b\[([0-?]*)([ -/]*)([@-~])", text[index:])
             if match is None:
-                job["terminal_escape"] = text[index:]
-                break
+                sequence_end = index + 2
+                while sequence_end < len(text) and "0" <= text[sequence_end] <= "?":
+                    sequence_end += 1
+                while sequence_end < len(text) and " " <= text[sequence_end] <= "/":
+                    sequence_end += 1
+                if sequence_end == len(text):
+                    job["terminal_escape"] = text[index:]
+                    break
+                if (
+                    text[index:sequence_end] == REPO_PROGRESS_FRAME_SUFFIX
+                    and text[sequence_end] == "\r"
+                ):
+                    line = ""
+                    cursor = 0
+                    render_line()
+                index = sequence_end
+                continue
             params, _intermediate, final = match.groups()
             if final == "A":
                 first_param = params.split(";", 1)[0]
@@ -1001,7 +1035,22 @@ def read_process_output_stream(
             chunk = os.read(stdout.fileno(), 4096)
             if not chunk:
                 break
-            append_job_output_stream(job, chunk.decode(errors="replace"))
+            decoded = chunk.decode(errors="replace")
+            revision_before = int(job.get("output_revision", 0))
+            append_job_output_stream(job, decoded)
+            if job.get("current_stop_mode") == STOP_MODE_PTY_INTERRUPT:
+                trace_job_event(
+                    job,
+                    "pty-chunk",
+                    bytes=len(chunk),
+                    carriage_returns=decoded.count("\r"),
+                    newlines=decoded.count("\n"),
+                    escapes=decoded.count("\x1b"),
+                    revision_before=revision_before,
+                    revision_after=int(job.get("output_revision", 0)),
+                    screen_lines=len(job.get("output", [])),
+                    tail=decoded[-160:],
+                )
             if mark_dirty is not None:
                 mark_dirty()
     finally:
@@ -1012,6 +1061,14 @@ def read_process_output_stream(
         wait = getattr(process, "wait", None)
         if callable(wait):
             wait()
+        if job.get("current_stop_mode") == STOP_MODE_PTY_INTERRUPT:
+            trace_job_event(
+                job,
+                "pty-eof",
+                returncode=getattr(process, "returncode", None),
+                revision=int(job.get("output_revision", 0)),
+                screen_lines=len(job.get("output", [])),
+            )
         process_finished = job.get("process_finished")
         if callable(process_finished):
             process_finished()
@@ -1030,13 +1087,6 @@ def start_command_process(
             for argument in command[1:]
         )
     )
-    if pty_interrupt and "terminal_history" not in job:
-        lock = job.get("output_lock")
-        if hasattr(lock, "__enter__") and hasattr(lock, "__exit__"):
-            with lock:
-                job["terminal_history"] = deque(job.get("output", []), maxlen=10000)
-        else:
-            job["terminal_history"] = deque(job.get("output", []), maxlen=10000)
     job["current_stop_mode"] = STOP_MODE_PTY_INTERRUPT if pty_interrupt else None
     process = subprocess.Popen(
         command,
@@ -1046,6 +1096,8 @@ def start_command_process(
         start_new_session=True,
     )
     job["process"] = process
+    if pty_interrupt:
+        trace_job_event(job, "pty-start", pid=getattr(process, "pid", None))
     reader = threading.Thread(target=read_process_output_stream, args=(process, job, mark_dirty), daemon=True)
     job["output_reader"] = reader
     reader.start()

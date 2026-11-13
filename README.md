@@ -470,6 +470,16 @@ MOULIN_REMOTE_AUTO_CONNECT=no
 `MOULIN_REMOTE_AUTO_CONNECT=no` keeps the TUI responsive at startup when the
 network, VPN, or board/build hosts are unavailable.
 
+Set `MOULIN_PTY_TRACE` to diagnose a live remote command whose terminal output
+appears frozen. The client writes bounded JSON Lines events for incoming PTY
+chunks and log-panel redraws without adding diagnostic text to the TUI:
+
+```sh
+MOULIN_PTY_TRACE=/tmp/moulin-pty-trace.jsonl python3 moulin_remote_client.py
+```
+
+The trace is capped at 2 MiB and is disabled when the variable is unset.
+
 ## Source Mapping Workflow
 
 Mappings are stored in the active project profile, not globally. This lets
