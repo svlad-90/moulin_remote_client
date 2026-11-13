@@ -517,6 +517,29 @@ class JobsBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(job["terminal_escape"], "\x1b[..")
 
+    def test_malformed_fragmented_csi_does_not_block_next_frame(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "long progress status\x1b[12;")
+        jobs.append_job_output_stream(job, "\rnext status\x1b[K")
+
+        self.assertEqual(jobs.job_output_lines(job), ["next status"])
+
+    def test_incomplete_csi_buffer_is_bounded(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "status\x1b[" + ("1" * 65))
+
+        self.assertNotIn("terminal_escape", job)
+
+    def test_fragmented_crlf_completes_the_current_line(self) -> None:
+        job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
+
+        jobs.append_job_output_stream(job, "completed line\r")
+        jobs.append_job_output_stream(job, "\nnext line")
+
+        self.assertEqual(jobs.job_output_lines(job), ["completed line", "next line"])
+
     def test_append_job_output_stream_honors_erase_display_modes(self) -> None:
         job = jobs.create_command_job(title="Build", item_label="Run product build", slot="build", commands=[])
 
