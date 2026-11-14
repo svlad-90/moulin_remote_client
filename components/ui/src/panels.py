@@ -491,8 +491,7 @@ class MainPanelsController:
         port.add(row, x, f"{job.get('title', 'Command')} [{state}]"[:inner], state_attr)
         row += 2
         visible = max(1, top + height - 2 - row)
-        output = job_api.wrapped_job_output_lines(job, inner)
-        source_indices = job_api.wrapped_job_output_source_indices(job, inner)
+        output, source_indices = job_api.wrapped_job_output_snapshot(job, inner)
         if not output:
             port.add(row, x, "Waiting for output..."[:inner], port.disabled_attr())
             return

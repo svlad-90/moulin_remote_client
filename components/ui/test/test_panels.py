@@ -5,6 +5,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from components.ui.api import panels
 
@@ -211,6 +212,32 @@ class MainPanelsControllerTests(unittest.TestCase):
         self.assertIn("$ rm -rf -- alpha beta", rendered)
         self.assertIn("  gamma delta epsilon", rendered)
         self.assertTrue(any("lines 1-2/2 follow" in text for text in rendered))
+
+    def test_draw_logs_panel_uses_one_aligned_output_snapshot(self) -> None:
+        port = FakePanelPort()
+        port.last_job = _job(output=["current"])
+
+        with (
+            mock.patch(
+                "components.ui.src.panels.job_api.wrapped_job_output_snapshot",
+                return_value=(["first", "second"], [0, 1]),
+            ),
+            mock.patch(
+                "components.ui.src.panels.job_api.wrapped_job_output_lines",
+                return_value=["first", "second"],
+            ),
+            mock.patch(
+                "components.ui.src.panels.job_api.wrapped_job_output_source_indices",
+                return_value=[0],
+            ),
+        ):
+            panels.main_panels_controller().draw_logs_panel(
+                port, 0, 0, 10, 80, port.items[0]
+            )
+
+        rendered = [row[2] for row in port.rows]
+        self.assertIn("first", rendered)
+        self.assertIn("second", rendered)
 
     def test_draw_logs_panel_highlights_selected_source_lines(self) -> None:
         port = FakePanelPort()
