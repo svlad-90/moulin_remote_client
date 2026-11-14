@@ -286,6 +286,13 @@ def wrapped_job_output_lines(job: dict[str, Any] | None, width: int) -> list[str
     return _wrapped_job_output(job, width)[0]
 
 
+def wrapped_job_output_snapshot(
+    job: dict[str, Any] | None,
+    width: int,
+) -> tuple[list[str], list[int]]:
+    return _wrapped_job_output(job, width)
+
+
 def wrapped_job_output_source_indices(
     job: dict[str, Any] | None,
     width: int,

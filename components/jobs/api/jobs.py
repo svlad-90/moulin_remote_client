@@ -59,6 +59,7 @@ from components.jobs.src.jobs import (
     stop_running_preview,
     trace_job_event,
     wrapped_job_output_lines,
+    wrapped_job_output_snapshot,
     wrapped_job_output_source_indices,
 )
 
@@ -119,5 +120,6 @@ __all__ = [
     "stop_running_preview",
     "trace_job_event",
     "wrapped_job_output_lines",
+    "wrapped_job_output_snapshot",
     "wrapped_job_output_source_indices",
 ]

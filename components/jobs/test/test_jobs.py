@@ -746,6 +746,20 @@ class JobsBehaviorTests(unittest.TestCase):
         self.assertEqual(jobs.clamp_log_scroll(job, 2, follow=True, scroll=0, width=16), (1, True))
         self.assertEqual(jobs.wrapped_job_output_source_indices(job, 16), [0, 0, 0])
 
+    def test_wrapped_output_snapshot_keeps_lines_and_sources_aligned(self) -> None:
+        job = jobs.create_command_job(
+            title="Build",
+            item_label="Run product build",
+            slot="build",
+            commands=[],
+            initial_output=["a line that wraps", "short"],
+        )
+
+        lines, source_indices = jobs.wrapped_job_output_snapshot(job, 8)
+
+        self.assertEqual(len(lines), len(source_indices))
+        self.assertEqual(source_indices, [0, 0, 0, 1])
+
     def test_wrapped_output_is_cached_until_output_changes(self) -> None:
         job = jobs.create_command_job(
             title="Build",
