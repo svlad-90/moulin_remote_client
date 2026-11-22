@@ -145,6 +145,29 @@ class ProjectGitRefSelectorServiceTests(unittest.TestCase):
         self.assertEqual(port.status, "Branch list failed: ssh failed")
         self.assertEqual(updates, [("git_ref", "manual/ref")])
 
+    def test_edit_project_git_ref_reads_locally_after_remote_fetch_failure(self) -> None:
+        port = FakeGitRefPort([ord("k"), 10])
+        project = {"name": "prod", "git_ref": "mirror", "git_url": "git@example:prod"}
+        updates: list[tuple[str, str]] = []
+        selector = project_git_ref.ProjectGitRefSelector(
+            config(),
+            fetch_branches=lambda _git_url: (_ for _ in ()).throw(RuntimeError("ssh failed")),
+            fetch_local_branches=lambda _git_url: ["develop", "mirror"],
+        )
+
+        selector.edit_project_git_ref(
+            port,
+            project,
+            connected=True,
+            apply_project_value=lambda _project, key, value: updates.append((key, value)),
+        )
+
+        self.assertEqual(port.status, "Branches read directly; build host unavailable")
+        self.assertEqual(updates, [("git_ref", "develop")])
+        self.assertTrue(
+            any("reading Git branches directly" in row[2] for row in port.rows)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -243,6 +243,10 @@ class commands:
         return commands._discovery().build_git_branch_list_fetch_command_for_config(config, git_url)
 
     @staticmethod
+    def build_local_git_branch_list_command(git_url: str) -> list[str]:
+        return commands._discovery().build_local_git_branch_list_command(git_url)
+
+    @staticmethod
     def parse_git_branch_list_output(output: str) -> list[str]:
         return commands._discovery().parse_git_branch_list_output(output)
 
@@ -253,6 +257,13 @@ class commands:
         runner: Callable[[list[str]], str],
     ) -> list[str]:
         return commands._discovery().fetch_git_branches_for_config(config, git_url, runner)
+
+    @staticmethod
+    def fetch_local_git_branches(
+        git_url: str,
+        runner: Callable[[list[str]], str],
+    ) -> list[str]:
+        return commands._discovery().fetch_local_git_branches(git_url, runner)
 
     @staticmethod
     def build_remote_prepare_project_command(remote: str, project_dir: str, git_url: str, git_ref: str) -> list[str]:

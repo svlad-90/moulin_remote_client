@@ -21,9 +21,11 @@ class ProjectGitRefSelector:
         config: dict[str, Any],
         *,
         fetch_branches: Callable[[str], list[str]],
+        fetch_local_branches: Callable[[str], list[str]] | None = None,
     ) -> None:
         self.config = config
         self.fetch_branches = fetch_branches
+        self.fetch_local_branches = fetch_local_branches
 
     def edit_project_git_ref(
         self,
@@ -44,7 +46,24 @@ class ProjectGitRefSelector:
                 self.draw_loading_message(port, "Select Git branch/ref", "Reading remote Git branches...")
                 branches = self.fetch_branches(git_url)
             except Exception as exc:
-                port.status = f"Branch list failed: {exc}"
+                if self.fetch_local_branches is None:
+                    port.status = f"Branch list failed: {exc}"
+                else:
+                    try:
+                        self.draw_loading_message(
+                            port,
+                            "Select Git branch/ref",
+                            "Build host unavailable; reading Git branches directly...",
+                        )
+                        branches = self.fetch_local_branches(git_url)
+                    except Exception as local_exc:
+                        port.status = f"Branch list failed: {local_exc}"
+                    else:
+                        port.status = "Branches read directly; build host unavailable"
+                        selected = self.select_git_branch(port, branches, str(project.get("git_ref", "")))
+                        if selected is not None:
+                            apply_project_value(project, "git_ref", selected)
+                            return
             else:
                 selected = self.select_git_branch(port, branches, str(project.get("git_ref", "")))
                 if selected is not None:
@@ -122,6 +141,10 @@ def project_git_ref_selector_for_config(
         config,
         fetch_branches=lambda git_url: remote_discovery.fetch_git_branches_for_config(
             config,
+            git_url,
+            runner,
+        ),
+        fetch_local_branches=lambda git_url: remote_discovery.fetch_local_git_branches(
             git_url,
             runner,
         ),
