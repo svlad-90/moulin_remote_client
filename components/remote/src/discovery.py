@@ -299,6 +299,9 @@ class RemoteProjectDiscoveryService:
     def build_git_branch_list_fetch_command_for_config(self, config: dict[str, Any], git_url: str) -> list[str]:
         return self.build_git_branch_list_fetch_command(config_accessors.remote_spec_for_config(config), git_url)
 
+    def build_local_git_branch_list_command(self, git_url: str) -> list[str]:
+        return ["git", "ls-remote", "--heads", "--refs", git_url]
+
     def parse_git_branch_list_output(self, output: str) -> list[str]:
         branches: list[str] = []
         for line in output.splitlines():
@@ -319,6 +322,15 @@ class RemoteProjectDiscoveryService:
     ) -> list[str]:
         return self.parse_git_branch_list_output(
             runner(self.build_git_branch_list_fetch_command_for_config(config, git_url))
+        )
+
+    def fetch_local_git_branches(
+        self,
+        git_url: str,
+        runner: Callable[[list[str]], str],
+    ) -> list[str]:
+        return self.parse_git_branch_list_output(
+            runner(self.build_local_git_branch_list_command(git_url))
         )
 
 

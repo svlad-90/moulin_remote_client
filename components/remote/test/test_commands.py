@@ -310,9 +310,17 @@ class RemoteCommandBehaviorTests(unittest.TestCase):
             commands.build_git_branch_list_fetch_command_for_config(config, "git@example:prod"),
             transport.ssh_command("builder@10.0.0.1", "git ls-remote --heads --refs git@example:prod"),
         )
+        self.assertEqual(
+            commands.build_local_git_branch_list_command("git@example:prod"),
+            ["git", "ls-remote", "--heads", "--refs", "git@example:prod"],
+        )
         self.assertEqual(commands.parse_git_branch_list_output(output), ["main", "mirror"])
         self.assertEqual(
             commands.fetch_git_branches_for_config(config, "git@example:prod", lambda argv: output),
+            ["main", "mirror"],
+        )
+        self.assertEqual(
+            commands.fetch_local_git_branches("git@example:prod", lambda argv: output),
             ["main", "mirror"],
         )
 

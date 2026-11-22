@@ -302,7 +302,7 @@ class ConfigWorkflowController:
     def _project_git_ref_selector(self) -> Any:
         return config_project_git_ref_api.project_git_ref_selector_for_config(
             self.config,
-            lambda argv: self.capture_command(argv, echo=False, timeout=20),
+            lambda argv: self.capture_command(argv, echo=False, timeout=10),
         )
 
     def _project_settings_action_controller(self) -> Any:

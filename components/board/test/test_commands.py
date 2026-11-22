@@ -152,6 +152,9 @@ class BoardCommandBehaviorTests(unittest.TestCase):
 
         self.assertIn("BOARD_COPY_DESTINATION=board@192.0.2.10", command)
         self.assertIn("StrictHostKeyChecking=accept-new", command)
+        self.assertIn("ConnectionAttempts=3", command)
+        self.assertIn("except BrokenPipeError", command)
+        self.assertIn("transfer: SSH connection closed while sending data", command)
         self.assertIn("progress: {pct}% ({copied}/{total} bytes)", command)
 
     def test_copy_build_artifacts_direct_route_uses_build_host_to_board_stream(self) -> None:
@@ -180,6 +183,7 @@ class BoardCommandBehaviorTests(unittest.TestCase):
         self.assertIn("route: direct build-host -> board-host", argv[0][-1])
         self.assertIn("transfer: tar stream build-host -> board-host", argv[0][-1])
         self.assertIn("StrictHostKeyChecking=accept-new", argv[0][-1])
+        self.assertIn("ConnectionAttempts=3", argv[0][-1])
         self.assertIn("board@10.0.0.2", argv[0][-1])
         self.assertIn("progress: pv not found on build host; using python byte progress", argv[0][-1])
 

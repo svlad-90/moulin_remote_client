@@ -76,6 +76,7 @@ class BoardArtifactTransferService:
 
     def tar_progress_command(self, destination: str, destination_script: str) -> str:
         ssh_options = transport.ssh_options(accept_new_host_key=True)
+        ssh_options.extend(["-o", "ConnectionAttempts=3"])
         python_script = r"""
 import os
 import signal
@@ -96,6 +97,7 @@ tar = subprocess.Popen(["tar", "-cf", "-", *tar_args], stdout=subprocess.PIPE, s
 copied = 0
 last_reported = -1
 last_time = 0.0
+stream_failed = False
 try:
     assert tar.stdout is not None
     assert ssh.stdin is not None
@@ -103,7 +105,13 @@ try:
         chunk = tar.stdout.read(1024 * 1024)
         if not chunk:
             break
-        ssh.stdin.write(chunk)
+        try:
+            ssh.stdin.write(chunk)
+        except BrokenPipeError:
+            print("transfer: SSH connection closed while sending data", file=sys.stderr, flush=True)
+            stream_failed = True
+            tar.terminate()
+            break
         copied += len(chunk)
         now = time.monotonic()
         pct = min(100, int(copied * 100 / total))
@@ -111,12 +119,17 @@ try:
             print(f"progress: {pct}% ({copied}/{total} bytes)", flush=True)
             last_reported = pct
             last_time = now
-    ssh.stdin.close()
+    try:
+        ssh.stdin.close()
+    except BrokenPipeError:
+        stream_failed = True
 finally:
     if tar.stdout is not None:
         tar.stdout.close()
 tar_rc = tar.wait()
 ssh_rc = ssh.wait()
+if stream_failed:
+    sys.exit(ssh_rc or 1)
 if tar_rc != 0:
     sys.exit(tar_rc)
 sys.exit(ssh_rc)
@@ -158,10 +171,15 @@ sys.exit(ssh_rc)
         )
         resolver_script = self.artifact_resolver_script(source_dir, artifact_specs)
         if direct_copy:
-            board_destination_command = transport.ssh_command_string(
-                board_host,
-                destination_script,
-                accept_new_host_key=True,
+            board_destination_command = transport.shell_command(
+                [
+                    "ssh",
+                    *transport.ssh_options(accept_new_host_key=True),
+                    "-o",
+                    "ConnectionAttempts=3",
+                    board_host,
+                    destination_script,
+                ]
             )
             python_progress_command = self.tar_progress_command(board_host, destination_script)
             direct_script = (
