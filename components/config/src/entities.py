@@ -39,7 +39,8 @@ _CORE_FIELDS = {
     "project": {
         "name", "label", "product_type", "project_dir", "local_project_dir", "git_url",
         "git_ref", "moulin_manifest", "dockerfile", "docker_image", "parameters", "targets",
-        "board_artifacts", "mappings", "active_mappings",
+        "board_artifacts", "mappings", "active_mappings", "uboot_kernel_load_address",
+        "uboot_kernel_image",
     },
 }
 
@@ -119,6 +120,14 @@ def _validate_core_fields(
             parsed = urlsplit(clean)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 raise ValueError("camera_stream_url must be an HTTP or HTTPS URL")
+        if field == "uboot_kernel_load_address" and re.fullmatch(
+            r"0x[0-9A-Fa-f]+", clean
+        ) is None:
+            raise ValueError("uboot_kernel_load_address must be a hexadecimal address")
+        if field == "uboot_kernel_image" and re.fullmatch(
+            r"[A-Za-z0-9._+/-]+", clean
+        ) is None:
+            raise ValueError("uboot_kernel_image contains unsupported characters")
         if field == "type" and clean:
             from components.board_types.api import registry as board_type_registry_api
 
