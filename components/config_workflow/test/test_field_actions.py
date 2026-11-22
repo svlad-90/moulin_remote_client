@@ -276,6 +276,48 @@ class FieldActionControllerTests(unittest.TestCase):
         self.assertEqual(port.preflight, "not run")
         self.assertEqual(harness.save_count, 1)
 
+    def test_project_uboot_kernel_fields_are_validated_and_saved(self) -> None:
+        cfg = config()
+        port = FakeFieldPort()
+        harness = Harness(cfg)
+
+        harness.controller.apply_project_inline_value(
+            port,
+            cfg["projects"][0],
+            "uboot_kernel_load_address",
+            " 0x61000000 ",
+        )
+        harness.controller.apply_project_inline_value(
+            port,
+            cfg["projects"][0],
+            "uboot_kernel_image",
+            " Image-gen5 ",
+        )
+
+        self.assertEqual(cfg["projects"][0]["uboot_kernel_load_address"], "0x61000000")
+        self.assertEqual(cfg["projects"][0]["uboot_kernel_image"], "Image-gen5")
+        self.assertEqual(port.status, "uboot_kernel_image updated")
+        self.assertEqual(harness.save_count, 2)
+
+    def test_project_uboot_kernel_address_rejects_non_hexadecimal_value(self) -> None:
+        cfg = config()
+        port = FakeFieldPort()
+        harness = Harness(cfg)
+
+        harness.controller.apply_project_inline_value(
+            port,
+            cfg["projects"][0],
+            "uboot_kernel_load_address",
+            "61000000",
+        )
+
+        self.assertNotIn("uboot_kernel_load_address", cfg["projects"][0])
+        self.assertEqual(
+            port.status,
+            "uboot_kernel_load_address must be a hexadecimal address",
+        )
+        self.assertEqual(harness.save_count, 0)
+
     def test_project_inline_update_handles_missing_selection(self) -> None:
         cfg = config()
         port = FakeFieldPort()

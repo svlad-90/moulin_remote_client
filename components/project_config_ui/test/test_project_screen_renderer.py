@@ -94,6 +94,32 @@ class ProjectScreenRendererTests(unittest.TestCase):
         self.assertIsNotNone(result.editing_cursor_yx)
         self.assertTrue(any("Enter: save" in row[2] for row in port.rows))
 
+    def test_render_keeps_long_project_field_label_separate_from_value(self) -> None:
+        cfg = config()
+        port = FakeRenderPort()
+        state = project_screen_state.ProjectScreenStateController(cfg)
+        state.state.project_index_initialized = True
+        state.state.focus = "fields"
+        state.begin_inline_edit("uboot_kernel_load_address", "0x64000000")
+        renderer = project_screen_renderer.ProjectScreenRenderer(
+            cfg,
+            app_dir=Path("/app"),
+            project_fields_factory=lambda _params: [
+                {
+                    "label": "U-Boot kernel load address",
+                    "key": "uboot_kernel_load_address",
+                    "kind": "text",
+                }
+            ],
+        )
+
+        result = renderer.render(port, height=30, width=120, params=[], screen_state=state)
+
+        self.assertEqual(result.editing_cursor_yx, (8, 40))
+        self.assertTrue(
+            any("U-Boot kernel load address: 0x64000000" in row[2] for row in port.rows)
+        )
+
     def test_render_groups_project_fields(self) -> None:
         cfg = config()
         port = FakeRenderPort()

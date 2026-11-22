@@ -15,6 +15,9 @@ from components.project_config_ui.api import project_screen_state as config_proj
 from components.ui.api import text as ui_text_api
 
 
+PROJECT_FIELD_LABEL_WIDTH = 28
+
+
 @dataclass(frozen=True)
 class ProjectScreenRenderResult:
     projects: list[dict[str, Any]]
@@ -254,12 +257,15 @@ class ProjectScreenRenderer:
                 enabled=enabled,
                 selected=state.focus == "fields" and item_index == state.field_index,
                 editing=is_editing,
-                label_width=22,
+                label_width=PROJECT_FIELD_LABEL_WIDTH,
             )
             attr = self._field_row_attr(port, str(row_model["state"]))
             port.add(row, detail_x, ui_text_api.fit_text(str(row_model["text"]), detail_w).ljust(detail_w), attr)
             if is_editing:
-                cursor_x = min(detail_x + 22 + state.editing_cursor, detail_x + detail_w - 1)
+                cursor_x = min(
+                    detail_x + PROJECT_FIELD_LABEL_WIDTH + state.editing_cursor,
+                    detail_x + detail_w - 1,
+                )
                 editing_cursor_yx = (row, cursor_x)
             row += 1
         return editing_cursor_yx
