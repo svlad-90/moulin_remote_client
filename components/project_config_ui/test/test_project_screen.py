@@ -291,6 +291,8 @@ class ProjectConfigurationScreenControllerTests(unittest.TestCase):
         keys = [field["key"] for field in fields]
         self.assertIn("product_type", keys)
         self.assertIn("param:ENABLE_ANDROID", keys)
+        self.assertIn("uboot_kernel_load_address", keys)
+        self.assertIn("uboot_kernel_image", keys)
         self.assertLess(keys.index("docker_image"), keys.index("board_artifacts"))
         self.assertEqual(fields[-1]["key"], "board_artifacts")
 

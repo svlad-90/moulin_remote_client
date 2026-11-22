@@ -39,6 +39,8 @@ def project_fields(params: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {"label": "Dockerfile", "key": "dockerfile", "kind": "dockerfile"},
             {"label": "Build targets", "key": "targets", "kind": "targets"},
             {"label": "Docker image name", "key": "docker_image", "kind": "text"},
+            {"label": "U-Boot kernel load address", "key": "uboot_kernel_load_address", "kind": "text"},
+            {"label": "U-Boot kernel image", "key": "uboot_kernel_image", "kind": "text"},
             {"label": "Board artifacts", "key": "board_artifacts", "kind": "board_artifacts"},
         ]
     )

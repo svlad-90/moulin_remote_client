@@ -746,6 +746,8 @@ def empty_project_profile(name: str = "") -> dict[str, Any]:
         "moulin_manifest": "",
         "dockerfile": "",
         "docker_image": "",
+        "uboot_kernel_load_address": "0x64000000",
+        "uboot_kernel_image": "Image",
         "parameters": {},
         "targets": "",
         "board_artifacts": "",
@@ -963,6 +965,8 @@ def normalize_project_profiles(
             "moulin_manifest": str(remote.get("moulin_manifest") or config.get("moulin", {}).get("manifest", default_moulin_manifest)),
             "dockerfile": str(remote.get("dockerfile") or config.get("docker", {}).get("dockerfile", default_dockerfile)),
             "docker_image": str(settings.get("docker_image") or remote.get("docker_image") or config.get("docker", {}).get("image", "")),
+            "uboot_kernel_load_address": "0x64000000",
+            "uboot_kernel_image": "Image",
             "parameters": dict(settings.get("parameters", {})) if isinstance(settings.get("parameters", {}), dict) else {},
             "targets": str(settings.get("targets", default_build_targets)),
             "board_artifacts": str(settings.get("targets", default_build_targets)),
@@ -996,6 +1000,8 @@ def normalize_project_profiles(
         project.setdefault("moulin_manifest", str(config.get("moulin", {}).get("manifest", default_moulin_manifest)))
         project.setdefault("dockerfile", str(config.get("docker", {}).get("dockerfile", default_dockerfile)))
         project.setdefault("docker_image", str(config.get("docker", {}).get("image", "")))
+        project.setdefault("uboot_kernel_load_address", "0x64000000")
+        project.setdefault("uboot_kernel_image", "Image")
         if not isinstance(project.get("parameters"), dict):
             project["parameters"] = {}
         project.setdefault("targets", default_build_targets)

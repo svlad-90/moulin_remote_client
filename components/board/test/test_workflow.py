@@ -327,6 +327,7 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("ufs_dtb_load=", ufs[0][-1])
         self.assertIn("ufs_initramfs_load=", ufs[0][-1])
         self.assertIn("ufs_kernel_load=", ufs[0][-1])
+        self.assertIn("mmc0_kernel_load=ext2load mmc 0:1 0x64000000 Image", ufs[0][-1])
         self.assertIn("ufs_xen_load=", ufs[0][-1])
         self.assertIn("ufs_xenpolicy_load=", ufs[0][-1])
         self.assertIn("bootcmd_moulin=", ufs[0][-1])
@@ -334,6 +335,24 @@ class BoardCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("--verify-variable user_demo", ufs[-1][-1])
         self.assertIn("saveenv", ufs[-1][-1])
         self.assertNotIn("The board must be stopped at the U-Boot prompt", ufs[0][-1])
+
+    def test_uboot_kernel_load_uses_active_project_configuration(self) -> None:
+        config = sample_copy_config()
+        config_profiles.normalize_remote_profiles(config)
+        config_profiles.normalize_board_host_profiles(config)
+        config_profiles.normalize_project_profiles(config)
+        project = config_profiles.active_project(config)
+        project["uboot_kernel_load_address"] = "0x61000000"
+        project["uboot_kernel_image"] = "Imag"
+        service = self._service()
+
+        network = service.board_action_commands(config, "apply_uboot_network_env")
+        ufs = service.board_action_commands(config, "apply_uboot_ufs_env")
+
+        self.assertIn("tftp_kernel_load=tftp 0x61000000", network[0][-1])
+        self.assertIn("/Imag", network[0][-1])
+        self.assertIn("mmc0_kernel_load=ext2load mmc 0:1 0x61000000 Imag", ufs[0][-1])
+        self.assertIn("ufs_kernel_load=ext2load scsi 1:1 0x61000000 Imag", ufs[0][-1])
 
     def test_android_unpack_uses_existing_board_archive_without_upload(self) -> None:
         config = sample_copy_config()

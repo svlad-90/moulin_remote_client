@@ -1308,6 +1308,7 @@ echo "rootfs deploy: done" >&2
 
     def uboot_network_env_lines(self, ctx: BoardActionContext) -> list[str]:
         paths = self.network_paths(ctx)
+        kernel_load_address, kernel_image = self.uboot_kernel_load_config(ctx)
         guest_domains = self.yocto_guest_domains(ctx)
         tftp_root = config_accessors.board_tftp_root_for_config(ctx.config).rstrip("/")
         tftp_current = paths["tftp_current"].rstrip("/")
@@ -1336,7 +1337,7 @@ echo "rootfs deploy: done" >&2
                 "i2c_pci=i2c dev 0; i2c mw 0x77 0x06 0x00; i2c mw 0x77 0x02 0x14; i2c mw 0x77 0x04 0x00; i2c mw 0x77 0x01 0xff",
                 f"tftp_dtb_load=tftp 0x54000000 {tftp_prefix}/r8a78000-ironhide-xen.dtb && fdt addr 0x54000000 && fdt resize && fdt mknode / boot_dev && run tftp_configure_nfs",
                 f"tftp_initramfs_load=tftp 0x50000000 {tftp_prefix}/uInitramfs",
-                f"tftp_kernel_load=tftp 0x64000000 {tftp_prefix}/Image",
+                f"tftp_kernel_load=tftp {kernel_load_address} {tftp_prefix}/{kernel_image}",
                 f"tftp_xen_load=tftp 0x54080000 {tftp_prefix}/xen-ironhide.uImage",
                 f"tftp_xenpolicy_load=tftp 0x53000000 {tftp_prefix}/xenpolicy-ironhide",
                 "tftp_configure_nfs=" + "; ".join(configure_parts),
@@ -1454,13 +1455,25 @@ echo "rootfs deploy: done" >&2
             ),
         ]
 
-    def uboot_ufs_env_lines(self) -> list[str]:
+    def uboot_kernel_load_config(self, ctx: BoardActionContext) -> tuple[str, str]:
+        project = config_profiles.active_project(ctx.config)
+        load_address = str(project.get("uboot_kernel_load_address") or "0x64000000").strip()
+        kernel_image = str(project.get("uboot_kernel_image") or "Image").strip()
+        if re.fullmatch(r"0x[0-9a-fA-F]+", load_address) is None:
+            raise ValueError("U-Boot kernel load address must be a hexadecimal address such as 0x64000000")
+        if re.fullmatch(r"[A-Za-z0-9._+/-]+", kernel_image) is None:
+            raise ValueError("U-Boot kernel image must be a path without whitespace or command separators")
+        return load_address, kernel_image
+
+    def uboot_ufs_env_lines(self, ctx: BoardActionContext) -> list[str]:
+        kernel_load_address, kernel_image = self.uboot_kernel_load_config(ctx)
         return [
             "fdt_high=0xffffffffffffffff",
             "bootm_size=0x10000000",
             "ufs_dtb_load=ext2load scsi 1:1 0x54000000 xen.dtb && fdt addr 0x54000000 && fdt resize && fdt mknode / boot_dev && fdt set /boot_dev device sda",
             "ufs_initramfs_load=ext2load scsi 1:1 0x50000000 uInitramfs",
-            "ufs_kernel_load=ext2load scsi 1:1 0x64000000 Image",
+            f"mmc0_kernel_load=ext2load mmc 0:1 {kernel_load_address} {kernel_image}",
+            f"ufs_kernel_load=ext2load scsi 1:1 {kernel_load_address} {kernel_image}",
             "ufs_xen_load=ext2load scsi 1:1 0x54080000 xen",
             "ufs_xenpolicy_load=ext2load scsi 1:1 0x53000000 xenpolicy",
             "bootcmd_moulin=env delete bootargs; scsi scan; run ufs_xen_load && run ufs_dtb_load && run ufs_kernel_load && run ufs_xenpolicy_load && run ufs_initramfs_load && bootm 0x54080000 0x50000000 0x54000000",
@@ -1473,7 +1486,7 @@ echo "rootfs deploy: done" >&2
             require_variable="bootcmd", verify_variable=self.uboot_user_command_name(ctx),
         )
         return [
-            *self.uboot_env_file_install_command_plan(ctx, self.uboot_ufs_env_lines()),
+            *self.uboot_env_file_install_command_plan(ctx, self.uboot_ufs_env_lines(ctx)),
             ctx.command_builder.board_ssh_command(
                 config_accessors.board_host_spec_for_config(ctx.config), script, tty=True,
             ),

@@ -294,7 +294,13 @@ class ProjectScreenRenderer:
             return "Directories"
         if key in ("git_url", "git_ref"):
             return "Git"
-        if key in ("moulin_manifest", "dockerfile", "docker_image") or kind in ("param", "targets"):
+        if key in (
+            "moulin_manifest",
+            "dockerfile",
+            "docker_image",
+            "uboot_kernel_load_address",
+            "uboot_kernel_image",
+        ) or kind in ("param", "targets"):
             return "Build"
         if key == "board_artifacts":
             return "Artifacts"

@@ -178,6 +178,8 @@ class ConfigProfileBehaviorTests(unittest.TestCase):
         project = profiles.active_project(config)
         self.assertEqual(project["name"], "default")
         self.assertEqual(project["product_type"], "gen5_xen_android")
+        self.assertEqual(project["uboot_kernel_load_address"], "0x64000000")
+        self.assertEqual(project["uboot_kernel_image"], "Image")
         self.assertEqual(project["project_dir"], "meta-product")
         self.assertEqual(project["git_url"], "git@example:repo")
         self.assertEqual(project["local_project_dir"], "overlay")
