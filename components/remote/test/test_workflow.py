@@ -184,12 +184,17 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
         self.assertIn("ninja $sync_targets", repo_sync)
         self.assertLess(
             repo_sync.index("ninja -t targets rule repo_init"),
-            repo_sync.index("repo forall -c"),
+            repo_sync.index("repo list -p"),
         )
         self.assertLess(
-            repo_sync.index("repo forall -c"),
+            repo_sync.index("repo list -p"),
             repo_sync.index("ninja $sync_targets"),
         )
+        self.assertIn('[ -e "$project_dir/.git" ] || continue', repo_sync)
+        self.assertIn('git -C "$project_dir" status --porcelain', repo_sync)
+        self.assertIn("Failed to list Repo projects", repo_sync)
+        self.assertIn("Failed to inspect Repo workspace before synchronization", repo_sync)
+        self.assertNotIn("repo forall -c", repo_sync)
         self.assertIn("exec \"$MRC_REPO_BIN\" sync --fail-fast \"$@\"", repo_sync)
         forced_repo_sync = shlex.join(
             service.repo_source_sync_command(config, docker_image="prod_img", force=True)
@@ -199,8 +204,8 @@ class RemoteCommandWorkflowServiceTests(unittest.TestCase):
             "exec \"$MRC_REPO_BIN\" sync --fail-fast --force-sync \"$@\"",
             forced_repo_sync,
         )
-        self.assertIn("repo forall -c", forced_repo_sync)
-        self.assertIn("git status --porcelain", forced_repo_sync)
+        self.assertIn("repo list -p", forced_repo_sync)
+        self.assertIn('git -C "$project_dir" status --porcelain', forced_repo_sync)
         self.assertNotIn("repo status --orphans", forced_repo_sync)
         components = [{"name": "domd", "builder_type": "yocto", "build_dir": "yocto", "work_dir": "build-domd"}]
         self.assertEqual(
